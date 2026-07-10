@@ -2,152 +2,163 @@
 <style>
   :root{
     --bg:#0a0e17; --panel:#0e1420; --panel-2:#111826; --grid:#141c2b;
-    --hair:#222e44; --hair-2:#1a2436;
-    --ink:#e6ecf5; --muted:#7c89a3; --dim:#4d5573;
-    --muted-2:#59657e;
+    --hair:#243149; --hair-2:#1a2436;
+    --ink:#e9eef7; --muted:#8b98b2; --muted-2:#5b6884;
     --gold:#e8b34a; --cyan:#4fd1c5; --green:#5fd08a; --violet:#9a8cf0; --amber:#f0a83c; --rose:#e77b8a;
     --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
-  *{box-sizing:border-box}
-  html,body{height:100%}
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%; margin:0; overscroll-behavior:none}
   body{
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:var(--sans); overflow:hidden;
-    -webkit-font-smoothing:antialiased;
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    overflow:hidden; -webkit-font-smoothing:antialiased; touch-action:manipulation;
   }
-  #app{
-    display:grid; height:100vh; width:100vw;
-    grid-template-columns:1fr 300px;
-    grid-template-rows:auto 1fr 168px;
-    grid-template-areas:
-      "top    top"
-      "stage  inspect"
-      "wire   wire";
-  }
+  canvas{position:fixed; inset:0; width:100%; height:100%; display:block; z-index:0}
 
-  /* ---- top bar ---- */
-  #top{
-    grid-area:top; display:flex; flex-wrap:wrap; align-items:center; gap:.75rem 1.1rem;
-    padding:.7rem 1.1rem; border-bottom:1px solid var(--hair-2);
-    background:linear-gradient(180deg,#0c121e,#0a0e17);
-  }
-  #top h1{
-    font-size:.98rem; font-weight:680; margin:0; letter-spacing:.01em; white-space:nowrap;
-  }
-  #top h1 b{color:var(--gold)}
-  #top .tag{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-left:.1rem}
-  .spring{flex:1 1 12px}
-  .ctl{display:flex; gap:.4rem; flex-wrap:wrap; align-items:center}
-  button.b{
-    font-family:var(--mono); font-size:.72rem; letter-spacing:.02em;
-    color:var(--ink); background:var(--panel-2); border:1px solid var(--hair);
-    padding:.42rem .7rem; border-radius:8px; cursor:pointer; transition:border-color .15s, background .15s, transform .05s;
-    display:inline-flex; align-items:center; gap:.4rem;
-  }
-  button.b:hover{border-color:var(--cyan); background:#131d2c}
-  button.b:active{transform:translateY(1px)}
-  button.b:focus-visible{outline:2px solid var(--cyan); outline-offset:2px}
-  button.b .dot{width:.55rem; height:.55rem; border-radius:50%; flex:none}
-  button.b.on{border-color:var(--green); color:var(--green)}
-  button.b.ghost{color:var(--muted)}
-  .sep{width:1px; height:1.5rem; background:var(--hair-2)}
+  /* ---------- floating overlays ---------- */
+  .float{position:fixed; z-index:5}
 
-  /* ---- stage ---- */
-  #stage{grid-area:stage; position:relative; overflow:hidden}
-  canvas{display:block; width:100%; height:100%}
-  #hint{
-    position:absolute; left:1rem; bottom:.7rem; font-family:var(--mono);
-    font-size:.66rem; color:var(--muted-2); pointer-events:none; line-height:1.6;
-  }
-  #legend{
-    position:absolute; right:.8rem; top:.7rem; display:flex; flex-direction:column; gap:.3rem;
-    font-family:var(--mono); font-size:.62rem; color:var(--muted); pointer-events:none;
-    background:rgba(10,14,23,.5); padding:.5rem .6rem; border:1px solid var(--hair-2); border-radius:8px; backdrop-filter:blur(3px);
-  }
-  #legend .row{display:flex; align-items:center; gap:.45rem}
-  #legend .sw{width:.7rem; height:.7rem; border-radius:2px; flex:none}
-  #legend .li{width:1.1rem; height:2px; border-radius:2px; flex:none}
+  #title{top:max(.7rem,env(safe-area-inset-top)); left:.8rem; pointer-events:none}
+  #title .t{font-size:.92rem; font-weight:680; letter-spacing:.01em}
+  #title .t b{color:var(--gold)}
+  #title .s{font-family:var(--mono); font-size:.58rem; letter-spacing:.15em; text-transform:uppercase; color:var(--muted-2); margin-top:.1rem}
 
-  /* ---- inspector ---- */
-  #inspect{
-    grid-area:inspect; border-left:1px solid var(--hair-2); background:var(--panel);
-    padding:1rem .95rem; overflow-y:auto;
+  #help{top:max(.7rem,env(safe-area-inset-top)); right:.7rem; width:2.1rem; height:2.1rem; border-radius:50%;
+    background:rgba(17,24,38,.85); border:1px solid var(--hair); color:var(--muted); font-size:1rem; font-weight:700;
+    display:grid; place-items:center; cursor:pointer; backdrop-filter:blur(6px)}
+  #help:active{transform:scale(.94)}
+
+  /* narrator — plain-english play-by-play */
+  #narrator{top:calc(max(.7rem,env(safe-area-inset-top)) + 2.7rem); left:.8rem; right:.8rem; max-width:33rem;
+    pointer-events:none}
+  #narrator .bubble{
+    display:inline-block; background:rgba(14,20,32,.82); border:1px solid var(--hair-2);
+    border-radius:12px; padding:.5rem .75rem; font-size:.86rem; line-height:1.4; color:var(--ink);
+    backdrop-filter:blur(6px); box-shadow:0 8px 24px -16px #000; max-width:100%;
   }
-  #inspect .ey{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 .7rem}
-  #inspect .empty{color:var(--muted-2); font-size:.82rem; line-height:1.6; font-family:var(--sans)}
-  .card{border:1px solid var(--hair-2); border-radius:11px; padding:.8rem .85rem; background:var(--panel-2); margin-bottom:.7rem}
-  .card .nm{font-size:1.02rem; font-weight:700; display:flex; align-items:center; gap:.5rem; margin-bottom:.15rem}
-  .card .badge{font-family:var(--mono); font-size:.6rem; text-transform:uppercase; letter-spacing:.08em; padding:.12em .45em; border-radius:5px; border:1px solid currentColor}
-  .kv{font-family:var(--mono); font-size:.72rem; line-height:1.85; color:var(--muted)}
+  #narrator .bubble.pop{animation:pop .4s ease}
+  @keyframes pop{from{opacity:0; transform:translateY(-4px)}}
+  #narrator .bubble .em{opacity:.55; font-family:var(--mono); font-size:.72rem}
+
+  /* bottom control pill */
+  #controls{bottom:max(.8rem,env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    display:flex; gap:.4rem; padding:.4rem; background:rgba(12,18,30,.9); border:1px solid var(--hair);
+    border-radius:16px; backdrop-filter:blur(10px); max-width:calc(100vw - 1rem); overflow-x:auto; scrollbar-width:none}
+  #controls::-webkit-scrollbar{display:none}
+  .b{font-family:var(--sans); font-size:.82rem; font-weight:560; color:var(--ink); background:var(--panel-2);
+    border:1px solid var(--hair); padding:.6rem .8rem; border-radius:11px; cursor:pointer; white-space:nowrap;
+    display:inline-flex; align-items:center; gap:.4rem; transition:border-color .15s, background .15s, transform .05s}
+  .b:active{transform:translateY(1px)}
+  .b:focus-visible{outline:2px solid var(--cyan); outline-offset:2px}
+  .b .dot{width:.6rem; height:.6rem; border-radius:50%; flex:none}
+  .b.min{padding:.6rem .65rem; color:var(--muted)}
+  .b.on{border-color:var(--green); color:var(--green)}
+
+  /* bottom-sheet inspector */
+  #sheet{position:fixed; z-index:8; left:0; right:0; bottom:0; transform:translateY(110%);
+    transition:transform .3s cubic-bezier(.32,.72,0,1); background:var(--panel); border-top:1px solid var(--hair);
+    border-radius:20px 20px 0 0; box-shadow:0 -18px 50px -24px #000; max-height:62vh; overflow-y:auto;
+    padding:.5rem 1rem calc(1rem + env(safe-area-inset-bottom))}
+  #sheet.open{transform:translateY(0)}
+  #sheet .grab{width:2.4rem; height:.28rem; background:var(--hair); border-radius:99px; margin:.3rem auto .7rem}
+  #sheet .x{position:absolute; top:.7rem; right:.9rem; width:1.8rem; height:1.8rem; border-radius:50%;
+    background:var(--panel-2); border:1px solid var(--hair); color:var(--muted); font-size:.9rem; display:grid; place-items:center; cursor:pointer}
+  .nm{font-size:1.15rem; font-weight:700; display:flex; align-items:center; gap:.55rem; margin-bottom:.15rem; padding-right:2rem}
+  .badge{font-family:var(--mono); font-size:.6rem; text-transform:uppercase; letter-spacing:.08em; padding:.14em .5em; border-radius:6px; border:1px solid currentColor}
+  .note{color:var(--muted); font-size:.86rem; line-height:1.5; margin:.15rem 0 .7rem}
+  .kv{font-family:var(--mono); font-size:.74rem; line-height:1.9; color:var(--muted)}
   .kv b{color:var(--ink); font-weight:500}
   .kv .topic{color:var(--cyan); word-break:break-all}
-  .share{margin-top:.5rem; border-top:1px solid var(--hair-2); padding-top:.55rem}
-  .share .sh-h{font-family:var(--mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted-2); margin-bottom:.35rem}
-  .entry{font-family:var(--mono); font-size:.72rem; color:var(--ink); padding:.16rem 0; display:flex; justify-content:space-between; gap:.6rem; border-bottom:1px dashed var(--hair-2)}
+  .share{margin-top:.6rem; border-top:1px solid var(--hair-2); padding-top:.6rem}
+  .sh-h{font-family:var(--mono); font-size:.64rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted-2); margin-bottom:.4rem}
+  .entry{font-family:var(--mono); font-size:.78rem; padding:.24rem 0; display:flex; justify-content:space-between; gap:.6rem; border-bottom:1px dashed var(--hair-2)}
   .entry:last-child{border-bottom:none}
   .entry .en{color:var(--cyan)} .entry .ev{color:var(--muted)}
   .entry.none{color:var(--muted-2); justify-content:flex-start}
 
-  /* ---- wire log ---- */
-  #wire{
-    grid-area:wire; border-top:1px solid var(--hair-2); background:#080b12;
-    display:flex; flex-direction:column; min-height:0;
-  }
-  #wire .wh{
-    display:flex; align-items:center; gap:.6rem; padding:.4rem .9rem; border-bottom:1px solid var(--hair-2);
-    font-family:var(--mono); font-size:.62rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);
-  }
-  #wire .wh .live{width:.5rem; height:.5rem; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:blink 1.8s infinite}
+  /* wire drawer */
+  #wire{position:fixed; z-index:7; left:0; right:0; bottom:0; transform:translateY(110%);
+    transition:transform .3s cubic-bezier(.32,.72,0,1); background:#080b12; border-top:1px solid var(--hair);
+    border-radius:18px 18px 0 0; height:44vh; display:flex; flex-direction:column;
+    padding-bottom:env(safe-area-inset-bottom)}
+  #wire.open{transform:translateY(0)}
+  #wire .wh{display:flex; align-items:center; gap:.5rem; padding:.6rem .9rem; border-bottom:1px solid var(--hair-2);
+    font-family:var(--mono); font-size:.64rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+  #wire .live{width:.5rem; height:.5rem; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:blink 1.8s infinite}
+  #wire .x{margin-left:auto; width:1.7rem; height:1.7rem; border-radius:50%; background:var(--panel-2); border:1px solid var(--hair); color:var(--muted); display:grid; place-items:center; cursor:pointer}
   @keyframes blink{50%{opacity:.35}}
-  #log{flex:1; overflow-y:auto; padding:.4rem .9rem .6rem; font-family:var(--mono); font-size:.72rem; line-height:1.62}
+  #log{flex:1; overflow-y:auto; padding:.5rem .9rem; font-family:var(--mono); font-size:.74rem; line-height:1.7}
   #log .ln{white-space:pre-wrap; word-break:break-word; opacity:0; animation:fade .25s forwards}
   @keyframes fade{to{opacity:1}}
-  #log .t{color:var(--muted-2)}
-  #log .topic{color:var(--muted)}
+  #log .t{color:var(--muted-2)} #log .topic{color:var(--muted)}
   #log .c-sub{color:var(--violet)} #log .c-state{color:var(--cyan)} #log .c-sync{color:var(--gold)}
   #log .c-birth{color:var(--green)} #log .c-gc{color:var(--rose)} #log .c-note{color:var(--muted-2); font-style:italic}
 
-  @media (max-width:760px){
-    #app{grid-template-columns:1fr; grid-template-rows:auto 1fr 130px 150px;
-      grid-template-areas:"top" "stage" "inspect" "wire";}
-    #inspect{border-left:none; border-top:1px solid var(--hair-2); display:flex; gap:.7rem; overflow-x:auto}
-    #inspect .card{min-width:220px}
-    #legend{display:none}
+  /* intro / help overlay */
+  #intro{position:fixed; inset:0; z-index:20; background:rgba(6,9,15,.86); backdrop-filter:blur(7px);
+    display:grid; place-items:center; padding:1.2rem; opacity:0; pointer-events:none; transition:opacity .3s}
+  #intro.show{opacity:1; pointer-events:auto}
+  #intro .box{max-width:26rem; width:100%; background:linear-gradient(180deg,#121a29,#0c1220);
+    border:1px solid var(--hair); border-radius:18px; padding:1.4rem 1.3rem; box-shadow:0 30px 80px -30px #000}
+  #intro .ey{font-family:var(--mono); font-size:.62rem; letter-spacing:.15em; text-transform:uppercase; color:var(--gold); margin:0 0 .5rem}
+  #intro h2{margin:0 0 .8rem; font-size:1.3rem; font-weight:720}
+  #intro ul{list-style:none; margin:0 0 1.1rem; padding:0; display:grid; gap:.7rem}
+  #intro li{display:flex; gap:.65rem; font-size:.92rem; line-height:1.45; color:var(--ink)}
+  #intro li .ic{flex:none; width:1.4rem; text-align:center; font-size:1rem}
+  #intro li b{color:var(--gold); font-weight:600}
+  #intro li .cy{color:var(--cyan)} #intro li .gr{color:var(--green)}
+  #intro .go{width:100%; padding:.8rem; border:none; border-radius:12px; background:var(--gold); color:#181203;
+    font-family:var(--sans); font-size:.95rem; font-weight:700; cursor:pointer}
+  #intro .go:active{transform:translateY(1px)}
+
+  @media (min-width:761px){
+    #sheet{left:auto; right:1rem; bottom:1rem; width:340px; max-height:74vh; border-radius:16px}
+    #wire{left:auto; right:1rem; bottom:1rem; width:min(560px,44vw); height:38vh; border-radius:16px}
+    #narrator{left:.8rem; right:auto}
   }
 </style>
 
-<div id="app">
-  <div id="top">
-    <h1>Aiko<b>·</b>Services <span class="tag">a living process</span></h1>
-    <div class="sep"></div>
-    <div class="ctl">
-      <button class="b" id="addChan"><span class="dot" style="background:var(--cyan)"></span>add channel</button>
-      <button class="b" id="addUser"><span class="dot" style="background:var(--violet)"></span>add user</button>
-      <button class="b" id="spawnCon"><span class="dot" style="background:var(--green)"></span>spawn dashboard</button>
-    </div>
-    <div class="spring"></div>
-    <div class="ctl">
-      <button class="b on" id="renew">leases: auto-renew</button>
-      <button class="b ghost" id="pause">pause</button>
-      <button class="b ghost" id="reset">reset</button>
-    </div>
-  </div>
+<canvas id="c"></canvas>
 
-  <div id="stage">
-    <canvas id="c"></canvas>
-    <div id="legend"></div>
-    <div id="hint">click any node to inspect its share state · every message routes through the broker at center</div>
-  </div>
+<div id="title" class="float">
+  <div class="t">Aiko<b>·</b>Services</div>
+  <div class="s">a living process</div>
+</div>
+<div id="help" class="float" role="button" aria-label="What is this?">?</div>
 
-  <div id="inspect">
-    <p class="ey">Inspector</p>
-    <div id="ins-body"><p class="empty">Click an actor to see its live <b style="color:var(--ink)">share</b> state, topics, and type.<br><br>Everything here is one Aiko process: a graph of actors gossiping over MQTT.</p></div>
-  </div>
+<div id="narrator" class="float"><span class="bubble" id="narr">Tap <b style="color:var(--gold)">?</b> to learn what this is. Or just tap a glowing dot.</span></div>
 
-  <div id="wire">
-    <div class="wh"><span class="live"></span> MQTT wire · s-expression protocol <span style="flex:1"></span><span id="wcount" style="color:var(--muted-2)"></span></div>
-    <div id="log"></div>
+<div id="controls" class="float">
+  <button class="b" id="addChan"><span class="dot" style="background:var(--cyan)"></span>Add channel</button>
+  <button class="b" id="addUser"><span class="dot" style="background:var(--violet)"></span>Add user</button>
+  <button class="b" id="spawnCon"><span class="dot" style="background:var(--green)"></span>Dashboard</button>
+  <button class="b min" id="wireBtn" aria-label="wire log">⧉</button>
+  <button class="b min" id="menuBtn" aria-label="more">⋯</button>
+</div>
+
+<div id="sheet">
+  <div class="grab"></div>
+  <div class="x" id="sheetX" role="button" aria-label="close">✕</div>
+  <div id="ins-body"></div>
+</div>
+
+<div id="wire">
+  <div class="wh"><span class="live"></span> MQTT wire · s-expression protocol <span id="wcount" style="color:var(--muted-2)"></span><span class="x" id="wireX" role="button" aria-label="close">✕</span></div>
+  <div id="log"></div>
+</div>
+
+<div id="intro">
+  <div class="box">
+    <p class="ey">Aiko Services · Dart port</p>
+    <h2>What am I looking at?</h2>
+    <ul>
+      <li><span class="ic">🟠</span><span>This is <b>one running program</b>. The amber center is the <b>message broker</b>. Every message — even between neighbours — travels through it.</span></li>
+      <li><span class="ic">🔵</span><span>The glowing rings are <span class="cy">actors</span>: chat channels, users, and the directory that holds them.</span></li>
+      <li><span class="ic">👆</span><span>Tap any actor to see what it knows. Tap <span class="gr">Dashboard</span> to add a live watcher and see it sync.</span></li>
+      <li><span class="ic">✨</span><span>The little lights flying to the center and back out <b>are the messages</b>.</span></li>
+    </ul>
+    <button class="go" id="introGo">Explore →</button>
   </div>
 </div>
 
@@ -157,363 +168,291 @@
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const $ = id => document.getElementById(id);
 
-  // ---------- model ----------
-  const HOST = "mqtt";
-  let uid = 1;
-  const state = { actors: new Map(), subs: [], particles: [], scheduled: [], clock: 0, paused:false, autoRenew:true, selected:null, wcount:0 };
-
-  function topicOf(name, leaf){ return `aiko/${HOST}/1/${name}/${leaf}`; }
+  const HOST="mqtt"; let uid=1;
+  const state={ actors:new Map(), subs:[], particles:[], scheduled:[], clock:0, paused:false, autoRenew:true, selected:null, wcount:0 };
+  const topicOf=(n,l)=>`aiko/${HOST}/1/${n}/${l}`;
 
   function makeActor(o){
-    const a = Object.assign({
-      id: "a"+(uid++), name:"", type:"category", parent:null,
-      share:{ entries:{}, entries_count:0 }, x:0, y:0, tx:0, ty:0, r:14, born:0, pulse:0,
-    }, o);
-    a.control = topicOf(a.name, "control");
-    a.stateT  = topicOf(a.name, "state");
-    state.actors.set(a.id, a);
-    return a;
+    const a=Object.assign({ id:"a"+(uid++), name:"", type:"category", parent:null,
+      share:{entries:{},entries_count:0}, x:0,y:0,tx:0,ty:0,r:14,born:0,pulse:0 }, o);
+    a.control=topicOf(a.name,"control"); a.stateT=topicOf(a.name,"state");
+    state.actors.set(a.id,a); return a;
   }
 
   function seed(){
     state.actors.clear(); state.subs.length=0; state.particles.length=0; state.scheduled.length=0;
-    uid=1; state.clock=0; state.selected=null;
-    const hs = makeActor({ name:"HyperSpace", type:"hyperspace", r:22 });
-    const channels = makeActor({ name:"channels", type:"category", parent:hs.id, r:17 });
-    const users = makeActor({ name:"users", type:"category", parent:hs.id, r:17 });
-    hs.share.entries = { channels:"category", users:"category" }; hs.share.entries_count=2;
-    ["general","random","llm","robot","yolo"].forEach(n=>{
-      const ch = makeActor({ name:n, type:"category", parent:channels.id, r:12 });
-      channels.share.entries[n]="category"; channels.share.entries_count++;
-    });
+    uid=1; state.clock=0; state.selected=null; closeSheet();
+    const hs=makeActor({name:"HyperSpace",type:"hyperspace",r:22});
+    const channels=makeActor({name:"channels",type:"category",parent:hs.id,r:17});
+    const users=makeActor({name:"users",type:"category",parent:hs.id,r:17});
+    hs.share.entries={channels:"category",users:"category"}; hs.share.entries_count=2;
+    ["general","random","llm","robot","yolo"].forEach(n=>{ makeActor({name:n,type:"category",parent:channels.id,r:12});
+      channels.share.entries[n]="category"; channels.share.entries_count++; });
     layout();
-    // a couple of the seeded actors gently announce themselves
-    log("note", null, `; one OS process · ${state.actors.size} actors · all gossip over one broker`);
+    log("note",null,`; one OS process · ${state.actors.size} actors · all gossip over one broker`);
+    narrate(`A chat server as ${state.actors.size} actors. The amber center is the broker.`, "everything talks through it");
   }
 
-  // ---------- radial tree layout ----------
-  function children(id){ return [...state.actors.values()].filter(a=>a.parent===id); }
+  const children=id=>[...state.actors.values()].filter(a=>a.parent===id);
   function layout(){
-    const roots = [...state.actors.values()].filter(a=>a.parent===null && a.type!=="consumer");
-    // assign angles by leaf order (DFS)
-    let leafAngle = 0; const leaves = [];
-    const collectLeaves = (id)=>{ const ch=children(id); if(!ch.length){ leaves.push(id); } else ch.forEach(c=>collectLeaves(c.id)); };
-    roots.forEach(r=>collectLeaves(r.id));
-    const nLeaves = Math.max(1, leaves.length);
-    const angleOf = new Map();
-    leaves.forEach((id,i)=>{ angleOf.set(id, (-90 + (i+0.5)/nLeaves*360) * Math.PI/180); });
-    const setAngle = (id)=>{ const ch=children(id); if(!ch.length) return angleOf.get(id); const a = ch.map(c=>setAngle(c.id)).reduce((s,v)=>s+v,0)/ch.length; angleOf.set(id,a); return a; };
-    roots.forEach(r=>setAngle(r.id));
-    const depthOf = (a)=>{ let d=0,p=a.parent; while(p){ d++; p=state.actors.get(p)?.parent; } return d; };
-    const maxD = Math.max(1, ...[...state.actors.values()].filter(a=>a.type!=="consumer").map(depthOf));
-    const cx = (canvas.clientWidth||900)/2, cy=(canvas.clientHeight||500)/2;
-    const R = Math.min(cx,cy) - 54;
+    const w=canvas.clientWidth||900, h=canvas.clientHeight||600;
+    const small=Math.min(w,h)<620;
+    const roots=[...state.actors.values()].filter(a=>a.parent===null&&a.type!=="consumer");
+    const leaves=[]; const collect=id=>{const ch=children(id); if(!ch.length)leaves.push(id); else ch.forEach(c=>collect(c.id));};
+    roots.forEach(r=>collect(r.id));
+    const nL=Math.max(1,leaves.length); const ang=new Map();
+    leaves.forEach((id,i)=>ang.set(id,(-90+(i+0.5)/nL*360)*Math.PI/180));
+    const setA=id=>{const ch=children(id); if(!ch.length)return ang.get(id); const a=ch.map(c=>setA(c.id)).reduce((s,v)=>s+v,0)/ch.length; ang.set(id,a); return a;};
+    roots.forEach(r=>setA(r.id));
+    const depth=a=>{let d=0,p=a.parent; while(p){d++;p=state.actors.get(p)?.parent;} return d;};
+    const maxD=Math.max(1,...[...state.actors.values()].filter(a=>a.type!=="consumer").map(depth));
+    const cx=w/2, cy=h/2;
+    const margin = small?36:56;
+    const R=Math.min(cx,cy)-margin;
+    const sc=small?1.25:1;
+    const baseR={hyperspace:20,category:15,dependency:13,consumer:15};
     for(const a of state.actors.values()){
+      a.r=baseR[a.type]*sc;
       if(a.type==="consumer") continue;
-      const d = depthOf(a); const ang = angleOf.get(a.id) ?? -Math.PI/2;
-      const rad = (d/(maxD+0.15)) * R;
-      a.tx = cx + Math.cos(ang)*rad; a.ty = cy + Math.sin(ang)*rad; a.ang=ang;
-      if(a.born===0){ a.x=cx; a.y=cy; } // new nodes fly out from broker
+      const d=depth(a), an=ang.get(a.id)??-Math.PI/2, rad=(d/(maxD+0.12))*R;
+      a.tx=cx+Math.cos(an)*rad; a.ty=cy+Math.sin(an)*rad; a.ang=an;
+      if(a.born===0){a.x=cx;a.y=cy;a.born=1;}
     }
-    // consumers on the outer ring at their own angle
-    const cons = [...state.actors.values()].filter(a=>a.type==="consumer");
-    cons.forEach(a=>{
-      const rad = R + 4;
-      a.tx = cx + Math.cos(a.ang)*rad; a.ty = cy + Math.sin(a.ang)*rad;
+    [...state.actors.values()].filter(a=>a.type==="consumer").forEach(a=>{
+      const rad=R+ (small?2:6); a.tx=cx+Math.cos(a.ang)*rad; a.ty=cy+Math.sin(a.ang)*rad;
     });
-    state.cx=cx; state.cy=cy;
+    state.cx=cx; state.cy=cy; state.small=small;
   }
 
-  // ---------- particles (every message routes via broker) ----------
-  function emit(from, to, color, kind){
-    const b = { x:state.cx, y:state.cy };
-    const wp = [ {x:from.x,y:from.y}, b, {x:to.x,y:to.y} ];
-    let total=0; const seg=[];
-    for(let i=0;i<wp.length-1;i++){ const dx=wp[i+1].x-wp[i].x, dy=wp[i+1].y-wp[i].y; const l=Math.hypot(dx,dy); seg.push(l); total+=l; }
-    state.particles.push({ wp, seg, total, d:0, speed: reduce?2600:520, color, kind });
-    if(from.pulse!==undefined) from.pulse=1;
+  function emit(from,to,color){
+    const b={x:state.cx,y:state.cy}; const wp=[{x:from.x,y:from.y},b,{x:to.x,y:to.y}];
+    const seg=[]; let total=0;
+    for(let i=0;i<wp.length-1;i++){const dx=wp[i+1].x-wp[i].x,dy=wp[i+1].y-wp[i].y,l=Math.hypot(dx,dy);seg.push(l);total+=l;}
+    state.particles.push({wp,seg,total,d:0,speed:reduce?2800:540,color});
+    if(from.pulse!==undefined)from.pulse=1;
   }
-  function posOnPath(p){
-    let d=p.d, i=0; while(i<p.seg.length && d>p.seg[i]){ d-=p.seg[i]; i++; }
-    if(i>=p.seg.length){ const last=p.wp[p.wp.length-1]; return {x:last.x,y:last.y}; }
-    const a=p.wp[i], b=p.wp[i+1], t=p.seg[i]?d/p.seg[i]:0;
-    return { x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t };
+  function posOnPath(p){let d=p.d,i=0; while(i<p.seg.length&&d>p.seg[i]){d-=p.seg[i];i++;}
+    if(i>=p.seg.length){const l=p.wp[p.wp.length-1];return{x:l.x,y:l.y};}
+    const a=p.wp[i],b=p.wp[i+1],t=p.seg[i]?d/p.seg[i]:0; return{x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};}
+  const after=(s,fn)=>state.scheduled.push({at:state.clock+s,fn});
+
+  // ---- narrator (plain english) ----
+  const narrEl=$("narr");
+  function narrate(text, em){
+    narrEl.parentElement.classList.remove("pop"); void narrEl.parentElement.offsetWidth;
+    narrEl.innerHTML = text + (em?` <span class="em">— ${em}</span>`:"");
+    narrEl.parentElement.classList.add("pop");
   }
 
-  // ---------- scheduler (sim-time delayed actions) ----------
-  function after(sec, fn){ state.scheduled.push({ at: state.clock+sec, fn }); }
-
-  // ---------- wire log ----------
-  const logEl = document.getElementById("log");
-  function log(kind, topic, msg){
+  // ---- wire log ----
+  const logEl=$("log");
+  function log(kind,topic,msg){
     state.wcount++;
-    const div = document.createElement("div"); div.className="ln";
-    const t = `<span class="t">${state.clock.toFixed(2).padStart(6," ")}</span> `;
-    const cls = {sub:"c-sub",state:"c-state",sync:"c-sync",birth:"c-birth",gc:"c-gc",note:"c-note"}[kind]||"";
-    const tp = topic ? `<span class="topic">${topic}</span> ` : "";
-    div.innerHTML = t + tp + `<span class="${cls}">${msg.replace(/</g,"&lt;")}</span>`;
-    logEl.appendChild(div);
-    while(logEl.children.length>140) logEl.removeChild(logEl.firstChild);
-    logEl.scrollTop = logEl.scrollHeight;
-    document.getElementById("wcount").textContent = state.wcount+" msgs";
+    const div=document.createElement("div"); div.className="ln";
+    const t=`<span class="t">${state.clock.toFixed(2).padStart(6," ")}</span> `;
+    const cls={sub:"c-sub",state:"c-state",sync:"c-sync",birth:"c-birth",gc:"c-gc",note:"c-note"}[kind]||"";
+    const tp=topic?`<span class="topic">${topic}</span> `:"";
+    div.innerHTML=t+tp+`<span class="${cls}">${msg.replace(/</g,"&lt;")}</span>`;
+    logEl.appendChild(div); while(logEl.children.length>140)logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop=logEl.scrollHeight; $("wcount").textContent=state.wcount+" msgs";
   }
 
-  // ---------- events ----------
-  const CH_NAMES=["music","games","ai-safety","hardware","memes","robotics","vision","audio","hackers","lore"];
-  const USER_NAMES=["ada","alan","grace","claude","andy","angie","deanna","karl"];
-  let chI=0, usrI=0, conI=0;
+  // ---- events ----
+  const CH=["music","games","ai-safety","hardware","memes","robotics","vision","audio","hackers","lore"];
+  const US=["ada","alan","grace","claude","andy","angie","deanna","karl"];
+  let chI=0,usrI=0,conI=0;
+  const byName=n=>[...state.actors.values()].find(a=>a.name===n);
+  const subsOf=a=>state.subs.filter(s=>s.target===a.id);
 
-  function findByName(n){ return [...state.actors.values()].find(a=>a.name===n); }
-
-  function subscribersOf(actor){ return state.subs.filter(s=>s.target===actor.id); }
-
-  function addEntry(parentName, name, isUser){
-    const parent = findByName(parentName); if(!parent) return;
-    const child = makeActor({ name, type: isUser?"dependency":"category", parent:parent.id, r: isUser?11:12 });
-    parent.share.entries[name] = isUser?"dependency":"category";
-    parent.share.entries_count++;
+  function addEntry(parentName,name,isUser){
+    const parent=byName(parentName); if(!parent)return;
+    makeActor({name,type:isUser?"dependency":"category",parent:parent.id,r:isUser?11:12});
+    parent.share.entries[name]=isUser?"dependency":"category"; parent.share.entries_count++;
     layout();
-    log("birth", parent.stateT, `(update entries.${name} (svc ${name} ${isUser?"user":"category"}:0))`);
-    log("state", parent.stateT, `(update entries_count ${parent.share.entries_count})`);
-    // EC: fan the delta to every subscriber of the parent
-    const subs = subscribersOf(parent);
-    after(0.15, ()=>{ subs.forEach(s=>{ const con=state.actors.get(s.consumer); if(con){ emit(parent,con,cssVar("--cyan"),"state");
-        con.cache = con.cache||{}; con.cache[name]=isUser?"dependency":"category"; } }); });
-    flashSelectIf(parent);
+    log("birth",parent.stateT,`(update entries.${name} (svc ${name} ${isUser?"user":"category"}:0))`);
+    log("state",parent.stateT,`(update entries_count ${parent.share.entries_count})`);
+    const subs=subsOf(parent); const label=isUser?("@"+name):("#"+name);
+    if(subs.length) narrate(`“${parentName}” gained ${label} and told its ${subs.length} watcher${subs.length>1?"s":""}.`, "state delta over MQTT");
+    else narrate(`Added ${label} to “${parentName}”.`, "no dashboards watching yet — spawn one!");
+    after(0.15,()=>subs.forEach(s=>{const con=state.actors.get(s.consumer); if(con){emit(parent,con,C.cyan); con.cache=con.cache||{}; con.cache[name]=isUser?"dependency":"category"; refreshIfSel(con);}}));
+    refreshIfSel(parent);
   }
 
   function spawnConsumer(){
-    const targetName = "channels"; const target = findByName(targetName); if(!target) return;
-    const name = "dash-"+(++conI);
-    // place near a free angle
-    const ang = (-90 + (conI*47)%360) * Math.PI/180;
-    const con = makeActor({ name, type:"consumer", parent:null, r:13, ang });
-    con.cache = {}; con.target=target.id;
-    layout(); con.x=state.cx; con.y=state.cy;
-    log("birth", null, `; ${name} (ECConsumer) starts, wants a live mirror of ${targetName}`);
-    // subscribe: (share <reply> <lease> <filter>) to target's control
-    const reply = topicOf(name,"in");
-    after(0.2, ()=>{
-      emit(con, target, cssVar("--violet"), "sub");
-      log("sub", target.control, `(share ${reply} 30 *)`);
-      // producer synchronises: snapshot then (sync)
-      after(0.5, ()=>{
-        const keys = Object.keys(target.share.entries);
-        emit(target, con, cssVar("--gold"), "sync");
-        log("state", reply, `(item_count ${keys.length})`);
-        keys.forEach((k,idx)=> after(0.12*idx, ()=>{ emit(target,con,cssVar("--cyan"),"state"); con.cache[k]=target.share.entries[k]; log("state", reply, `(update ${k} (svc ${k} category:0))`); }));
-        after(0.12*keys.length+0.1, ()=>{ emit(target,con,cssVar("--gold"),"sync"); log("sync", reply, `(sync ${reply})`); });
+    const target=byName("channels"); if(!target)return;
+    const name="dash-"+(++conI); const ang=(-90+(conI*47)%360)*Math.PI/180;
+    const con=makeActor({name,type:"consumer",parent:null,r:14,ang}); con.cache={}; con.target=target.id;
+    layout(); con.x=state.cx; con.y=state.cy; con.born=1;
+    log("birth",null,`; ${name} (ECConsumer) wants a live mirror of channels`);
+    narrate(`${name} is a dashboard. It’s asking “channels” to stream its contents…`, "subscribe");
+    const reply=topicOf(name,"in");
+    after(0.2,()=>{
+      emit(con,target,C.violet); log("sub",target.control,`(share ${reply} 30 *)`);
+      after(0.5,()=>{
+        const keys=Object.keys(target.share.entries);
+        emit(target,con,C.gold); log("state",reply,`(item_count ${keys.length})`);
+        narrate(`“channels” is sending ${name} a snapshot of ${keys.length} entries…`, "snapshot");
+        keys.forEach((k,i)=>after(0.12*i,()=>{emit(target,con,C.cyan); con.cache[k]=target.share.entries[k]; log("state",reply,`(update ${k} (svc ${k} category:0))`); refreshIfSel(con);}));
+        after(0.12*keys.length+0.1,()=>{emit(target,con,C.gold); log("sync",reply,`(sync ${reply})`);
+          narrate(`${name} is now mirroring “channels” live. New channels will stream to it automatically.`, "in sync");});
       });
-      // establish leased subscription
-      state.subs.push({ consumer:con.id, target:target.id, lease:30, leaseMax:30 });
+      state.subs.push({consumer:con.id,target:target.id,lease:30,leaseMax:30});
     });
-    flashSelectIf(con);
   }
 
   function tickLeases(dt){
-    for(const s of state.subs){
-      s.lease -= dt;
-      if(s.autoRenewFlash) s.autoRenewFlash-=dt;
-      if(s.lease <= 6 && state.autoRenew && !s._renewing){
-        s._renewing=true;
-        const con=state.actors.get(s.consumer), tgt=state.actors.get(s.target);
-        if(con&&tgt){ emit(con,tgt,cssVar("--violet"),"sub"); log("sub", tgt.control, `(share ${topicOf(con.name,"in")} 30 *)  ; renew lease`); }
-        s.lease=s.leaseMax; setTimeout(()=>{ s._renewing=false; }, 50);
-      }
+    for(const s of state.subs){ s.lease-=dt;
+      if(s.lease<=6&&state.autoRenew&&!s._r){ s._r=true; const con=state.actors.get(s.consumer),tgt=state.actors.get(s.target);
+        if(con&&tgt){emit(con,tgt,C.violet); log("sub",tgt.control,`(share ${topicOf(con.name,"in")} 30 *)  ; renew lease`);} s.lease=s.leaseMax; setTimeout(()=>s._r=false,50); }
     }
-    // expire
-    for(let i=state.subs.length-1;i>=0;i--){ const s=state.subs[i];
-      if(s.lease<=0){ const con=state.actors.get(s.consumer), tgt=state.actors.get(s.target);
-        log("gc", tgt?tgt.stateT:null, `; lease expired → ${con?con.name:"?"} subscription dropped (distributed GC)`);
-        state.subs.splice(i,1);
-      }
+    for(let i=state.subs.length-1;i>=0;i--){const s=state.subs[i];
+      if(s.lease<=0){const con=state.actors.get(s.consumer),tgt=state.actors.get(s.target);
+        log("gc",tgt?tgt.stateT:null,`; lease expired → ${con?con.name:"?"} subscription dropped (distributed GC)`);
+        narrate(`${con?con.name:"a dashboard"}’s lease ran out — the broker dropped its subscription automatically.`, "distributed garbage collection");
+        state.subs.splice(i,1);}
     }
   }
 
-  function flashSelectIf(a){ /* keep selection stable; refresh panel if same */ if(state.selected===a.id) renderInspector(); }
-
-  // ---------- inspector ----------
-  const insBody = document.getElementById("ins-body");
-  const TYPEMETA = {
-    hyperspace:{c:"--gold", label:"HyperSpace", note:"LifeCycleManager of Categories · the root of the tree"},
-    category:{c:"--cyan", label:"Category", note:"a live Actor that is a group of Entries (Categories or Dependencies)"},
-    dependency:{c:"--violet", label:"Dependency", note:"a reference to a Service · may be unresolved (service = null) until discovered"},
-    consumer:{c:"--green", label:"ECConsumer", note:"mirrors a producer's share state over MQTT · one-way, leased"},
-  };
+  // ---- inspector (bottom sheet) ----
+  const insBody=$("ins-body"), sheet=$("sheet");
+  const TM={ hyperspace:{c:"gold",label:"HyperSpace",note:"The root directory. Holds the whole tree of channels and users."},
+    category:{c:"cyan",label:"Category",note:"A live actor that is a group of entries — other categories, or references to services."},
+    dependency:{c:"violet",label:"Dependency",note:"A reference to a service (here, a user). May be unresolved until the real service is discovered."},
+    consumer:{c:"green",label:"Dashboard",note:"An ECConsumer: keeps a live read-only mirror of another actor's state over MQTT. Leased."} };
+  function openSheet(){ sheet.classList.add("open"); }
+  function closeSheet(){ sheet.classList.remove("open"); state.selected=null; }
+  function refreshIfSel(a){ if(state.selected===a.id) renderInspector(); }
   function renderInspector(){
-    const a = state.selected && state.actors.get(state.selected);
-    if(!a){ insBody.innerHTML = `<p class="empty">Click an actor to see its live <b style="color:var(--ink)">share</b> state, topics, and type.<br><br>Everything here is one Aiko process: a graph of actors gossiping over MQTT.</p>`; return; }
-    const m = TYPEMETA[a.type];
-    const isCon = a.type==="consumer";
-    const share = isCon ? (a.cache||{}) : a.share.entries;
-    const keys = Object.keys(share);
-    const sub = state.subs.find(s=>s.consumer===a.id);
-    let html = `<div class="card">
-      <div class="nm">${a.name} <span class="badge" style="color:var(--${m.c})">${m.label}</span></div>
-      <div class="kv" style="color:var(--muted-2); font-family:var(--sans); font-size:.76rem; line-height:1.5; margin:.15rem 0 .55rem">${m.note}</div>
-      <div class="kv"><b>id</b> ${a.id}${a.parent?`  ·  <b>parent</b> ${state.actors.get(a.parent)?.name||"—"}`:""}</div>
+    const a=state.selected&&state.actors.get(state.selected);
+    if(state.selected==="__broker"){ return renderBroker(); }
+    if(!a){ return; }
+    const m=TM[a.type], isCon=a.type==="consumer";
+    const share=isCon?(a.cache||{}):a.share.entries, keys=Object.keys(share);
+    const sub=state.subs.find(s=>s.consumer===a.id);
+    let h=`<div class="nm">${a.name} <span class="badge" style="color:var(--${m.c})">${m.label}</span></div>
+      <div class="note">${m.note}</div>
+      <div class="kv"><b>id</b> ${a.id}${a.parent?`  ·  <b>in</b> ${state.actors.get(a.parent)?.name||"—"}`:""}</div>
       <div class="kv"><b>control</b> <span class="topic">${a.control}</span></div>
-      <div class="kv"><b>state</b>&nbsp;&nbsp;&nbsp;<span class="topic">${a.stateT}</span></div>
-      ${sub?`<div class="kv"><b>lease</b> ${sub.lease.toFixed(1)}s / ${sub.leaseMax}s ${state.autoRenew?"· auto-renew":"· expiring"}</div>`:""}
-      <div class="share">
-        <div class="sh-h">share · ${isCon?"cache (mirror)":"entries"} ${isCon?"":`· entries_count ${a.share.entries_count}`}</div>
-        ${keys.length? keys.map(k=>`<div class="entry"><span class="en">${k}</span><span class="ev">${share[k]}</span></div>`).join("") : `<div class="entry none">— empty —</div>`}
-      </div>
-    </div>`;
-    if(isCon){ const tgt=state.actors.get(a.target); html+=`<div class="kv" style="color:var(--muted-2); font-family:var(--mono); font-size:.68rem; padding:0 .2rem">subscribed to <span style="color:var(--cyan)">${tgt?tgt.name:"?"}</span> via <span style="color:var(--violet)">(share …)</span> → snapshot → deltas</div>`; }
-    insBody.innerHTML = html;
+      <div class="kv"><b>state</b> <span class="topic">${a.stateT}</span></div>
+      ${sub?`<div class="kv"><b>lease</b> ${Math.max(0,sub.lease).toFixed(1)}s / ${sub.leaseMax}s · ${state.autoRenew?"auto-renew":"expiring"}</div>`:""}
+      <div class="share"><div class="sh-h">${isCon?"mirror · what it has copied":"share · entries"} ${isCon?"":`· count ${a.share.entries_count}`}</div>
+      ${keys.length?keys.map(k=>`<div class="entry"><span class="en">${a.type==="dependency"?"@":""}${k}</span><span class="ev">${share[k]}</span></div>`).join(""):`<div class="entry none">— empty —</div>`}
+      </div>`;
+    insBody.innerHTML=h;
+  }
+  function renderBroker(){
+    insBody.innerHTML=`<div class="nm">MQTT broker <span class="badge" style="color:var(--amber)">mosquitto</span></div>
+      <div class="note">Not an Aiko actor — the transport everything shares. Every message you see, even between a parent and its own child, routes through here. The <b style="color:var(--ink)">topic name is the only address</b>; whether the other actor is in this same program or on another computer is invisible to the sender.</div>
+      <div class="kv"><b>live subscriptions</b> ${state.subs.length}<br><b>actors</b> ${[...state.actors.values()].length}</div>`;
   }
 
-  // ---------- render ----------
-  function cssVar(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
-  let CV = {};
-  function cacheColors(){ CV = { gold:cssVar("--gold"),cyan:cssVar("--cyan"),green:cssVar("--green"),violet:cssVar("--violet"),amber:cssVar("--amber"),hair:cssVar("--hair"),grid:cssVar("--grid"),muted:cssVar("--muted-2"),ink:cssVar("--ink"),rose:cssVar("--rose") }; }
-  const typeColor = (t)=> ({hyperspace:CV.gold, category:CV.cyan, dependency:CV.violet, consumer:CV.green}[t]||CV.cyan);
+  // ---- colors ----
+  const cv=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  let C={};
+  const cacheC=()=>C={gold:cv("--gold"),cyan:cv("--cyan"),green:cv("--green"),violet:cv("--violet"),amber:cv("--amber"),grid:cv("--grid"),muted:cv("--muted-2"),ink:cv("--ink"),rose:cv("--rose")};
+  const typeColor=t=>({hyperspace:C.gold,category:C.cyan,dependency:C.violet,consumer:C.green}[t]||C.cyan);
 
   function draw(){
-    const w=canvas.clientWidth, h=canvas.clientHeight;
-    ctx.clearRect(0,0,w,h);
-    // grid
-    ctx.strokeStyle=CV.grid; ctx.lineWidth=1;
-    ctx.globalAlpha=.5;
-    for(let x=0;x<w;x+=34){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
-    for(let y=0;y<h;y+=34){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    const w=canvas.clientWidth,h=canvas.clientHeight; ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle=C.grid; ctx.lineWidth=1; ctx.globalAlpha=.5;
+    const g=state.small?40:34;
+    for(let x=0;x<w;x+=g){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
+    for(let y=0;y<h;y+=g){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
     ctx.globalAlpha=1;
-    const cx=state.cx, cy=state.cy;
-
-    // containment chords (logical tree) — faint curved to broker-relative
+    const cx=state.cx,cy=state.cy;
+    // containment (logical tree) faint
     ctx.lineWidth=1.2;
-    for(const a of state.actors.values()){
-      if(a.parent){ const p=state.actors.get(a.parent); if(!p) continue;
-        ctx.strokeStyle="rgba(120,140,180,.13)"; ctx.setLineDash([4,5]);
-        ctx.beginPath(); ctx.moveTo(p.x,p.y);
-        const mx=(p.x+a.x)/2 + (cy-(p.y+a.y)/2)*0.03, my=(p.y+a.y)/2;
-        ctx.quadraticCurveTo(mx,my,a.x,a.y); ctx.stroke();
-      }
-    }
+    for(const a of state.actors.values()){ if(a.parent){const p=state.actors.get(a.parent); if(!p)continue;
+      ctx.strokeStyle="rgba(120,140,180,.14)"; ctx.setLineDash([4,5]);
+      ctx.beginPath(); ctx.moveTo(p.x,p.y);
+      const mx=(p.x+a.x)/2+(cy-(p.y+a.y)/2)*0.03,my=(p.y+a.y)/2; ctx.quadraticCurveTo(mx,my,a.x,a.y); ctx.stroke(); } }
     ctx.setLineDash([]);
-
-    // subscription wires (consumer <-> broker <-> target) via center, health-colored
-    for(const s of state.subs){
-      const con=state.actors.get(s.consumer), tgt=state.actors.get(s.target); if(!con||!tgt) continue;
-      const health=Math.max(0,Math.min(1,s.lease/s.leaseMax));
-      ctx.strokeStyle=`rgba(95,208,138,${0.10+0.22*health})`; ctx.lineWidth=1.3;
-      ctx.beginPath(); ctx.moveTo(con.x,con.y); ctx.lineTo(cx,cy); ctx.stroke();
-      // lease ring on consumer
-      ctx.beginPath(); ctx.strokeStyle=health>0.2?CV.green:CV.rose; ctx.lineWidth=2.2;
-      ctx.arc(con.x,con.y,con.r+5,-Math.PI/2,-Math.PI/2+health*Math.PI*2); ctx.stroke();
-    }
-
-    // broker (center hub)
-    const bp = 0.5+0.5*Math.sin(state.clock*2.2);
-    const bg = ctx.createRadialGradient(cx,cy,2,cx,cy,46);
+    // subscription wires + lease rings
+    for(const s of state.subs){ const con=state.actors.get(s.consumer),tgt=state.actors.get(s.target); if(!con||!tgt)continue;
+      const hp=Math.max(0,Math.min(1,s.lease/s.leaseMax));
+      ctx.strokeStyle=`rgba(95,208,138,${0.1+0.22*hp})`; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(con.x,con.y); ctx.lineTo(cx,cy); ctx.stroke();
+      ctx.beginPath(); ctx.strokeStyle=hp>0.2?C.green:C.rose; ctx.lineWidth=2.4; ctx.arc(con.x,con.y,con.r+5,-Math.PI/2,-Math.PI/2+hp*Math.PI*2); ctx.stroke(); }
+    // broker
+    const bp=0.5+0.5*Math.sin(state.clock*2.2);
+    const bg=ctx.createRadialGradient(cx,cy,2,cx,cy,50);
     bg.addColorStop(0,`rgba(240,168,60,${0.32+0.14*(reduce?0.4:bp)})`); bg.addColorStop(1,"rgba(240,168,60,0)");
-    ctx.fillStyle=bg; ctx.beginPath(); ctx.arc(cx,cy,46,0,7); ctx.fill();
-    ctx.fillStyle="#0a0e17"; ctx.strokeStyle=CV.amber; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(cx,cy,17,0,7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle=CV.amber; ctx.font="600 9px "+"ui-monospace,monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.fillText("MQTT",cx,cy-0.5); ctx.fillStyle=CV.muted; ctx.font="8px ui-monospace,monospace"; ctx.fillText("broker",cx,cy+8);
-
+    ctx.fillStyle=bg; ctx.beginPath(); ctx.arc(cx,cy,50,0,7); ctx.fill();
+    const br=state.small?20:17;
+    ctx.fillStyle="#0a0e17"; ctx.strokeStyle=C.amber; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,br,0,7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=C.amber; ctx.font="600 9px ui-monospace,monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("MQTT",cx,cy-0.5); ctx.fillStyle=C.muted; ctx.font="8px ui-monospace,monospace"; ctx.fillText("broker",cx,cy+8);
     // particles
-    for(const p of state.particles){
-      const pos=posOnPath(p);
-      // trail
-      ctx.strokeStyle=p.color; ctx.globalAlpha=0.28; ctx.lineWidth=2;
-      const back=Math.max(0,p.d-16); const bpos=posOnPath({...p,d:back});
-      ctx.beginPath(); ctx.moveTo(bpos.x,bpos.y); ctx.lineTo(pos.x,pos.y); ctx.stroke();
-      ctx.globalAlpha=1;
-      ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=12;
-      ctx.beginPath(); ctx.arc(pos.x,pos.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0;
-    }
-
+    for(const p of state.particles){ const pos=posOnPath(p);
+      ctx.strokeStyle=p.color; ctx.globalAlpha=.28; ctx.lineWidth=2;
+      const bpos=posOnPath({...p,d:Math.max(0,p.d-16)}); ctx.beginPath(); ctx.moveTo(bpos.x,bpos.y); ctx.lineTo(pos.x,pos.y); ctx.stroke(); ctx.globalAlpha=1;
+      ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=12; ctx.beginPath(); ctx.arc(pos.x,pos.y,state.small?4:3.2,0,7); ctx.fill(); ctx.shadowBlur=0; }
     // nodes
-    for(const a of state.actors.values()){
-      const col=typeColor(a.type); const sel=state.selected===a.id;
-      if(a.pulse>0){ ctx.fillStyle=col; ctx.globalAlpha=a.pulse*0.25;
-        ctx.beginPath(); ctx.arc(a.x,a.y,a.r+10*(1-a.pulse)+6,0,7); ctx.fill(); ctx.globalAlpha=1; }
-      // body
-      ctx.fillStyle="#101828"; ctx.strokeStyle=col; ctx.lineWidth=sel?2.6:1.6;
-      if(sel){ ctx.shadowColor=col; ctx.shadowBlur=16; }
+    for(const a of state.actors.values()){ const col=typeColor(a.type), sel=state.selected===a.id;
+      if(a.pulse>0){ctx.fillStyle=col; ctx.globalAlpha=a.pulse*0.25; ctx.beginPath(); ctx.arc(a.x,a.y,a.r+10*(1-a.pulse)+6,0,7); ctx.fill(); ctx.globalAlpha=1;}
+      ctx.fillStyle="#101828"; ctx.strokeStyle=col; ctx.lineWidth=sel?2.8:1.7;
+      if(sel){ctx.shadowColor=col; ctx.shadowBlur=16;}
       ctx.beginPath(); ctx.arc(a.x,a.y,a.r,0,7); ctx.fill(); ctx.stroke(); ctx.shadowBlur=0;
-      // inner dot for hyperspace/consumer
-      if(a.type==="hyperspace"||a.type==="consumer"){ ctx.fillStyle=col; ctx.globalAlpha=.9; ctx.beginPath(); ctx.arc(a.x,a.y,3,0,7); ctx.fill(); ctx.globalAlpha=1; }
-      // label
-      ctx.fillStyle=sel?CV.ink:"#aeb9cf"; ctx.font=(a.type==="hyperspace"?"600 11px ":"10px ")+"ui-monospace,monospace";
-      ctx.textAlign="center"; ctx.textBaseline="top";
-      const ly = a.y + a.r + 3;
-      const label = a.type==="category"&&a.parent&&state.actors.get(a.parent)?.name==="channels" ? "#"+a.name
-                  : a.type==="dependency" ? "@"+a.name : a.name;
-      ctx.fillText(label, a.x, ly);
-    }
+      if(a.type==="hyperspace"||a.type==="consumer"){ctx.fillStyle=col; ctx.globalAlpha=.9; ctx.beginPath(); ctx.arc(a.x,a.y,3,0,7); ctx.fill(); ctx.globalAlpha=1;}
+      ctx.fillStyle=sel?C.ink:"#b3bed3"; ctx.font=(state.small?"11px ":"10px ")+"ui-monospace,monospace"; ctx.textAlign="center"; ctx.textBaseline="top";
+      const par=a.parent&&state.actors.get(a.parent); const label=(a.type==="category"&&par&&par.name==="channels")?"#"+a.name:(a.type==="dependency"?"@"+a.name:a.name);
+      ctx.fillText(label,a.x,a.y+a.r+3); }
   }
 
-  // ---------- loop ----------
   let last=performance.now();
-  function frame(now){
-    let dt=(now-last)/1000; last=now; if(dt>0.05) dt=0.05;
-    if(!state.paused){
-      state.clock+=dt;
-      // run scheduled
-      for(let i=state.scheduled.length-1;i>=0;i--){ if(state.clock>=state.scheduled[i].at){ const s=state.scheduled.splice(i,1)[0]; s.fn(); } }
-      // integrate nodes toward target
-      for(const a of state.actors.values()){
-        a.x += (a.tx-a.x)*Math.min(1,dt*6); a.y += (a.ty-a.y)*Math.min(1,dt*6);
-        if(a.pulse>0) a.pulse=Math.max(0,a.pulse-dt*1.6);
-      }
-      // particles
-      for(let i=state.particles.length-1;i>=0;i--){ const p=state.particles[i]; p.d+=p.speed*dt; if(p.d>=p.total){ state.particles.splice(i,1);} }
+  function frame(now){ let dt=(now-last)/1000; last=now; if(dt>0.05)dt=0.05;
+    if(!state.paused){ state.clock+=dt;
+      for(let i=state.scheduled.length-1;i>=0;i--){ if(state.clock>=state.scheduled[i].at){const s=state.scheduled.splice(i,1)[0]; s.fn();} }
+      for(const a of state.actors.values()){ a.x+=(a.tx-a.x)*Math.min(1,dt*6); a.y+=(a.ty-a.y)*Math.min(1,dt*6); if(a.pulse>0)a.pulse=Math.max(0,a.pulse-dt*1.6); }
+      for(let i=state.particles.length-1;i>=0;i--){const p=state.particles[i]; p.d+=p.speed*dt; if(p.d>=p.total)state.particles.splice(i,1);}
       tickLeases(dt);
-      // refresh lease readout if a consumer is selected
-      if(state.selected){ const a=state.actors.get(state.selected); if(a&&a.type==="consumer"){ if(!(state._insTick=(state._insTick||0)+dt) || state._insTick>0.25){ renderInspector(); state._insTick=0; } } }
+      if(state.selected){const a=state.actors.get(state.selected); if(a&&a.type==="consumer"){ state._it=(state._it||0)+dt; if(state._it>0.3){renderInspector(); state._it=0;} }}
     }
-    draw();
-    requestAnimationFrame(frame);
+    draw(); requestAnimationFrame(frame);
   }
 
-  // ---------- input ----------
-  function resize(){
-    const dpr=Math.min(2,devicePixelRatio||1);
-    canvas.width=canvas.clientWidth*dpr; canvas.height=canvas.clientHeight*dpr;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    layout();
-  }
-  canvas.addEventListener("click",(e)=>{
-    const rect=canvas.getBoundingClientRect(); const mx=e.clientX-rect.left, my=e.clientY-rect.top;
-    let hit=null,best=1e9;
-    for(const a of state.actors.values()){ const d=Math.hypot(mx-a.x,my-a.y); if(d<a.r+6 && d<best){ best=d; hit=a; } }
-    // broker click
-    if(!hit && Math.hypot(mx-state.cx,my-state.cy)<22){ state.selected="__broker"; showBroker(); return; }
-    state.selected = hit?hit.id:null; renderInspector();
+  function resize(){ const dpr=Math.min(2,devicePixelRatio||1);
+    canvas.width=canvas.clientWidth*dpr; canvas.height=canvas.clientHeight*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); layout(); }
+
+  function hit(mx,my){ let h=null,best=1e9;
+    for(const a of state.actors.values()){const d=Math.hypot(mx-a.x,my-a.y); const tol=(state.small?14:7); if(d<a.r+tol&&d<best){best=d;h=a;}}
+    return h; }
+  canvas.addEventListener("click",e=>{
+    if($("intro").classList.contains("show"))return;
+    const r=canvas.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+    const a=hit(mx,my);
+    if(a){ state.selected=a.id; renderInspector(); openSheet(); return; }
+    if(Math.hypot(mx-state.cx,my-state.cy)<(state.small?24:20)){ state.selected="__broker"; renderBroker(); openSheet(); return; }
+    closeSheet();
   });
-  function showBroker(){
-    insBody.innerHTML=`<div class="card"><div class="nm">MQTT broker <span class="badge" style="color:var(--amber)">mosquitto</span></div>
-      <div class="kv" style="color:var(--muted-2); font-family:var(--sans); font-size:.78rem; line-height:1.55; margin-top:.3rem">
-      Not an Aiko actor — the transport. Every message you see, even parent→child inside the same process, routes through here.
-      The <b style="color:var(--ink)">topic path</b> is the only address; location (same process or another host) is invisible to the sender.</div>
-      <div class="kv" style="margin-top:.5rem"><b>subscriptions</b> ${state.subs.length} live · <b>actors</b> ${[...state.actors.values()].length}</div></div>`;
-  }
 
-  // ---------- legend ----------
-  document.getElementById("legend").innerHTML = [
-    ["sw","--gold","HyperSpace (root)"],["sw","--cyan","Category"],["sw","--violet","Dependency / @user"],["sw","--green","ECConsumer"],
-    ["li","--violet","(share) subscribe"],["li","--cyan","state delta"],["li","--gold","(sync) snapshot"],
-  ].map(([k,v,t])=>`<div class="row"><span class="${k}" style="background:var(${v})"></span>${t}</div>`).join("");
-
-  // ---------- buttons ----------
-  const $=id=>document.getElementById(id);
-  $("addChan").onclick=()=>addEntry("channels", CH_NAMES[chI++ % CH_NAMES.length] + (chI>CH_NAMES.length?("-"+chI):""), false);
-  $("addUser").onclick=()=>addEntry("users", USER_NAMES[usrI++ % USER_NAMES.length] + (usrI>USER_NAMES.length?("-"+usrI):""), true);
+  // ---- controls ----
+  $("addChan").onclick=()=>addEntry("channels", CH[chI++%CH.length]+(chI>CH.length?("-"+chI):""), false);
+  $("addUser").onclick=()=>addEntry("users", US[usrI++%US.length]+(usrI>US.length?("-"+usrI):""), true);
   $("spawnCon").onclick=spawnConsumer;
-  $("renew").onclick=(e)=>{ state.autoRenew=!state.autoRenew; e.currentTarget.classList.toggle("on",state.autoRenew); e.currentTarget.textContent="leases: "+(state.autoRenew?"auto-renew":"let expire"); };
-  $("pause").onclick=(e)=>{ state.paused=!state.paused; e.currentTarget.textContent=state.paused?"play":"pause"; e.currentTarget.classList.toggle("on",state.paused); };
-  $("reset").onclick=()=>{ logEl.innerHTML=""; state.wcount=0; chI=usrI=conI=0; seed(); renderInspector(); };
+  $("wireBtn").onclick=()=>{ $("wire").classList.toggle("open"); closeSheet(); };
+  $("wireX").onclick=()=>$("wire").classList.remove("open");
+  $("sheetX").onclick=closeSheet;
+  let menuState=0;
+  $("menuBtn").onclick=()=>{ // cycle: pause -> resume, plus toggles via long options; keep simple: toggle pause
+    state.paused=!state.paused; $("menuBtn").classList.toggle("on",state.paused); $("menuBtn").textContent=state.paused?"▶":"⋯";
+    narrate(state.paused?"Paused.":"Running.", state.paused?"tap ▶ to resume":"");
+  };
+  // help / intro
+  const intro=$("intro");
+  const showIntro=()=>intro.classList.add("show");
+  const hideIntro=()=>intro.classList.remove("show");
+  $("help").onclick=showIntro; $("introGo").onclick=hideIntro;
+  intro.addEventListener("click",e=>{ if(e.target===intro)hideIntro(); });
 
-  // ---------- boot ----------
-  cacheColors(); resize(); seed();
-  addEventListener("resize", resize);
+  // double-tap title = reset (hidden), long list not needed
+  $("title").addEventListener("dblclick",()=>{ logEl.innerHTML=""; state.wcount=0; chI=usrI=conI=0; seed(); });
+
+  cacheC(); resize(); seed(); addEventListener("resize",()=>{ resize(); });
   requestAnimationFrame(frame);
-  // a gentle opening: spawn one dashboard after a beat so there's motion on load
-  if(!reduce) setTimeout(spawnConsumer, 900);
+  // show intro on first load; auto-spawn a dashboard so there's life behind it
+  showIntro();
+  if(!reduce) setTimeout(spawnConsumer, 1400);
 })();
 </script>
