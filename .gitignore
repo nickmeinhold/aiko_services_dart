@@ -1,0 +1,18 @@
+# Dart / Pub
+.dart_tool/
+.packages
+build/
+pubspec.lock          # keep for apps, ignore for libraries; this is a library port
+doc/api/
+
+# Dart tool caches
+.pub-cache/
+.pub/
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store

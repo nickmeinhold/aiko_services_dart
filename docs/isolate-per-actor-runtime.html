@@ -1,0 +1,471 @@
+<title>Aiko in Dart: an isolate-per-actor runtime</title>
+<style>
+  :root{
+    --paper:#eceef2; --card:#ffffff; --ink:#161a23; --muted:#586072;
+    --hair:#d5dae2; --hair-2:#e6e9ef;
+    --bus:#33408f; --bus-soft:#e7e9f5;
+    --local:#0e7c70; --local-soft:#e0f1ee;
+    --remote:#b06a1c; --remote-soft:#f6ebdb;
+    --code-bg:#12151d; --code-ink:#e6e9f0; --code-dim:#8b93a7;
+    --good:#0e7c70; --warn:#b06a1c;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --col: 44rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:17px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--col); margin:0 auto; padding:0 1.4rem 6rem}
+  .bleed{max-width:56rem; margin-left:auto; margin-right:auto}
+
+  /* ---- rhythm ---- */
+  section{margin-top:3.4rem}
+  p{margin:0 0 1rem}
+  a{color:var(--bus); text-decoration:none; border-bottom:1px solid var(--bus-soft)}
+  a:hover{border-bottom-color:var(--bus)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--bus); outline-offset:3px; border-radius:2px}
+
+  /* ---- type ---- */
+  .eyebrow{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--bus); font-weight:600;
+    display:flex; align-items:center; gap:.6rem;
+  }
+  .eyebrow::before{content:""; width:1.6rem; height:2px; background:var(--bus); display:inline-block}
+  h1{
+    font-size:clamp(2rem,6vw,2.7rem); line-height:1.08; letter-spacing:-.02em;
+    margin:.8rem 0 .5rem; text-wrap:balance; font-weight:760;
+  }
+  .sub{font-size:1.16rem; color:var(--muted); max-width:36rem; text-wrap:balance; margin:0}
+  h2{
+    font-size:1.42rem; letter-spacing:-.01em; margin:0 0 .3rem; text-wrap:balance; font-weight:720;
+  }
+  h2 .num{font-family:var(--mono); font-size:.9rem; color:var(--bus); font-weight:600; margin-right:.55rem; vertical-align:.12em}
+  h3{font-size:1.02rem; margin:1.8rem 0 .4rem; font-weight:680}
+  .lede{font-size:1.06rem; color:var(--muted); margin-top:.2rem}
+  strong{font-weight:660}
+  code{
+    font-family:var(--mono); font-size:.86em;
+    background:var(--hair-2); padding:.08em .38em; border-radius:4px;
+    color:#2a3350; white-space:nowrap;
+  }
+
+  /* ---- masthead ---- */
+  header.mast{padding:4.2rem 0 0}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; margin-top:1.7rem;
+    font-family:var(--mono); font-size:.76rem; color:var(--muted);
+    padding-top:1.1rem; border-top:1px solid var(--hair);
+  }
+  .meta b{color:var(--ink); font-weight:600}
+
+  /* ---- tldr ---- */
+  .tldr{
+    background:var(--card); border:1px solid var(--hair); border-radius:14px;
+    padding:1.5rem 1.6rem; margin-top:2.4rem;
+    box-shadow:0 1px 0 rgba(20,26,40,.03), 0 12px 30px -22px rgba(51,64,143,.4);
+  }
+  .tldr .eyebrow{margin-bottom:1rem}
+  .tldr ol{margin:0; padding-left:0; list-style:none; counter-reset:t; display:grid; gap:.9rem}
+  .tldr li{counter-increment:t; padding-left:2.6rem; position:relative}
+  .tldr li::before{
+    content:counter(t); position:absolute; left:0; top:-.05rem;
+    font-family:var(--mono); font-size:.82rem; font-weight:600;
+    width:1.7rem; height:1.7rem; display:grid; place-items:center;
+    background:var(--bus-soft); color:var(--bus); border-radius:7px;
+  }
+
+  /* ---- generic table ---- */
+  .scroll{overflow-x:auto; margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card)}
+  table{border-collapse:collapse; width:100%; min-width:34rem; font-size:.94rem}
+  th,td{text-align:left; padding:.72rem .95rem; border-bottom:1px solid var(--hair-2); vertical-align:top}
+  thead th{
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; background:#f7f8fa;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.k{font-family:var(--mono); font-size:.83rem; color:#2a3350; white-space:nowrap}
+  .tag{font-family:var(--mono); font-size:.72rem; padding:.12em .5em; border-radius:5px; font-weight:600; white-space:nowrap}
+  .tag.local{background:var(--local-soft); color:var(--local)}
+  .tag.remote{background:var(--remote-soft); color:var(--remote)}
+  .tag.bus{background:var(--bus-soft); color:var(--bus)}
+
+  /* ---- callout ---- */
+  .note{
+    border-left:3px solid var(--bus); background:var(--card);
+    border:1px solid var(--hair); border-left:3px solid var(--bus);
+    border-radius:0 12px 12px 0; padding:1.1rem 1.3rem; margin:1.4rem 0;
+  }
+  .note .eyebrow{color:var(--bus); margin-bottom:.5rem}
+  .note.ask{border-left-color:var(--remote)}
+  .note.ask .eyebrow{color:var(--remote)}
+  .note.ask .eyebrow::before{background:var(--remote)}
+  .note p:last-child{margin-bottom:0}
+
+  /* ---- code ---- */
+  pre{
+    background:var(--code-bg); color:var(--code-ink); border-radius:12px;
+    padding:1.15rem 1.25rem; overflow-x:auto; margin:1.1rem 0;
+    font-family:var(--mono); font-size:.82rem; line-height:1.6; tab-size:2;
+  }
+  pre .c{color:var(--code-dim)}
+  pre .s{color:#8fd6c8}
+  pre .b{color:#c9b6f2}
+  details{margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card); overflow:hidden}
+  details[open]{box-shadow:0 12px 30px -24px rgba(51,64,143,.5)}
+  summary{
+    cursor:pointer; padding:.9rem 1.2rem; font-family:var(--mono); font-size:.8rem;
+    letter-spacing:.04em; color:var(--ink); font-weight:600; list-style:none;
+    display:flex; align-items:center; gap:.7rem;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▶"; color:var(--bus); font-size:.7rem; transition:transform .18s ease}
+  details[open] summary::before{transform:rotate(90deg)}
+  details .body{padding:0 1.2rem 1rem}
+  details pre{margin:.4rem 0 0}
+
+  /* ---- topology schematic ---- */
+  .schema{
+    background:linear-gradient(180deg,#fbfbfd,#f4f5f8); border:1px solid var(--hair);
+    border-radius:16px; padding:1.6rem 1.4rem; margin:1.4rem 0; overflow-x:auto;
+  }
+  .schema-inner{min-width:33rem}
+  .vm-label{
+    font-family:var(--mono); font-size:.68rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); text-align:center; margin-bottom:1.1rem;
+  }
+  .isos{display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem}
+  .iso{
+    background:var(--card); border:1px solid var(--hair); border-top:3px solid var(--local);
+    border-radius:10px; padding:.85rem .9rem; text-align:left;
+  }
+  .iso h4{margin:0 0 .5rem; font-size:.9rem; font-weight:700}
+  .iso .row{font-family:var(--mono); font-size:.7rem; color:var(--muted); line-height:1.5}
+  .iso .row b{color:var(--local); font-weight:600}
+  .connectors{display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; height:1.7rem}
+  .conn{display:flex; flex-direction:column; align-items:center; justify-content:center}
+  .conn .line{width:2px; height:1.1rem; background:var(--local)}
+  .conn .cap{font-family:var(--mono); font-size:.6rem; color:var(--local); letter-spacing:.03em}
+  .bus-bar{
+    background:var(--bus); color:#fff; border-radius:10px; padding:.85rem 1rem; text-align:center;
+    box-shadow:0 10px 24px -14px rgba(51,64,143,.7);
+  }
+  .bus-bar .t{font-family:var(--mono); font-size:.82rem; font-weight:600; letter-spacing:.02em}
+  .bus-bar .d{font-size:.74rem; opacity:.85; margin-top:.15rem}
+  .drop{display:flex; flex-direction:column; align-items:center; margin:.1rem 0}
+  .drop .line{width:2px; height:1.3rem; background:var(--remote)}
+  .drop .cap{font-family:var(--mono); font-size:.6rem; color:var(--remote); letter-spacing:.03em; margin:.15rem 0}
+  .broker{
+    background:var(--card); border:1px dashed var(--remote); color:var(--remote);
+    border-radius:999px; padding:.5rem 1.1rem; text-align:center;
+    font-family:var(--mono); font-size:.78rem; font-weight:600; width:max-content; margin:0 auto;
+  }
+  .remote-note{text-align:center; font-family:var(--mono); font-size:.68rem; color:var(--muted); margin-top:.7rem}
+  .legend{display:flex; flex-wrap:wrap; gap:1.2rem; justify-content:center; margin-top:1.4rem; padding-top:1.1rem; border-top:1px solid var(--hair)}
+  .legend span{display:flex; align-items:center; gap:.45rem; font-family:var(--mono); font-size:.7rem; color:var(--muted)}
+  .sw{width:.9rem; height:.9rem; border-radius:3px; flex:none}
+  .sw.local{background:var(--local)} .sw.remote{background:var(--remote)} .sw.bus{background:var(--bus)}
+
+  /* ---- wire recap ---- */
+  .wire-list{display:grid; gap:.55rem; margin:1.1rem 0; padding:0; list-style:none}
+  .wire-list li{
+    display:grid; grid-template-columns:13rem 1fr; gap:.9rem; align-items:baseline;
+    padding:.6rem .9rem; background:var(--card); border:1px solid var(--hair-2); border-radius:9px;
+  }
+  .wire-list code{white-space:normal; background:transparent; padding:0; color:#2a3350}
+  .wire-list .desc{font-size:.9rem; color:var(--muted)}
+  @media(max-width:33rem){ .wire-list li{grid-template-columns:1fr; gap:.2rem} }
+
+  footer{margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--hair); font-size:.86rem; color:var(--muted)}
+  footer a{border-bottom-color:var(--hair)}
+  footer ul{padding-left:1.1rem; margin:.5rem 0 0}
+  footer li{margin:.25rem 0}
+
+  .hr{height:1px; background:var(--hair); border:0; margin:3.4rem 0 0}
+
+  @media (prefers-reduced-motion:no-preference){
+    header.mast,section{animation:rise .5s ease both}
+    section:nth-of-type(1){animation-delay:.02s}
+    @keyframes rise{from{opacity:0; transform:translateY(8px)}to{opacity:1; transform:none}}
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Aiko Services &middot; Dart port &middot; design note</div>
+    <h1>An isolate-per-actor runtime for Aiko in Dart</h1>
+    <p class="sub">How Aiko's distributed actor model maps onto Dart's isolate groups, and the build sequence I'd propose.</p>
+    <div class="meta">
+      <span><b>For</b> Andy (geekscape)</span>
+      <span><b>From</b> Nick</span>
+      <span><b>Status</b> proposal, for discussion</span>
+      <span><b>Grounded in</b> aiko_services <code>category.py</code> / <code>hyperspace.py</code> / <code>share.py</code></span>
+    </div>
+  </header>
+
+  <div class="tldr">
+    <div class="eyebrow">The ask, in three lines</div>
+    <ol>
+      <li><b>Build the single-isolate EC client first.</b> <code>ECProducer</code> / <code>ECConsumer</code> + the s-expression codec + Registrar discovery, over one MQTT connection. This is the MVP that unblocks the chat gateway and proves interop against the Python reference.</li>
+      <li><b>Then the MessageBus + isolate-per-actor runtime.</b> The v2 shape that lets Dart <em>host</em> native Categories / HyperSpace, not just consume them.</li>
+      <li><b>Two things I need you to confirm</b> (bottom of this note) so I'm not building on a wrong read of your scheduling model or your composition layer.</li>
+    </ol>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span>Two "actor models", at different layers</h2>
+    <p class="lede">The word collides; the referent does not. Getting this distinction right is what keeps the port faithful.</p>
+    <p>Dart isolates are the <strong>local</strong> actor model: concurrency isolation inside one VM, messages over in-process ports. Aiko's <code>Actor</code> is the <strong>distributed</strong> actor model: a thing addressable by other processes and other languages over a broker. They are complementary, not substitutable.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th></th><th>Dart isolate</th><th>Aiko <code>Actor</code></th></tr></thead>
+        <tbody>
+          <tr><td class="k">isolation boundary</td><td>an OS-level heap; no shared mutable memory</td><td>a <em>network</em> identity: an MQTT topic path</td></tr>
+          <tr><td class="k">transport</td><td><span class="tag local">SendPort / ReceivePort</span> in-VM</td><td><span class="tag remote">MQTT</span> cross-process / cross-host</td></tr>
+          <tr><td class="k">scope</td><td>intra-process concurrency</td><td>inter-process distribution</td></tr>
+          <tr><td class="k">isolation enforced by</td><td>the language (cannot share state)</td><td>convention (everything should go via <code>share</code> / EC)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The consequence: cross-language interop (Dart &harr; Python) is <strong>always</strong> MQTT, regardless of isolate choices. Isolates only govern how Dart actors relate to each other <em>in-process</em>.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>What Dart isolate groups changed</h2>
+    <p>The relevant recent development. Since Dart 2.15 (and on by default shortly after), a spawned isolate joins the spawner's <strong>group</strong>, and the group shares one GC-managed heap plus program structure, JIT code, constants and interned <code>String</code>s. Measured effect: roughly <strong>10&times; faster spawn, 10&times; lower base memory, 8&times; faster inter-isolate communication</strong>.</p>
+    <div class="note">
+      <div class="eyebrow">The nuance that makes it usable</div>
+      <p>Sharing the heap did <strong>not</strong> relax the semantics. Isolates in a group still cannot touch each other's mutable state and still communicate only by message-passing. It is a VM implementation optimisation, not a change to the programming model. So the cost objection to "one isolate per actor" mostly dissolves: it is one shared heap and one GC across many cheap isolates, while the hard no-shared-mutable-state guarantee stays intact.</p>
+    </div>
+    <p>Worth separating from a newer, <em>unshipped</em> proposal for genuine shared-memory multithreading (language working-group doc 333). I would not design against that yet; isolate groups are the stable ground.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>The invariant the design must preserve</h2>
+    <p class="lede">The topic is the only address.</p>
+    <p>A Python actor publishing to <code>#general</code> has no idea whether the recipient is a sibling in the same process or a service on another host. That location transparency <em>is</em> the actor model here, and it is exactly what your uniform-MQTT approach buys. So "one isolate per actor" cannot mean actors wiring <code>SendPort</code>s directly to each other: direct port-wiring makes an actor know its peers' isolate identities, which is location-<em>aware</em>, the opposite of what we want. The fix is to keep the topic bus as the single namespace and put a router between actors and both transports. Which is precisely what <code>aiko.process</code> already is on the Python side: the process-level singleton owning the one MQTT connection for all in-process actors.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span>Proposed topology: a MessageBus isolate</h2>
+    <p>The faithful translation of "<code>aiko.process</code> owns one MQTT connection for N in-process actors" is one <strong>MessageBus isolate</strong> that owns the single MQTT socket, with each actor in its own isolate holding a port-pair to the bus.</p>
+
+    <div class="schema bleed">
+      <div class="schema-inner">
+        <div class="vm-label">One Dart VM &nbsp;&middot;&nbsp; one isolate group &nbsp;&middot;&nbsp; one shared heap</div>
+        <div class="isos">
+          <div class="iso">
+            <h4>ChatServer</h4>
+            <div class="row"><b>share{}</b> &nbsp;private</div>
+            <div class="row">ECProducer</div>
+          </div>
+          <div class="iso">
+            <h4>Category #general</h4>
+            <div class="row"><b>share{entries}</b></div>
+            <div class="row">ECProducer</div>
+          </div>
+          <div class="iso">
+            <h4>HyperSpace</h4>
+            <div class="row"><b>share{entries}</b></div>
+            <div class="row">ECProducer</div>
+          </div>
+        </div>
+        <div class="connectors">
+          <div class="conn"><span class="line"></span><span class="cap">port</span></div>
+          <div class="conn"><span class="line"></span><span class="cap">port</span></div>
+          <div class="conn"><span class="line"></span><span class="cap">port</span></div>
+        </div>
+        <div class="bus-bar">
+          <div class="t">MessageBus isolate</div>
+          <div class="d">topic &rarr; local subscriber ports &nbsp;&middot;&nbsp; owns the one MQTT connection &nbsp;&middot;&nbsp; lease table for remote subscribers</div>
+        </div>
+        <div class="drop"><span class="line"></span><span class="cap">single MQTT socket</span><span class="line"></span></div>
+        <div class="broker">mosquitto broker</div>
+        <div class="remote-note">&rarr; Python Aiko actors &nbsp;&middot;&nbsp; mosquitto_sub &nbsp;&middot;&nbsp; other hosts</div>
+        <div class="legend">
+          <span><i class="sw local"></i> local delivery (in-VM port, fast path)</span>
+          <span><i class="sw remote"></i> remote delivery (MQTT)</span>
+          <span><i class="sw bus"></i> the router</span>
+        </div>
+      </div>
+    </div>
+
+    <p>The bus does one job: route a <code>(topic, payload)</code> to every subscriber. When an actor publishes, the bus delivers to any <em>local</em> isolate subscribed to that topic via its port (the fast path, no broker round-trip) <strong>and</strong> publishes to MQTT, so remote actors and <code>mosquitto_sub</code> both still see it. That dual delivery is the key: it keeps your observability property intact while giving in-VM peers a shortcut. Local subscribers get a port copy; the broker still sees everything for anyone remote.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span>Where <code>share</code> / <code>ECProducer</code> / <code>ECConsumer</code> land</h2>
+    <p>This is where isolate-per-actor pays off cleanly:</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Aiko piece</th><th>Dart home</th><th>Why it fits</th></tr></thead>
+        <tbody>
+          <tr><td class="k">share</td><td>the actor isolate's private <code>Map</code></td><td>isolate memory-ownership <em>enforces</em> the discipline you ask for by convention. The single best-fit mapping in the port.</td></tr>
+          <tr><td class="k">ECProducer</td><td>inside the actor isolate</td><td><code>update()</code>/<code>remove()</code> mutate <code>share</code> locally, then hand a delta to the bus port. Never touches the network directly, same as calling <code>aiko.message.publish</code>.</td></tr>
+          <tr><td class="k">ECConsumer</td><td>any subscriber isolate (or remote)</td><td>just sends <code>(share &hellip;)</code> through the bus. Its reply topic is backed by an inbox port when local, a real MQTT topic when remote, and it does not know which.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The EC wire protocol, as I read it from <code>share.py</code></h3>
+    <p>Confirming my read so the Dart codec is faithful, please correct anything wrong:</p>
+    <ul class="wire-list">
+      <li><code>(update &lt;key&gt; &lt;value&gt;)</code><span class="desc">producer &rarr; <code>topic_state</code>, delta</span></li>
+      <li><code>(remove &lt;key&gt;)</code><span class="desc">producer &rarr; <code>topic_state</code>, delta</span></li>
+      <li><code>(share &lt;reply&gt; &lt;lease&gt; &lt;filter&gt;)</code><span class="desc">consumer &rarr; producer <code>topic_control</code>, a <em>leased</em> subscribe</span></li>
+      <li><code>(sync &lt;topic&gt;)</code><span class="desc">producer &rarr; <code>topic_state</code>, snapshot complete</span></li>
+    </ul>
+    <p>The producer listens on <code>topic_control</code>, publishes deltas on <code>topic_state</code>; a subscribe triggers a full snapshot to the consumer's private reply topic, then a stream of deltas. Subscriptions are leased and expire unless renewed, which is the distributed GC. All of that ports directly; the lease timer is the only piece that needs care (see below).</p>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span>The runtime, in Dart</h2>
+    <p>Illustrative shape, not compiled. It exists to make the mapping concrete, not to be shipped as-is.</p>
+    <details>
+      <summary>actor isolate &middot; ECProducer</summary>
+      <div class="body">
+<pre><span class="c">// The message that crosses every port and the MQTT wire alike</span>
+class BusMessage {
+  final String topic;    <span class="c">// the ONLY address</span>
+  final String payload;  <span class="c">// "(update entries.x (...))"</span>
+  const BusMessage(this.topic, this.payload);
+}
+
+<span class="c">// Entry point of each actor isolate</span>
+Future&lt;void&gt; actorMain(ActorBootstrap boot) async {
+  final toBus = boot.busSendPort;             <span class="c">// publish here</span>
+  final inbox = ReceivePort();                <span class="c">// bus delivers here</span>
+  toBus.send(RegisterPort(inbox.sendPort));
+
+  final share = &lt;String, dynamic&gt;{};          <span class="c">// isolate-private state</span>
+  final ec = ECProducer(
+    share: share,
+    topicState:   <span class="s">'${boot.topicPath}/state'</span>,
+    topicControl: <span class="s">'${boot.topicPath}/control'</span>,
+    publish: (t, p) =&gt; toBus.send(BusMessage(t, p)),
+  );
+  toBus.send(Subscribe(<span class="s">'${boot.topicPath}/control'</span>, inbox.sendPort));
+
+  await for (final msg in inbox) {            <span class="c">// the actor's event loop</span>
+    if (msg is BusMessage) ec.handleControl(msg);
+    <span class="c">// ... actor-specific handlers ...</span>
+  }
+}
+
+class ECProducer {
+  final Map&lt;String, dynamic&gt; share;
+  final String topicState, topicControl;
+  final void Function(String, String) publish;
+  final _leases = &lt;String, Lease&gt;{};          <span class="c">// remote subscribers only</span>
+
+  void update(String key, dynamic value) {
+    _setPath(share, key, value);
+    publish(topicState, <span class="s">'(update $key ${_wire(value)})'</span>);
+  }
+  void remove(String key) {
+    _removePath(share, key);
+    publish(topicState, <span class="s">'(remove $key)'</span>);
+  }
+  void handleControl(BusMessage m) {
+    final c = parseSExpr(m.payload);
+    switch (c.verb) {
+      case <span class="s">'share'</span>:  _synchronize(c.reply, c.lease, c.filter); break;
+      case <span class="s">'update'</span>: update(c.key, c.value); break;
+      case <span class="s">'remove'</span>: remove(c.key); break;
+    }
+  }
+  void _synchronize(String reply, int lease, String filter) {
+    publish(reply, <span class="s">'(item_count ${share.length})'</span>);
+    share.forEach((k, v) =&gt; publish(reply, <span class="s">'(update $k ${_wire(v)})'</span>));
+    publish(topicState, <span class="s">'(sync $reply)'</span>);
+    _leases[reply] = Lease(lease, onExpire: () =&gt; _leases.remove(reply));
+  }
+}</pre>
+      </div>
+    </details>
+    <details>
+      <summary>MessageBus isolate &middot; the only thing that touches MQTT</summary>
+      <div class="body">
+<pre>class MessageBus {
+  final _localSubs = &lt;String, List&lt;SendPort&gt;&gt;{};  <span class="c">// topic -&gt; local inboxes</span>
+  late final MqttClient _mqtt;                     <span class="c">// the single connection</span>
+
+  void onActorPublish(BusMessage m) {
+    for (final p in _matching(_localSubs, m.topic)) p.send(m);  <span class="c">// in-VM fast path</span>
+    _mqtt.publish(m.topic, m.payload);             <span class="c">// remote + observability</span>
+  }
+  void onMqttMessage(String topic, String payload) {
+    for (final p in _matching(_localSubs, topic))
+      p.send(BusMessage(topic, payload));
+  }
+  void onSubscribe(Subscribe s) {
+    _localSubs.putIfAbsent(s.topic, () =&gt; []).add(s.port);
+    _mqtt.subscribe(s.topic);                      <span class="c">// so remote publishers reach local subs</span>
+  }
+}</pre>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span>Two subtleties</h2>
+    <h3>Leases matter, but only for remote subscribers</h3>
+    <p>For a <em>local</em> consumer isolate, liveness is free: if the isolate dies, its <code>ReceivePort</code> closes and the bus drops it immediately, no timeout needed. For <em>remote</em> MQTT subscribers you must keep the lease/renew mechanism, because a dead remote process gives no such signal and lease expiry is the only death detector. So the Dart bus runs leases for MQTT subscribers and port-liveness for local ones. Faithful to intent, cheaper locally.</p>
+    <h3>The composition layer gets easier, not harder</h3>
+    <p>Under isolate-per-actor, cross-actor composition disappears entirely, because actors compose only via messages, so there is no shared object graph to assemble. What remains is intra-actor composition (<code>Category</code> is-a <code>Actor</code> is-a <code>Dependency</code>), all inside one isolate, which Dart mixins handle: <code>class Category with ActorMixin, DependencyMixin</code>. The isolate boundary does the work your <code>compose_instance</code> machinery does in Python. This is the piece I most want your read on (below).</p>
+    <div class="note">
+      <div class="eyebrow">The deeper payoff</div>
+      <p>Three Aiko invariants move from "please" to "guaranteed": location transparency (topic bus), state isolation (isolate memory ownership), and local lifecycle (port closure signals death). The Dart port can enforce by language what the Python reference enforces by convention.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">08</span>Roadmap: what to build, in order</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Stage</th><th>Scope</th><th>Unlocks</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="k"><span class="tag bus">MVP &middot; now</span></td>
+            <td>Single isolate, one MQTT connection. s-expression codec + <code>ECConsumer</code>/<code>ECProducer</code> + Registrar discovery.</td>
+            <td>The chat gateway. Proven EC interop against the Python reference. This is your July-9 scope exactly.</td>
+          </tr>
+          <tr>
+            <td class="k"><span class="tag local">v2 &middot; later</span></td>
+            <td>MessageBus isolate + isolate-per-actor. Native Category / HyperSpace hosted in Dart.</td>
+            <td>Dart as a first-class Aiko <em>host</em>, not just a client, with language-enforced isolation.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Building the bus first would be machinery ahead of the simple pick. The single-isolate client is the thing that actually unblocks the gateway; the bus earns its place only once we want to run Categories natively in Dart.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">09</span>Two things I need you to confirm</h2>
+    <div class="note ask">
+      <div class="eyebrow">Question 1 &middot; scheduling</div>
+      <p>How does one Python Aiko process schedule its many in-process actors: a single event loop driven by MQTT callbacks, or threads? I am inferring single-loop from <code>aiko.process.run()</code>. If it is threads, the "one isolate, many logical actors" default for the Dart MVP shifts from a faithful translation to a deliberate divergence, and I would want to name that.</p>
+    </div>
+    <div class="note ask">
+      <div class="eyebrow">Question 2 &middot; composition</div>
+      <p>Your <code>Interface.default</code> / <code>context.call_init</code> / <code>compose_instance</code> layer is dynamic in a way Dart has no direct analogue for. My plan is to render intra-actor composition as Dart mixins and let the isolate boundary absorb the cross-actor part. Does that lose anything you rely on, for example runtime re-composition or interface swapping that the Dart-static version would forbid?</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="eyebrow" style="color:var(--muted)">References</div>
+    <ul>
+      <li>Dart lightweight isolates &amp; faster communication &mdash; <a href="https://github.com/dart-lang/sdk/issues/36097">dart-lang/sdk#36097</a></li>
+      <li>Enable isolate groups by default &mdash; <a href="https://github.com/dart-lang/sdk/issues/46754">dart-lang/sdk#46754</a></li>
+      <li>Shared-memory multithreading proposal (unshipped) &mdash; <a href="https://github.com/dart-lang/language/blob/main/working/333%20-%20shared%20memory%20multithreading/proposal.md">language/working/333</a></li>
+      <li>Aiko Services &mdash; <a href="https://github.com/geekscape/aiko_services">geekscape/aiko_services</a> &nbsp;&middot;&nbsp; Aiko Chat &mdash; <a href="https://github.com/geekscape/aiko_chat">geekscape/aiko_chat</a></li>
+    </ul>
+  </footer>
+
+</div>
