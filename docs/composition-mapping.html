@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composition mapping — Aiko Services (Dart)</title>
+<style>
+  :root{
+    --bg:#0a0e17; --card:#0e1420; --hair:#1e293b; --ink:#e6ecf5; --muted:#7c89a3;
+    --gold:#e8b34a; --cyan:#4fd1c5; --green:#5ac77c; --red:#e06b6b;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.6; background-image:radial-gradient(circle at 50% 0%, #101827 0%, #0a0e17 60%);}
+  .wrap{max-width:52rem; margin:0 auto; padding:2.5rem 1.5rem 5rem}
+  .ey{font-family:var(--mono); font-size:.68rem; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin:0 0 .6rem}
+  h1{font-size:2rem; letter-spacing:-.02em; margin:0 0 .4rem; font-weight:720}
+  h1 b{color:var(--gold)}
+  h2{font-size:1.3rem; margin:2.6rem 0 .8rem; letter-spacing:-.01em; border-top:1px solid var(--hair); padding-top:1.6rem}
+  h3{font-size:1.02rem; margin:1.6rem 0 .5rem; color:var(--cyan)}
+  .sub{color:var(--muted); margin:0 0 1.5rem; font-size:1.05rem}
+  p{margin:.7rem 0}
+  a{color:var(--cyan)}
+  code{font-family:var(--mono); font-size:.86em; background:#0c1320; border:1px solid var(--hair); border-radius:5px; padding:.08em .35em; color:#d7e3f4}
+  pre{background:#0c1320; border:1px solid var(--hair); border-radius:12px; padding:1rem 1.1rem; overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.55}
+  pre code{background:none; border:none; padding:0}
+  .verdict{background:linear-gradient(180deg,#101d17,#0e1420); border:1px solid #204a34; border-radius:14px; padding:1.3rem 1.4rem; margin:1.5rem 0}
+  .verdict .tag{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--green); margin:0 0 .5rem}
+  .verdict p{margin:.4rem 0}
+  .muted{color:var(--muted)}
+  table{border-collapse:collapse; width:100%; margin:1rem 0; font-size:.86rem}
+  th,td{text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--hair); vertical-align:top}
+  th{color:var(--gold); font-weight:640; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em}
+  td code{font-size:.82em}
+  .ok{color:var(--green)}
+  details{border:1px solid var(--hair); border-radius:12px; padding:.4rem 1rem; margin:1rem 0; background:#0c1320}
+  details[open]{padding-bottom:1rem}
+  summary{cursor:pointer; font-weight:620; padding:.6rem 0; color:var(--ink)}
+  summary::marker{color:var(--cyan)}
+  .kicker{font-family:var(--mono); font-size:.72rem; color:var(--muted)}
+  .prop{display:inline-block; font-family:var(--mono); font-size:.72rem; color:var(--gold); border:1px solid #3a3320; border-radius:5px; padding:.05em .4em; margin-right:.3em}
+  .foot{margin-top:3rem; font-family:var(--mono); font-size:.72rem; color:#4d5573; border-top:1px solid var(--hair); padding-top:1.4rem}
+  .foot a{color:var(--muted)}
+  .backlink{font-family:var(--mono); font-size:.72rem; color:var(--muted); text-decoration:none}
+  nav.toc{background:#0c1320; border:1px solid var(--hair); border-radius:12px; padding:1rem 1.3rem; margin:1.5rem 0}
+  nav.toc div{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); margin-bottom:.5rem}
+  nav.toc ol{margin:0; padding-left:1.2rem; color:var(--muted)}
+  nav.toc a{text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="backlink" href="./index.html">← docs</a>
+  <p class="ey" style="margin-top:1rem">Aiko Services · Dart port · design note</p>
+  <h1>The composition mapping — <b>Python <code style="font-size:.7em">compose_instance</code> → Dart mixins</b></h1>
+  <p class="sub">The one load-bearing decision the whole port hangs on: does Aiko's bespoke Pythonic composition system map to idiomatic, performant Dart — or does the port become decoration on top of an un-Dart-like machine? Answered by reading the source and proving it with a running spike.</p>
+
+  <div class="verdict">
+    <p class="tag">◆ Verdict — validated, not guessed</p>
+    <p><b>Yes. Dart mixins are the native target</b>, and not by luck. Aiko's <code>Interface</code> + <code>compose_class</code> + <code>call_init</code> is a <em>hand-rolled emulation of a compile-time trait system</em> — the exact thing Dart provides natively. The dynamic reflection is a Python workaround, not a requirement. Every load-bearing property is preserved, and the mapping is proven by a spike whose acid test is <code>Category</code>'s real two-branch shape.</p>
+    <p class="muted" style="font-size:.9rem">Spike: <code>spike/composition/</code> — 5 property tests, <code>dart analyze</code> clean, all green on first run.</p>
+  </div>
+
+  <nav class="toc">
+    <div>On this page</div>
+    <ol>
+      <li><a href="#what">What the Python system actually is</a></li>
+      <li><a href="#empirical">The empirical finding that defuses the landmine</a></li>
+      <li><a href="#properties">The six load-bearing properties</a></li>
+      <li><a href="#mapping">The Dart mapping (with code)</a></li>
+      <li><a href="#acid">The acid tests &amp; results</a></li>
+      <li><a href="#caveats">What this does <em>not</em> yet prove</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="what">1 · What the Python system actually is</h2>
+  <p>Reading <code>component.py</code> and <code>context.py</code> line by line, the composition system has three moving parts. It looks exotic; it is a trait system.</p>
+
+  <h3>① Interface = abstract methods + one registered default impl</h3>
+  <p>An <code>Interface</code> is a pure-abstract class (every method <code>@abstractmethod</code>) that registers <em>one</em> default implementation string into a shared class-level registry:</p>
+  <pre><code>class Actor(Service):
+    Interface.default("Actor", "aiko_services.main.actor.ActorImpl")
+    @abstractmethod
+    def run(self): pass</code></pre>
+
+  <h3>② compose_class = copy the impl methods onto a synthetic class</h3>
+  <p><code>compose_class</code> builds an empty <code>FrankensteinClass(seed)</code> and, via <code>getmembers</code>+<code>setattr</code>, <b>copies each implementation's concrete methods onto it</b> — with the precedence rule <em>“concrete beats abstract; don't replace an already-concrete method.”</em> That is mixin linearization, done at runtime because Python has no compile-time mixins.</p>
+
+  <h3>③ call_init = idempotent, name-keyed init chain</h3>
+  <p>Because the synthetic class has no real constructor chain, each slice initializes itself through <code>context.call_init</code>, guarded so a shared ancestor reached through a diamond initializes <em>once</em>:</p>
+  <pre><code>def call_init(self, caller, implementation_name, context, **kwargs):
+    if not self.is_initialized(implementation_name):
+        callee = self.get_implementation(implementation_name)
+        callee.__init__(caller, context, **kwargs)   # run impl's __init__ on the ONE self
+        self.set_initialized(implementation_name)</code></pre>
+
+  <h2 id="empirical">2 · The empirical finding that defuses the landmine</h2>
+  <p>The scary part was <code>impl_overrides</code> — the ability to swap an interface's implementation at compose time, which smells like it needs runtime reflection Dart can't do cheaply. So the decisive question: <b>is implementation-swapping ever data-driven at runtime, or always a static wiring choice?</b></p>
+  <div class="verdict" style="border-color:#2a3550; background:linear-gradient(180deg,#101725,#0e1420)">
+    <p class="tag" style="color:var(--cyan)">▸ Checked every call site</p>
+    <p>All 15+ <code>compose_instance(...)</code> call sites in the framework pass <b>no</b> <code>impl_overrides</code>. The override parameter — the only genuinely dynamic capability — is <b>dead in the main codebase</b>. Each interface declares exactly one default; binding is 100% static. Test implementations are wired as <em>separate composed classes</em>, never runtime swaps.</p>
+  </div>
+  <p>That was the load-bearing risk. Static binding maps to a compile-time class choice in Dart — no reflection needed.</p>
+
+  <h2 id="properties">3 · The six load-bearing properties</h2>
+  <p>Everything above the composition layer depends on these being preserved. Each maps to a native Dart mechanism:</p>
+  <table>
+    <thead><tr><th>Python mechanism</th><th>Property</th><th>Dart target</th></tr></thead>
+    <tbody>
+      <tr><td><code>class Category(Actor, Dependency)</code></td><td><span class="prop">P1</span> multi-interface flatten</td><td><code>abstract mixin class</code> + <code>on</code> constraints <span class="ok">✓</span></td></tr>
+      <tr><td><code>_add_methods</code> concrete-beats-abstract</td><td><span class="prop">P3</span> override precedence</td><td>mixin linearization (rightmost wins) <span class="ok">✓</span></td></tr>
+      <tr><td><code>call_init</code> + <code>is_initialized</code></td><td><span class="prop">P4</span> diamond-safe init</td><td>explicit <code>_initX()</code> + guard set <span class="ok">✓</span></td></tr>
+      <tr><td><code>impl_overrides</code></td><td><span class="prop">P2</span> impl swap</td><td><b>unused</b> → static class choice <span class="ok">✓</span></td></tr>
+      <tr><td><code>Dependency(service=None)</code></td><td><span class="prop">P5</span> absence first-class</td><td><code>Object? service</code> nullable field <span class="ok">✓</span></td></tr>
+      <tr><td>single <code>context</code> arg</td><td><span class="prop">P6</span> shared-state carrier</td><td><code>Context</code> passed to each <code>_initX</code> <span class="ok">✓</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="mapping">4 · The Dart mapping</h2>
+  <p>One Python <code>Interface</code>+<code>Impl</code> pair becomes <b>one Dart mixin</b>: abstract methods stay abstract members, the impl body becomes the concrete method, <code>on</code> constraints encode the “needs” edges, and a per-slice <code>_initX</code> method stands in for the constructor mixins can't declare. The real graph —</p>
+  <pre><code>Service(ServiceProtocolInterface, Hooks)   // Service is itself a composition
+Actor(Service)                             // Actor needs Service
+Dependency(Interface)                      // standalone; service may be null
+Category(Actor, Dependency)                // the acid test — two branches</code></pre>
+  <p>— maps to:</p>
+  <pre><code>mixin CallInit {                    // port of context.call_init
+  void callInit(Context ctx, String slice, void Function() init) {
+    if (!ctx.isInitialized(slice)) { init(); ctx.setInitialized(slice); }
+  }
+}
+
+mixin ServiceMixin on CallInit, HooksMixin {
+  late String serviceName;
+  void initService(Context ctx) => callInit(ctx, 'Service', () {
+        initHooks(ctx);              // cascade — mirrors ServiceImpl reaching Hooks
+        serviceName = ctx.name;
+      });
+  String describe() => 'Service($serviceName)';   // default, overridable
+}
+
+mixin ActorMixin on CallInit, HooksMixin, ServiceMixin {
+  late Map&lt;String, Object&gt; share;
+  void initActor(Context ctx) => callInit(ctx, 'Actor', () {
+        initService(ctx);           // ActorImpl.__init__'s first line
+        share = {'lifecycle': 'ready', 'running': false};
+      });
+  @override String describe() => 'Actor($serviceName)';  // P3: later mixin wins
+}
+
+mixin DependencyMixin on CallInit {
+  Object? service;                  // P5: null = absent, a NORMAL value
+  void initDependency(Context ctx, {Object? serviceFilter}) =>
+      callInit(ctx, 'Dependency', () { /* set fields */ });
+}
+
+class Category with CallInit, HooksMixin, ServiceMixin,
+                    ActorMixin, DependencyMixin {
+  Category(Context ctx, {Object? serviceFilter}) {
+    initActor(ctx);                              // Actor → Service → Hooks
+    initDependency(ctx, serviceFilter: serviceFilter);
+  }
+}</code></pre>
+  <p class="muted">This is a near-mechanical transcription of <code>CategoryImpl.__init__</code>, which calls <code>call_init("Actor")</code> then <code>call_init("Dependency", ...)</code>. The Dart version is <em>compile-checked</em> — a missing slice or bad <code>on</code> edge is an analyzer error, where Python only fails at compose time.</p>
+
+  <details>
+    <summary>Why the per-slice <code>_initX</code> method, instead of constructors?</summary>
+    <p>Dart mixins can't declare generative constructors. That sounds like a limitation until you notice it's <em>exactly why Python needed <code>call_init</code></em>: the FrankensteinClass has no constructor chain either, so each slice initializes itself explicitly. The Dart <code>_initX(ctx)</code> + guard is the same pattern, made compile-safe. The one shared ancestor (Service, reached via a diamond) still inits once — proven below.</p>
+  </details>
+
+  <h2 id="acid">5 · The acid tests &amp; results</h2>
+  <p>The spike (<code>spike/composition/</code>) proves each property with a test rather than asserting it. <code>dart analyze</code>: <span class="ok">no issues</span>. <code>dart test</code>: <span class="ok">all 5 passed</span>.</p>
+  <table>
+    <thead><tr><th>Test</th><th>Proves</th></tr></thead>
+    <tbody>
+      <tr><td><code>Category</code> exposes Actor + Service + Hooks + Dependency behaviour on one <code>self</code></td><td><span class="prop">P1</span></td></tr>
+      <tr><td><code>describe()</code> resolves to the Actor override, not Service's default</td><td><span class="prop">P3</span></td></tr>
+      <tr><td>Service inits <b>exactly once</b> in a <code>DiamondNode</code> (Actor + Registrar both cascade to it)</td><td><span class="prop">P4</span></td></tr>
+      <tr><td>a <code>Dependency</code> with null <code>service</code> is a normal state (<code>getType() == 'absent'</code>)</td><td><span class="prop">P5</span></td></tr>
+      <tr><td>a fake Dependency slice is just a different composed class</td><td><span class="prop">P2</span></td></tr>
+    </tbody>
+  </table>
+  <pre><code>$ dart test
+00:00 +5: All tests passed!</code></pre>
+  <p class="kicker">The diamond test is the honest one: <code>Category</code>'s two branches are actually disjoint (Dependency is not a Service), so <code>DiamondNode</code> constructs a genuine diamond — Actor and Registrar both <code>on ServiceMixin</code> — to exercise the guard rather than just trust it.</p>
+
+  <h2 id="caveats">6 · What this does <em>not</em> yet prove</h2>
+  <p>Honest edges, so the next builder engages them rather than inherits them:</p>
+  <ul class="muted">
+    <li><b>Isolate boundaries.</b> The spike is single-isolate. Aiko's runtime is isolate-per-actor; mixin state is fine within an isolate, but the composed object can't cross an isolate boundary by reference. That's the <a href="./isolate-per-actor-runtime.html">isolate-per-actor design note</a>'s territory, not this one's — the composition mapping holds <em>inside</em> an actor.</li>
+    <li><b>Generics / self-types.</b> None of the sampled interfaces needed F-bounded generics. If a later interface does, the mixin <code>on</code> mechanism may need a type parameter — unverified.</li>
+    <li><b>The full inventory.</b> This validates the <em>mechanism</em> on <code>Category</code>'s shape. The per-interface method inventory (HyperSpace, Registrar, Pipeline, ECProducer/Consumer, LifeCycleManager) still needs enumerating — but each now has a known target shape to pour into.</li>
+  </ul>
+
+  <p class="foot">
+    Source read: <code>aiko_services/main/component.py</code>, <code>context.py</code>, <code>category.py</code>, <code>actor.py</code>, <code>service.py</code>, <code>dependency.py</code><br>
+    Repo: <a href="https://github.com/nickmeinhold/aiko_services_dart">nickmeinhold/aiko_services_dart</a> · Upstream: <a href="https://github.com/geekscape/aiko_services">geekscape/aiko_services</a>
+  </p>
+</div>
+</body>
+</html>

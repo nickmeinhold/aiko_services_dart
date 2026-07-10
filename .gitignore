@@ -2,7 +2,8 @@
 .dart_tool/
 .packages
 build/
-pubspec.lock          # keep for apps, ignore for libraries; this is a library port
+# keep for apps, ignore for libraries; this is a library port
+pubspec.lock
 doc/api/
 
 # Dart tool caches

@@ -1,0 +1,12 @@
+name: composition_spike
+description: >-
+  Throwaway spike proving Aiko's Python compose_instance/call_init composition
+  system maps to idiomatic Dart mixins. Not part of the shipped port.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  test: ^1.25.0
