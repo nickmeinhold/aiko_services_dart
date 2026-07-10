@@ -1,6 +1,58 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>Aiko Services (Dart) — design notes</title>
-<meta http-equiv="refresh" content="0; url=./isolate-per-actor-runtime.html">
-<link rel="canonical" href="./isolate-per-actor-runtime.html">
-<p>Redirecting to <a href="./isolate-per-actor-runtime.html">the design note</a>&hellip;</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiko Services (Dart) — docs</title>
+<style>
+  :root{
+    --bg:#0a0e17; --card:#0e1420; --hair:#1e293b; --ink:#e6ecf5; --muted:#7c89a3;
+    --gold:#e8b34a; --cyan:#4fd1c5;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem;
+    background-image:radial-gradient(circle at 50% 0%, #101827 0%, #0a0e17 60%);}
+  .wrap{max-width:40rem; width:100%}
+  .ey{font-family:var(--mono); font-size:.68rem; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin:0 0 .6rem}
+  h1{font-size:1.9rem; letter-spacing:-.02em; margin:0 0 .5rem; font-weight:720}
+  h1 b{color:var(--gold); font-weight:720}
+  .sub{color:var(--muted); margin:0 0 2rem; line-height:1.55; font-size:1.02rem}
+  .grid{display:grid; gap:.9rem}
+  a.card{
+    display:block; text-decoration:none; color:inherit; background:var(--card);
+    border:1px solid var(--hair); border-radius:14px; padding:1.15rem 1.25rem;
+    transition:border-color .16s, transform .06s, background .16s;
+  }
+  a.card:hover{border-color:var(--cyan); background:#111b2b; transform:translateY(-1px)}
+  a.card:focus-visible{outline:2px solid var(--cyan); outline-offset:3px}
+  .card .h{display:flex; align-items:center; gap:.6rem; font-size:1.08rem; font-weight:680; margin-bottom:.3rem}
+  .card .h .ic{font-size:1.15rem}
+  .card .h .live{font-family:var(--mono); font-size:.58rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--cyan); border:1px solid var(--cyan); border-radius:5px; padding:.1em .4em; margin-left:auto}
+  .card p{margin:0; color:var(--muted); font-size:.9rem; line-height:1.5}
+  .foot{margin-top:2rem; font-family:var(--mono); font-size:.72rem; color:#4d5573}
+  .foot a{color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="ey">Aiko Services · Dart port</p>
+    <h1>Docs &amp; <b>experiments</b></h1>
+    <p class="sub">Porting Andy Gelme's Aiko Services distributed actor framework to Dart. Early design phase — these are the thinking artifacts.</p>
+    <div class="grid">
+      <a class="card" href="./living-process.html">
+        <div class="h"><span class="ic">🛰️</span> A living Aiko process <span class="live">interactive</span></div>
+        <p>A simulation you can poke: actors on an MQTT bus, the Eventual Consistency subscribe → snapshot → deltas handshake, and leases as distributed garbage collection. Add channels, spawn dashboards, watch the wire.</p>
+      </a>
+      <a class="card" href="./isolate-per-actor-runtime.html">
+        <div class="h"><span class="ic">🎭</span> An isolate-per-actor runtime</div>
+        <p>Design note: how Aiko's distributed actor model maps onto Dart's isolate groups, and a proposed build sequence.</p>
+      </a>
+    </div>
+    <p class="foot">Repo: <a href="https://github.com/nickmeinhold/aiko_services_dart">nickmeinhold/aiko_services_dart</a> · Upstream: <a href="https://github.com/geekscape/aiko_services">geekscape/aiko_services</a></p>
+  </div>
+</body>
+</html>

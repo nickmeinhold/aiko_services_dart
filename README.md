@@ -7,8 +7,14 @@ MQTT messages.
 > **Status:** early / design phase. No implementation yet. The Python repo is the
 > reference implementation and correctness sounding-board for the port.
 
-## Design notes
+## Docs & experiments
 
+Rendered hub (GitHub Pages): **https://nickmeinhold.github.io/aiko_services_dart/**
+
+- [**A living Aiko process**](docs/living-process.html) — an interactive simulation of an
+  Aiko process: actors on an MQTT bus, the Eventual Consistency subscribe → snapshot →
+  deltas handshake, and leases as distributed garbage collection. Add channels, spawn
+  dashboards, watch the wire. Open in a browser.
 - [**An isolate-per-actor runtime**](docs/isolate-per-actor-runtime.html) — how Aiko's
   distributed actor model maps onto Dart isolate groups, and a proposed build sequence
   (single-isolate Eventual Consistency client first; MessageBus + isolate-per-actor
