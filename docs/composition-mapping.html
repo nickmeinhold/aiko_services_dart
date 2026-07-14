@@ -58,8 +58,8 @@
   <p class="sub">The one load-bearing decision the whole port hangs on: does Aiko's bespoke Pythonic composition system map to idiomatic, performant Dart — or does the port become decoration on top of an un-Dart-like machine? Answered by reading the source and proving it with a running spike.</p>
 
   <div class="verdict">
-    <p class="tag">◆ Verdict — validated, not guessed</p>
-    <p><b>Yes. Dart mixins are the native target</b>, and not by luck. Aiko's <code>Interface</code> + <code>compose_class</code> + <code>call_init</code> is a <em>hand-rolled emulation of a compile-time trait system</em> — the exact thing Dart provides natively. The dynamic reflection is a Python workaround, not a requirement. Every load-bearing property is preserved, and the mapping is proven by a spike whose acid test is <code>Category</code>'s real two-branch shape.</p>
+    <p class="tag">◆ Verdict — validated for the current object model</p>
+    <p><b>For the object model as it stands today, Dart mixins look like the right target</b> — and not by luck. Aiko's <code>Interface</code> + <code>compose_class</code> + <code>call_init</code> reads as a <em>hand-rolled emulation of a compile-time trait system</em>, much of which Dart provides natively; for the composition <em>call sites in the current framework</em>, the dynamic reflection appears to be a Python workaround rather than a load-bearing requirement. Every property the spike exercises is preserved, checked against <code>Category</code>'s real two-branch shape. This is a validated <em>within-actor</em> mapping, not a proof about the whole port — the distributed seam (isolate boundaries, MQTT transport, discovery) is explicitly out of scope here (see §6).</p>
     <p class="muted" style="font-size:.9rem">Spike: <code>spike/composition/</code> — 5 property tests, <code>dart analyze</code> clean, all green on first run.</p>
   </div>
 
@@ -102,7 +102,7 @@
     <p class="tag" style="color:var(--cyan)">▸ Checked every call site</p>
     <p>All 15+ <code>compose_instance(...)</code> call sites in the framework pass <b>no</b> <code>impl_overrides</code>. The override parameter — the only genuinely dynamic capability — is <b>dead in the main codebase</b>. Each interface declares exactly one default; binding is 100% static. Test implementations are wired as <em>separate composed classes</em>, never runtime swaps.</p>
   </div>
-  <p>That was the load-bearing risk. Static binding maps to a compile-time class choice in Dart — no reflection needed.</p>
+  <p>That was the load-bearing risk for the mapping question. For the current framework's call sites, static binding maps to a compile-time class choice in Dart — no reflection needed. (This checks the <em>obvious</em> dynamic path; it does not rule out dynamism arriving via user/extension code, metaclasses, or <code>setattr</code> outside the core composition functions — those stay open.)</p>
 
   <h2 id="properties">3 · The six load-bearing properties</h2>
   <p>Everything above the composition layer depends on these being preserved. Each maps to a native Dart mechanism:</p>
