@@ -1,0 +1,228 @@
+{
+  "_source": "aiko_services/main/utilities/parser.py",
+  "_note": "Regenerate via tool/generate_codec_fixtures.py; do not hand-edit.",
+  "generate": [
+    {
+      "command": "increment",
+      "params": [
+        5
+      ],
+      "expected": "(increment 5)"
+    },
+    {
+      "command": "count",
+      "params": [
+        8
+      ],
+      "expected": "(count 8)"
+    },
+    {
+      "command": "add",
+      "params": [
+        "topic",
+        "protocol",
+        "owner"
+      ],
+      "expected": "(add topic protocol owner)"
+    },
+    {
+      "command": "update",
+      "params": [
+        "log_level",
+        "DEBUG"
+      ],
+      "expected": "(update log_level DEBUG)"
+    },
+    {
+      "command": "command",
+      "params": [
+        "aloha honua"
+      ],
+      "expected": "(command 11:aloha honua)"
+    },
+    {
+      "command": "parens",
+      "params": [
+        "(not a list)"
+      ],
+      "expected": "(parens 12:(not a list))"
+    },
+    {
+      "command": "ping",
+      "params": [
+        null
+      ],
+      "expected": "(ping 0:)"
+    },
+    {
+      "command": "empty",
+      "params": [
+        ""
+      ],
+      "expected": "(empty \"\")"
+    },
+    {
+      "command": "nested",
+      "params": [
+        "a",
+        [
+          "b",
+          "c"
+        ]
+      ],
+      "expected": "(nested a (b c))"
+    },
+    {
+      "command": "mixed",
+      "params": [
+        "a",
+        [
+          "c",
+          "d"
+        ],
+        [
+          "e",
+          "f",
+          [
+            "g",
+            "h"
+          ]
+        ]
+      ],
+      "expected": "(mixed a (c d) (e f (g h)))"
+    },
+    {
+      "command": "a",
+      "params": {
+        "b": "1",
+        "c": "2"
+      },
+      "expected": "(a b: 1 c: 2)"
+    },
+    {
+      "command": "a",
+      "params": {
+        "b": [
+          "c",
+          "d"
+        ]
+      },
+      "expected": "(a b: (c d))"
+    }
+  ],
+  "parse": [
+    {
+      "payload": "(increment 5)",
+      "command": "increment",
+      "cdr": [
+        "5"
+      ]
+    },
+    {
+      "payload": "(add topic protocol owner)",
+      "command": "add",
+      "cdr": [
+        "topic",
+        "protocol",
+        "owner"
+      ]
+    },
+    {
+      "payload": "(command 11:aloha honua)",
+      "command": "command",
+      "cdr": [
+        "aloha honua"
+      ]
+    },
+    {
+      "payload": "(ping 0:)",
+      "command": "ping",
+      "cdr": [
+        null
+      ]
+    },
+    {
+      "payload": "(nested a (b c))",
+      "command": "nested",
+      "cdr": [
+        "a",
+        [
+          "b",
+          "c"
+        ]
+      ]
+    },
+    {
+      "payload": "(mixed a (c d) (e f (g h)))",
+      "command": "mixed",
+      "cdr": [
+        "a",
+        [
+          "c",
+          "d"
+        ],
+        [
+          "e",
+          "f",
+          [
+            "g",
+            "h"
+          ]
+        ]
+      ]
+    },
+    {
+      "payload": "(a b: 1 c: 2)",
+      "command": "a",
+      "cdr": {
+        "b": "1",
+        "c": "2"
+      }
+    },
+    {
+      "payload": "(a b: 1 c: (d e))",
+      "command": "a",
+      "cdr": {
+        "b": "1",
+        "c": [
+          "d",
+          "e"
+        ]
+      }
+    },
+    {
+      "payload": "(a b: 1 c: (d: 1 e: 2))",
+      "command": "a",
+      "cdr": {
+        "b": "1",
+        "c": {
+          "d": "1",
+          "e": "2"
+        }
+      }
+    },
+    {
+      "payload": "(a 0: b)",
+      "command": "a",
+      "cdr": [
+        null,
+        "b"
+      ]
+    },
+    {
+      "payload": "(a b ())",
+      "command": "a",
+      "cdr": [
+        "b",
+        []
+      ]
+    },
+    {
+      "payload": "(empty \"\")",
+      "command": "empty",
+      "cdr": [
+        ""
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+name: aiko_services
+description: >-
+  Dart port of Andy Gelme's (geekscape) Aiko Services distributed actor
+  framework. Early design phase — see docs/ for the mapping notes.
+publish_to: none
+version: 0.0.1
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  test: ^1.25.0
