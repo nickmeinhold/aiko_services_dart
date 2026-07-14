@@ -47,6 +47,23 @@ void main() {
     });
   });
 
+  group('P4-deep — the HyperSpace two-level diamond', () {
+    test('Actor (and Service) initialize exactly once when reached via '
+        'Category AND directly', () {
+      final h = HyperSpace(Context('hs-0'));
+      // Category-init cascades to Actor; the constructor also inits Actor
+      // directly. Both paths must collapse to a single Actor init.
+      expect(h.actorInitCount, 1);
+      expect(h.serviceInitCount, 1); // Service, one level deeper, also once
+      // All slices present on the one object:
+      expect(h.serviceName, 'hs-0'); // Service
+      expect(h.share['lifecycle'], 'ready'); // Actor
+      expect(h.getType(), 'absent'); // Dependency
+      h.create('/cat-a');
+      expect(h.entries['/cat-a'], isNotNull); // Category
+    });
+  });
+
   group('P5 — absence is first-class', () {
     test('a Dependency with null service is a normal state, not an error', () {
       final absent = Category(Context('cat-2'));

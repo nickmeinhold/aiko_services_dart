@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interface inventory — Aiko Services (Dart)</title>
+<style>
+  :root{
+    --bg:#0a0e17; --card:#0e1420; --hair:#1e293b; --ink:#e6ecf5; --muted:#7c89a3;
+    --gold:#e8b34a; --cyan:#4fd1c5; --green:#5ac77c; --violet:#a78bfa; --red:#e06b6b;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.6; background-image:radial-gradient(circle at 50% 0%, #101827 0%, #0a0e17 60%);}
+  .wrap{max-width:56rem; margin:0 auto; padding:2.5rem 1.5rem 5rem}
+  .ey{font-family:var(--mono); font-size:.68rem; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin:0 0 .6rem}
+  h1{font-size:2rem; letter-spacing:-.02em; margin:0 0 .4rem; font-weight:720}
+  h1 b{color:var(--gold)}
+  h2{font-size:1.3rem; margin:2.6rem 0 .8rem; letter-spacing:-.01em; border-top:1px solid var(--hair); padding-top:1.6rem}
+  h3{font-size:1rem; margin:1.4rem 0 .4rem; color:var(--cyan); font-family:var(--mono)}
+  .sub{color:var(--muted); margin:0 0 1.5rem; font-size:1.05rem}
+  p{margin:.7rem 0}
+  a{color:var(--cyan)}
+  code{font-family:var(--mono); font-size:.86em; background:#0c1320; border:1px solid var(--hair); border-radius:5px; padding:.08em .35em; color:#d7e3f4}
+  pre{background:#0c1320; border:1px solid var(--hair); border-radius:12px; padding:1rem 1.1rem; overflow-x:auto; font-family:var(--mono); font-size:.8rem; line-height:1.5}
+  pre code{background:none; border:none; padding:0}
+  .legend{display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0}
+  .kind{font-family:var(--mono); font-size:.66rem; letter-spacing:.06em; text-transform:uppercase; border-radius:5px; padding:.15em .5em; border:1px solid}
+  .k-mix{color:var(--cyan); border-color:#265; background:#0c1a1c}
+  .k-comp{color:var(--violet); border-color:#443a6b; background:#15132a}
+  .k-marker{color:var(--muted); border-color:var(--hair); background:#0c1320}
+  .k-collab{color:var(--gold); border-color:#3a3320; background:#141005}
+  table{border-collapse:collapse; width:100%; margin:.6rem 0 1rem; font-size:.84rem}
+  th,td{text-align:left; padding:.5rem .65rem; border-bottom:1px solid var(--hair); vertical-align:top}
+  th{color:var(--gold); font-weight:640; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em}
+  td code{font-size:.8em}
+  .iface{background:#0c1320; border:1px solid var(--hair); border-radius:12px; padding:1rem 1.2rem; margin:1rem 0}
+  .iface .hd{display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; margin-bottom:.3rem}
+  .iface .nm{font-family:var(--mono); font-size:1rem; color:var(--ink); font-weight:640}
+  .iface .ext{font-family:var(--mono); font-size:.78rem; color:var(--muted)}
+  .iface ul{margin:.4rem 0 0; padding-left:1.1rem}
+  .iface li{font-family:var(--mono); font-size:.78rem; color:#c4d0e2; margin:.1rem 0}
+  .iface .meta{font-size:.8rem; color:var(--muted); margin-top:.5rem}
+  nav.toc{background:#0c1320; border:1px solid var(--hair); border-radius:12px; padding:1rem 1.3rem; margin:1.5rem 0}
+  nav.toc div{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); margin-bottom:.5rem}
+  nav.toc ol{margin:0; padding-left:1.2rem; color:var(--muted)}
+  nav.toc a{text-decoration:none}
+  .note{background:linear-gradient(180deg,#101d17,#0e1420); border:1px solid #204a34; border-radius:12px; padding:1rem 1.2rem; margin:1.2rem 0}
+  .note .tag{font-family:var(--mono); font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--green); margin:0 0 .4rem}
+  .foot{margin-top:3rem; font-family:var(--mono); font-size:.72rem; color:#4d5573; border-top:1px solid var(--hair); padding-top:1.4rem}
+  .foot a{color:var(--muted)}
+  .backlink{font-family:var(--mono); font-size:.72rem; color:var(--muted); text-decoration:none}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="backlink" href="./index.html">← docs</a>
+  <p class="ey" style="margin-top:1rem">Aiko Services · Dart port · reference</p>
+  <h1>The interface inventory — <b>the port skeleton</b></h1>
+  <p class="sub">Every <code>Interface</code> in Aiko's object model, its abstract-method contract, its inheritance edges, and its target Dart shape. The skeleton the port pours into, and the cross-check for Andy's interface designs. Built on the <a href="./composition-mapping.html">validated composition mapping</a>.</p>
+
+  <div class="note">
+    <p class="tag">◆ The mapping principle</p>
+    <p>One Python <code>Interface</code> + its <code>Impl</code> = <b>one Dart mixin</b>. Abstract methods become abstract mixin members; the impl body becomes the concrete method; the <code>class X(A, B)</code> parents become <code>on</code> constraints; the impl's <code>__init__</code> becomes a per-slice <code>_initX(ctx)</code>. But <b>not every collaborator is an Interface</b> — <code>ECProducer</code>/<code>ECConsumer</code> are plain classes held as fields (delegation, HAS-A), not slices (mixin, IS-A). The inventory records the <em>kind</em> of each node.</p>
+  </div>
+
+  <div class="legend">
+    <span class="kind k-mix">mixin — IS-A slice</span>
+    <span class="kind k-comp">composed class — the frankenstein</span>
+    <span class="kind k-marker">marker interface</span>
+    <span class="kind k-collab">collaborator — HAS-A field</span>
+  </div>
+
+  <nav class="toc">
+    <div>On this page</div>
+    <ol>
+      <li><a href="#graph">The inheritance graph (the diamonds)</a></li>
+      <li><a href="#foundation">Foundation slices — Hooks, Service, Actor, Dependency</a></li>
+      <li><a href="#object">Object model — Category, HyperSpace, Registrar, Storage</a></li>
+      <li><a href="#lifecycle">Lifecycle — Manager / Client, the public/private split</a></li>
+      <li><a href="#pipeline">Execution — ProcessManager, PipelineElement, Pipeline</a></li>
+      <li><a href="#collab">Collaborators — ECProducer / ECConsumer (not mixins)</a></li>
+      <li><a href="#dart">The Dart translation rules</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="graph">1 · The inheritance graph — where the diamonds are</h2>
+  <p>Every composed type traces back to <code>Service</code>, which is itself <code>ServiceProtocolInterface + Hooks</code>. The deep node is <code>HyperSpace(Category, Actor)</code> — it reaches <code>Actor</code> (and therefore <code>Service</code>, <code>Hooks</code>) through <em>two</em> paths. That is the ultimate exercise of the <code>call_init</code> idempotency guard.</p>
+  <pre><code>ServiceProtocolInterface  (marker)      Hooks  (standalone)
+                    \                    /
+                     Service ─────────────
+                        │
+                      Actor ───────────────┐
+                     /   │   \             │
+       ProcessManager  Storage  PipelineElement   Dependency (standalone)
+                                    │        \      /
+                                 Pipeline    Category ── (Actor + Dependency)
+                                                 │
+                                            HyperSpace ── (Category + Actor)  ← deepest diamond
+                                                          Actor reached twice → inits once</code></pre>
+
+  <h2 id="foundation">2 · Foundation slices</h2>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Hooks</span><span class="ext">on CallInit</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta"><code>Interface.default("Hooks", "…hook.HooksImpl")</code> · standalone; Service depends on it. Extensible pre/post hook registry.</div>
+    <ul>
+      <li>add_hook(name) · remove_hook(name) · get_hook(name) · get_hooks()</li>
+      <li>add_hook_handler(name, fn, options=None) · remove_hook_handler(name, fn)</li>
+      <li>run_hook(name) · set_hook_enabled(name, flag)</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">ServiceProtocolInterface</span><span class="ext">extends Interface</span><span class="kind k-marker">marker</span></div>
+    <div class="meta">Empty marker. Signals "this is an Aiko Service implementing a protocol." In Dart: a marker interface (empty <code>abstract interface class</code>) or simply omitted — no methods to carry.</div>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Service</span><span class="ext">(ServiceProtocolInterface, Hooks)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta"><code>Interface.default("Service", "…service.ServiceImpl")</code> · the root behaviour. Init slice: name, protocol, tags, transport, service_id, topic_path + topic_{in,out,control,log,state}; registers with the process. Absence-safe: <code>service_id</code>/<code>topic_path</code> start null.</div>
+    <ul>
+      <li>run() · stop()</li>
+      <li>add_message_handler(handler, topic, binary=False) · remove_message_handler(handler, topic)</li>
+      <li>set_registrar_handler(fn) · registrar_handler_call(action, registrar)</li>
+      <li>add_tags(tags) · add_tags_string(str) · get_tags_string()</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Actor</span><span class="ext">(Service)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta"><code>Interface.default("Actor", "…actor.ActorImpl")</code> · <code>ActorImpl.__init__</code> first line is <code>call_init("Service")</code>. Adds the message-mailbox model, <code>self.share</code> (lifecycle/log_level/running) + an ECProducer collaborator, delayed-message queue. This is the unit of the isolate-per-actor runtime.</div>
+    <ul>
+      <li>run(mqtt_connection_required=True) · set_log_level(level)</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Dependency</span><span class="ext">extends Interface</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta"><code>Interface.default("Dependency", "…dependency.DependencyImpl")</code> · standalone (NOT a Service). Init sets four fields; <b><code>service = None</code> is a normal, first-class state</b> (not discovered / absent). This nullability is load-bearing across the object model.</div>
+    <ul>
+      <li>get_type() · is_type(type_name)</li>
+      <li>update(entry_name, service=None, service_filter=None, lifecycle_manager_url=None, storage_url=None)</li>
+    </ul>
+  </div>
+
+  <h2 id="object">3 · Object model</h2>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Category</span><span class="ext">(Actor, Dependency)</span><span class="kind k-comp">composed</span></div>
+    <div class="meta">The acid test — two disjoint branches (Actor→Service→Hooks, and Dependency) flattened onto one object. A Category is a group of Entries, each itself a Category or a Dependency. Init: <code>call_init("Actor")</code> then <code>call_init("Dependency", service_filter=…)</code>; adds an <code>entries</code> share.</div>
+    <ul>
+      <li>add(entry_name, service_filter=None, lifecycle_manager_url=None, storage_url=None)</li>
+      <li>list(topic_path_response, entry_name=None, long_format=False, recursive=False, entry_records=None)</li>
+      <li>remove(entry_name) · exit()</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">HyperSpace</span><span class="ext">(Category, Actor)</span><span class="kind k-comp">composed</span></div>
+    <div class="meta">The deepest node — a Category that is also directly an Actor, so Actor/Service/Hooks are reached twice. Init calls <code>call_init("Actor")</code> then <code>call_init("Category")</code>; the guard makes the shared slices init once. The typed CRUD API over the whole space (kept deliberately separate from the EC observation channel).</div>
+    <ul>
+      <li>create(category_path) · destroy(category_path) · dump()</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Registrar</span><span class="ext">(Service)</span><span class="kind k-comp">composed</span></div>
+    <div class="meta"><b>Zero abstract methods.</b> A Service whose entire contract is the wire protocol — message handlers (<code>_topic_in_handler</code>, <code>_service_add</code>, <code>_service_remove</code>) + a primary/secondary state machine for leader election. In Dart: a Service-composed class, no new mixin surface. Its "interface" lives on the bus, not in the type.</div>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Storage</span><span class="ext">(Actor)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta"><code>Interface.default("Storage", …)</code> · persistence for Categories/Dependencies. Entry = either a Category or a Dependency (the same duality as HyperSpace).</div>
+    <ul>
+      <li>initialize(storage_url) · create(category_name) · destroy(entry_name) · exit()</li>
+      <li>add(dependency_name, dependency=None) · remove(entry_name) · link(new, existing)</li>
+      <li>update(entry_name, service=None, …) · list(topic_path_response, entry_name=None, …) · dump(sort_by_name)</li>
+    </ul>
+  </div>
+
+  <h2 id="lifecycle">4 · Lifecycle — the public/private interface split</h2>
+  <p>Lifecycle introduces a pattern worth naming: each role splits into a <b>public</b> interface and a <b>private</b> interface, composed together in one impl (<code>LifeCycleManagerImpl(LifeCycleManager, LifeCycleManagerPrivate)</code>). Public methods are the API; <code>_</code>-prefixed private methods are internal machinery kept off the public contract. In Dart this maps to two mixins on one class — or a public mixin + a library-private mixin.</p>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">LifeCycleManager</span><span class="ext">extends ServiceProtocolInterface</span><span class="kind k-mix">mixin</span></div>
+    <ul><li>lcm_create_client(parameters=None) · lcm_delete_client(client_id)</li></ul>
+  </div>
+  <div class="iface">
+    <div class="hd"><span class="nm">LifeCycleManagerPrivate</span><span class="ext">extends Interface</span><span class="kind k-mix">mixin (private)</span></div>
+    <ul>
+      <li>_lcm_create_client(…) · _lcm_delete_client(client_id, force=False)</li>
+      <li>_lcm_get_clients() → Dict · _lcm_get_handshaking_clients() → List</li>
+      <li>_lcm_lookup_client_state(client_id, key)</li>
+    </ul>
+  </div>
+  <div class="iface">
+    <div class="hd"><span class="nm">LifeCycleClient</span> / <span class="nm">LifeCycleClientPrivate</span><span class="ext">ServiceProtocolInterface / Interface</span><span class="kind k-mix">mixin pair</span></div>
+    <ul>
+      <li>(private) _lcc_get_lifecycle_manager_topic() · _lcc_lifecycle_manager_change_handler(service_details)</li>
+    </ul>
+    <div class="meta muted">Public LifeCycleClient's surface is largely the handshake protocol + Service; the private mixin carries the manager-tracking internals.</div>
+  </div>
+
+  <h2 id="pipeline">5 · Execution</h2>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">ProcessManager</span><span class="ext">(Actor)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta">Spawns/supervises OS processes for actors. The isolate-spawn analog in the Dart runtime.</div>
+    <ul><li>create(command, arguments=None, uid=None) · destroy(uid, kill=False) · exit(grace_time) · list(topic_path_response, uid=None) · dump()</li></ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">PipelineElement</span><span class="ext">(Actor)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta">The unit of stream processing. <code>process_frame</code> returns <code>(StreamEvent, dict)</code> — the frame-transform contract.</div>
+    <ul>
+      <li>process_frame(stream, **kwargs) → (StreamEvent, dict)</li>
+      <li>start_stream(stream, stream_id) · stop_stream(stream, stream_id)</li>
+      <li>create_frame(…) · create_frames(…) · get_stream() · get_variables() · get_parameter(name, …) · my_id(all=False)</li>
+    </ul>
+  </div>
+
+  <div class="iface">
+    <div class="hd"><span class="nm">Pipeline</span><span class="ext">(PipelineElement)</span><span class="kind k-mix">mixin</span></div>
+    <div class="meta">A PipelineElement that orchestrates a graph of PipelineElements (also <code>PipelineElementLoop</code>, <code>PipelineRemote</code> variants). Parses a pipeline definition, manages streams.</div>
+    <ul>
+      <li>create_stream(stream_id, graph_path=None, …) · destroy_stream(stream_id, graceful=False)</li>
+      <li>set_parameter(stream_id, name, value) · set_parameters(stream_id, parameters)</li>
+      <li>process_frame_response(…) · parse_pipeline_definition(pathname) [classmethod]</li>
+    </ul>
+  </div>
+
+  <h2 id="collab">6 · Collaborators — NOT mixins</h2>
+  <p>These are plain classes an Actor <em>holds</em>, not slices it <em>is</em>. They map to ordinary Dart classes held as fields. Getting this boundary right is what stops the port from over-mixining.</p>
+
+  <div class="iface" style="border-color:#3a3320">
+    <div class="hd"><span class="nm">ECProducer</span><span class="ext">plain class · self.ec_producer = ECProducer(self, self.share)</span><span class="kind k-collab">collaborator</span></div>
+    <div class="meta"><b>The observation channel's write side.</b> Wraps an Actor's <code>share</code> dict and publishes deltas. Distinct on purpose from the typed CRUD API (HyperSpace/Category). Eventual-consistency: subscribe → snapshot → deltas.</div>
+    <ul><li>get(item_name) · update(item_name, value) · remove(item_name) · add_handler(fn) · remove_handler(fn)</li></ul>
+  </div>
+  <div class="iface" style="border-color:#3a3320">
+    <div class="hd"><span class="nm">ECConsumer</span><span class="ext">plain class</span><span class="kind k-collab">collaborator</span></div>
+    <div class="meta">The observation channel's read side — subscribes to a producer's share, receives snapshot + deltas, exposes cached state.</div>
+    <ul><li>add_handler(fn) · remove_handler(fn) · terminate() · (cache) get_services() · get_state() · get_history() · wait_ready()</li></ul>
+  </div>
+
+  <h2 id="dart">7 · The Dart translation rules</h2>
+  <table>
+    <thead><tr><th>Python</th><th>Dart</th></tr></thead>
+    <tbody>
+      <tr><td><code>class X(Interface)</code> pure-abstract</td><td><code>mixin X on CallInit</code></td></tr>
+      <tr><td><code>class X(A, B)</code> (A, B interfaces)</td><td><code>mixin X on CallInit, A, B</code></td></tr>
+      <tr><td>the <code>Impl.__init__</code> body</td><td><code>void _initX(Context ctx) => callInit(ctx, 'X', () {…})</code></td></tr>
+      <tr><td><code>call_init(self, "A", ctx)</code> first line</td><td><code>_initA(ctx);</code> at top of <code>_initX</code></td></tr>
+      <tr><td>the concrete composed class</td><td><code>class X with CallInit, …slices { X(ctx){ _initTop(ctx); } }</code></td></tr>
+      <tr><td>public + <code>_private</code> interface pair</td><td>public mixin + library-private mixin on one class</td></tr>
+      <tr><td>marker interface (empty)</td><td>omit, or empty <code>abstract interface class</code></td></tr>
+      <tr><td><code>self.ec_producer = ECProducer(…)</code></td><td>plain field: <code>final ECProducer ecProducer;</code></td></tr>
+      <tr><td><code>service = None</code> (absent)</td><td><code>Object? service;</code> — null is normal</td></tr>
+    </tbody>
+  </table>
+
+  <p class="muted">Open edges (unchanged from the mapping note): isolate boundaries (composed objects don't cross by reference), F-bounded generics (none sampled needed them), and the message/transport layer (<code>Message</code>, <code>MQTT</code>) which is a separate abstraction, not part of the <code>Interface</code> composition system.</p>
+
+  <p class="foot">
+    Source read: <code>hook.py · service.py · actor.py · dependency.py · category.py · hyperspace.py · registrar.py · lifecycle.py · process_manager.py · pipeline.py · recorder.py · storage/storage.py · share.py</code><br>
+    Repo: <a href="https://github.com/nickmeinhold/aiko_services_dart">nickmeinhold/aiko_services_dart</a> · Upstream: <a href="https://github.com/geekscape/aiko_services">geekscape/aiko_services</a>
+  </p>
+</div>
+</body>
+</html>

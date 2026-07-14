@@ -134,18 +134,65 @@ mixin DependencyMixin on CallInit {
 // `CategoryImpl.__init__` calling `call_init("Actor")` then
 // `call_init("Dependency", service_filter=...)`.
 // ─────────────────────────────────────────────────────────────────────────
-class Category
-    with CallInit, HooksMixin, ServiceMixin, ActorMixin, DependencyMixin {
+/// The Category slice as a reusable mixin, so HyperSpace can layer on top of it
+/// exactly as `class HyperSpace(Category, Actor)` does in Python.
+mixin CategoryMixin
+    on CallInit, HooksMixin, ServiceMixin, ActorMixin, DependencyMixin {
   final Map<String, Object?> entries = {};
 
-  Category(Context ctx, {Object? serviceFilter}) {
-    initActor(ctx); // Actor slice → Service → Hooks
-    initDependency(ctx, serviceFilter: serviceFilter); // Dependency slice
-    share['source'] = 'category'; // Category adds to Actor's share, like Python
-  }
+  void initCategory(Context ctx, {Object? serviceFilter}) =>
+      callInit(ctx, 'Category', () {
+        initActor(ctx); // Actor slice → Service → Hooks
+        initDependency(ctx, serviceFilter: serviceFilter); // Dependency slice
+        share['source'] = 'category'; // Category adds to Actor's share
+      });
 
   void add(String name, Object? entry) => entries[name] = entry;
   void remove(String name) => entries.remove(name);
+}
+
+class Category
+    with
+        CallInit,
+        HooksMixin,
+        ServiceMixin,
+        ActorMixin,
+        DependencyMixin,
+        CategoryMixin {
+  Category(Context ctx, {Object? serviceFilter}) {
+    initCategory(ctx, serviceFilter: serviceFilter);
+  }
+}
+
+/// The DEEPEST real node: `class HyperSpace(Category, Actor)`. Category already
+/// contains Actor, so HyperSpace reaches Actor (→ Service → Hooks) through TWO
+/// paths — `initCategory` and its own direct `initActor`. The idempotency guard
+/// must make every shared slice initialize exactly once through the whole
+/// two-level diamond. This is the ultimate exercise of `call_init`.
+class HyperSpace
+    with
+        CallInit,
+        HooksMixin,
+        ServiceMixin,
+        ActorMixin,
+        DependencyMixin,
+        CategoryMixin {
+  int actorInitCount = 0;
+
+  HyperSpace(Context ctx) {
+    initCategory(ctx); // path A to Actor (Category → Actor)
+    initActor(ctx); // path B to Actor (direct) — guard must short-circuit
+  }
+
+  // Instrument: count how many times the Actor slice actually initialized.
+  @override
+  void initActor(Context ctx) => callInit(ctx, 'Actor', () {
+        actorInitCount++;
+        initService(ctx);
+        share = {'lifecycle': 'ready', 'running': false};
+      });
+
+  void create(String path) => add(path, {});
 }
 
 /// Diamond acid test: two branches (Actor + Registrar) both cascade to Service.
