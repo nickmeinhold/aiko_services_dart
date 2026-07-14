@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aiko in Dart: crossing the distributed seam</title>
+<style>
+  :root{
+    --paper:#eceef2; --card:#ffffff; --ink:#161a23; --muted:#586072;
+    --hair:#d5dae2; --hair-2:#e6e9ef;
+    --bus:#33408f; --bus-soft:#e7e9f5;
+    --local:#0e7c70; --local-soft:#e0f1ee;
+    --remote:#b06a1c; --remote-soft:#f6ebdb;
+    --code-bg:#12151d; --code-ink:#e6e9f0; --code-dim:#8b93a7;
+    --good:#0e7c70; --warn:#b06a1c;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --col: 44rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:17px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--col); margin:0 auto; padding:0 1.4rem 6rem}
+
+  section{margin-top:3.4rem}
+  p{margin:0 0 1rem}
+  a{color:var(--bus); text-decoration:none; border-bottom:1px solid var(--bus-soft)}
+  a:hover{border-bottom-color:var(--bus)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--bus); outline-offset:3px; border-radius:2px}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--bus); font-weight:600;
+    display:flex; align-items:center; gap:.6rem;
+  }
+  .eyebrow::before{content:""; width:1.6rem; height:2px; background:var(--bus); display:inline-block}
+  h1{
+    font-size:clamp(2rem,6vw,2.7rem); line-height:1.08; letter-spacing:-.02em;
+    margin:.8rem 0 .5rem; text-wrap:balance; font-weight:760;
+  }
+  .sub{font-size:1.16rem; color:var(--muted); max-width:37rem; text-wrap:balance; margin:0}
+  h2{font-size:1.42rem; letter-spacing:-.01em; margin:0 0 .3rem; text-wrap:balance; font-weight:720}
+  h2 .num{font-family:var(--mono); font-size:.9rem; color:var(--bus); font-weight:600; margin-right:.55rem; vertical-align:.12em}
+  h3{font-size:1.02rem; margin:1.8rem 0 .4rem; font-weight:680}
+  .lede{font-size:1.06rem; color:var(--muted); margin-top:.2rem}
+  strong{font-weight:660}
+  code{
+    font-family:var(--mono); font-size:.86em;
+    background:var(--hair-2); padding:.08em .38em; border-radius:4px;
+    color:#2a3350; white-space:nowrap;
+  }
+
+  header.mast{padding:4.2rem 0 0}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; margin-top:1.7rem;
+    font-family:var(--mono); font-size:.76rem; color:var(--muted);
+    padding-top:1.1rem; border-top:1px solid var(--hair);
+  }
+  .meta b{color:var(--ink); font-weight:600}
+
+  .tldr{
+    background:var(--card); border:1px solid var(--hair); border-radius:14px;
+    padding:1.5rem 1.6rem; margin-top:2.4rem;
+    box-shadow:0 1px 0 rgba(20,26,40,.03), 0 12px 30px -22px rgba(51,64,143,.4);
+  }
+  .tldr .eyebrow{margin-bottom:1rem}
+  .tldr ol{margin:0; padding-left:0; list-style:none; counter-reset:t; display:grid; gap:.9rem}
+  .tldr li{counter-increment:t; padding-left:2.6rem; position:relative}
+  .tldr li::before{
+    content:counter(t); position:absolute; left:0; top:-.05rem;
+    font-family:var(--mono); font-size:.82rem; font-weight:600;
+    width:1.7rem; height:1.7rem; display:grid; place-items:center;
+    background:var(--bus-soft); color:var(--bus); border-radius:7px;
+  }
+
+  .scroll{overflow-x:auto; margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card)}
+  table{border-collapse:collapse; width:100%; min-width:34rem; font-size:.94rem}
+  th,td{text-align:left; padding:.72rem .95rem; border-bottom:1px solid var(--hair-2); vertical-align:top}
+  thead th{
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; background:#f7f8fa;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.k{font-family:var(--mono); font-size:.83rem; color:#2a3350; white-space:nowrap}
+  .tag{font-family:var(--mono); font-size:.72rem; padding:.12em .5em; border-radius:5px; font-weight:600; white-space:nowrap}
+  .tag.local{background:var(--local-soft); color:var(--local)}
+  .tag.remote{background:var(--remote-soft); color:var(--remote)}
+  .tag.bus{background:var(--bus-soft); color:var(--bus)}
+  .tag.good{background:var(--local-soft); color:var(--good)}
+
+  .note{
+    background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--bus);
+    border-radius:0 12px 12px 0; padding:1.1rem 1.3rem; margin:1.4rem 0;
+  }
+  .note .eyebrow{color:var(--bus); margin-bottom:.5rem}
+  .note.ask{border-left-color:var(--remote)}
+  .note.ask .eyebrow{color:var(--remote)}
+  .note.ask .eyebrow::before{background:var(--remote)}
+  .note.good{border-left-color:var(--good)}
+  .note.good .eyebrow{color:var(--good)}
+  .note.good .eyebrow::before{background:var(--good)}
+  .note p:last-child{margin-bottom:0}
+
+  pre{
+    background:var(--code-bg); color:var(--code-ink); border-radius:12px;
+    padding:1.15rem 1.25rem; overflow-x:auto; margin:1.1rem 0;
+    font-family:var(--mono); font-size:.82rem; line-height:1.6; tab-size:2;
+  }
+  pre .c{color:var(--code-dim)}
+  pre .s{color:#8fd6c8}
+  pre .b{color:#c9b6f2}
+  details{margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card); overflow:hidden}
+  details[open]{box-shadow:0 12px 30px -24px rgba(51,64,143,.5)}
+  summary{
+    cursor:pointer; padding:.9rem 1.2rem; font-family:var(--mono); font-size:.8rem;
+    letter-spacing:.04em; color:var(--ink); font-weight:600; list-style:none;
+    display:flex; align-items:center; gap:.7rem;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"\25B6"; color:var(--bus); font-size:.7rem; transition:transform .18s ease}
+  details[open] summary::before{transform:rotate(90deg)}
+  details .body{padding:0 1.2rem 1rem}
+  details pre{margin:.4rem 0 0}
+
+  /* ---- flow schematic ---- */
+  .flow{
+    background:linear-gradient(180deg,#fbfbfd,#f4f5f8); border:1px solid var(--hair);
+    border-radius:16px; padding:1.6rem 1.4rem; margin:1.4rem 0; overflow-x:auto;
+  }
+  .flow-inner{min-width:31rem; display:grid; gap:.55rem}
+  .lane{
+    display:grid; grid-template-columns:8.5rem 1fr; gap:1rem; align-items:center;
+  }
+  .lane .who{font-family:var(--mono); font-size:.72rem; font-weight:600; text-align:right}
+  .lane .who.a{color:var(--local)} .lane .who.b{color:var(--remote)}
+  .lane .box{
+    background:var(--card); border:1px solid var(--hair); border-radius:9px;
+    padding:.55rem .8rem; font-family:var(--mono); font-size:.76rem; color:#2a3350;
+  }
+  .lane .box.wire{border-style:dashed; border-color:var(--bus); color:var(--bus); text-align:center}
+  .arrow{text-align:center; font-family:var(--mono); font-size:.66rem; color:var(--muted); letter-spacing:.04em}
+
+  footer{margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--hair); font-size:.86rem; color:var(--muted)}
+  footer a{border-bottom-color:var(--hair)}
+  footer ul{padding-left:1.1rem; margin:.5rem 0 0}
+  footer li{margin:.25rem 0}
+
+  .next{display:grid; gap:.7rem; margin-top:1.4rem}
+  .next a{
+    display:block; background:var(--card); border:1px solid var(--hair); border-radius:11px;
+    padding:.85rem 1.05rem; border-bottom:1px solid var(--hair);
+  }
+  .next a:hover{border-color:var(--bus)}
+  .next .t{font-weight:660; color:var(--ink)}
+  .next .d{font-size:.86rem; color:var(--muted)}
+
+  .hr{height:1px; background:var(--hair); border:0; margin:3.4rem 0 0}
+  @media (prefers-reduced-motion:no-preference){
+    header.mast,section{animation:rise .5s ease both}
+    @keyframes rise{from{opacity:0; transform:translateY(8px)}to{opacity:1; transform:none}}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Aiko Services &middot; Dart port &middot; finding</div>
+    <h1>Crossing the distributed seam</h1>
+    <p class="sub">Does the composed-mixin mapping survive leaving the actor? The scary part of the port &mdash; read from the Python source, proven with a two-isolate spike.</p>
+    <div class="meta">
+      <span><b>For</b> Andy (geekscape)</span>
+      <span><b>From</b> Nick</span>
+      <span><b>Status</b> validated at the boundary the spike crosses</span>
+      <span><b>Grounded in</b> <code>actor.py</code> / <code>discovery.py</code> / <code>transport_mqtt.py</code> / <code>parser.py</code> / <code>share.py</code></span>
+    </div>
+  </header>
+
+  <div class="tldr">
+    <div class="eyebrow">The finding, in three lines</div>
+    <ol>
+      <li><b>Nothing but a <em>String</em> ever crosses an actor boundary in Aiko.</b> A remote call is a canonical S-expression <code>(method_name arg1 arg2 &hellip;)</code>; the far side parses it and dispatches <em>by name</em> against its own local object. The composed mixin object never goes near the wire.</li>
+      <li><b>So the isolate boundary is a non-issue for the mapping.</b> The method table the composition mapping relies on stays inside one isolate by construction. Confirmed by a running two-isolate spike.</li>
+      <li><b>One real porting nuance:</b> Dart has no runtime <code>getattr</code> without <code>dart:mirrors</code> (banned in Flutter/AOT), so by-name dispatch becomes an explicit <code>Map&lt;String,&nbsp;Function&gt;</code> &mdash; built from the same method-name list the proxy already uses. Symmetric, bounded, codegen-friendly.</li>
+    </ol>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span>The question handed forward</h2>
+    <p class="lede">The <a href="./composition-mapping.html">composition mapping</a> was validated <em>within one actor</em> &mdash; and explicitly left the boundary open.</p>
+    <p>That doc's §6 named the limitation precisely: &ldquo;the composed object can&rsquo;t cross an isolate boundary by reference.&rdquo; Dart isolates don&rsquo;t share memory; objects cross a <code>SendPort</code> by deep copy, and the intuition was that closures and a mixin&rsquo;s method table are exactly what can&rsquo;t ride along. If true, the elegant within-actor mapping might have a seam it can&rsquo;t cross, and the port would need a different shape at the boundary.</p>
+    <p>The honest way to settle it is the same method that cracked the composition question: <strong>read where actor state actually crosses a boundary in the Python source, form an empirical hypothesis, then let a spike be the judge</strong> &mdash; here a real two-isolate one, not an in-process fake.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>The discovery: two <code>Message</code> classes</h2>
+    <p class="lede">The word collides; the referent does not &mdash; and the distinction is the whole answer.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Which <code>Message</code></th><th>Carries</th><th>Crosses the boundary?</th></tr></thead>
+      <tbody>
+        <tr><td class="k">message/message.py</td><td>a <code>topic</code> + a String <code>payload</code></td><td><span class="tag remote">yes &mdash; the MQTT wire</span></td></tr>
+        <tr><td class="k">actor.py:133</td><td>a live <code>target_object</code> + a <code>target_function</code> closure</td><td><span class="tag local">no &mdash; in-process mailbox only</span></td></tr>
+      </tbody>
+    </table></div>
+    <p>The transport <code>Message</code> publishes Strings over MQTT. The actor&rsquo;s internal <code>Message</code> holds a live object reference and a closure &mdash; but it is <strong>manufactured locally, on the receiving side</strong>, to queue an incoming request onto that actor&rsquo;s single-threaded event loop. It never leaves the process. When a String lands on <code>topic_in</code>:</p>
+    <pre><span class="c"># actor.py — the receiving side</span>
+def _topic_in_handler(self, _aiko, topic, payload_in):
+    command, parameters = <span class="b">parse</span>(payload_in)        <span class="c"># String -&gt; (name, args)</span>
+    self._post_message(ActorTopic.IN, command, parameters)
+
+<span class="c"># Message.invoke() — by-NAME dispatch, the Python getattr</span>
+target_function = self.target_object.<span class="b">__getattribute__</span>(self.command)
+target_function(*self.arguments)</pre>
+    <p>The live-object <code>Message</code> is assembled <em>here</em>, from a command name and already-parsed String args &mdash; it was never on the wire.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>What a remote actor actually is: a list of method names</h2>
+    <p>The remote-proxy builders in <code>discovery.py</code> and <code>transport/transport_mqtt.py</code> are identical in shape, and neither one ever touches the implementation object:</p>
+    <pre><span class="c"># discovery.py:_make_service_proxy — built from method-name STRINGS</span>
+def _proxy_send_message(method_name):
+    def closure(*args, **kwargs):
+        payload = <span class="b">generate</span>(method_name, arguments)   <span class="c"># NAME + args -&gt; String</span>
+        aiko.message.<span class="b">publish</span>(target_topic_in, payload)
+    return closure
+
+<span class="c"># the proxy's method set comes from the INTERFACE, not the impl:</span>
+public_method_names = [n for n, m in getmembers(protocol_class, isfunction)
+                       if not n.startswith("_")]</pre>
+    <div class="note good">
+      <div class="eyebrow">Why the inventory&rsquo;s &ldquo;Registrar has zero abstract methods&rdquo; was the tell</div>
+      <p>The thing that represents a remote actor is <em>a list of public method-name strings</em>. That is why the <a href="./interface-inventory.html">interface inventory</a> found <code>Registrar</code>&rsquo;s contract <em>is</em> the wire protocol: the wire contract is exactly <code>(method_name_string, string_serialized_args)</code>. There is no object to serialize because a remote actor was never an object &mdash; it is a topic path and a vocabulary of names.</p>
+    </div>
+    <p>All three layers of the seam run on this one mechanism &mdash; the same <code>generate</code>/<code>parse</code> canonical-S-expression codec (<code>parser.py</code>, whose functions are documented inverses):</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Layer</th><th>Wire</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td class="k">RPC / discovery</td><td><code>(method args)</code> &rarr; <code>topic_in</code> &rarr; parse &rarr; by-name dispatch</td><td>discovery.py, transport_mqtt.py</td></tr>
+        <tr><td class="k">EC state-sync</td><td><code>(update item_name value)</code> deltas &rarr; <code>topic_out</code>/<code>topic_state</code></td><td>share.py <code>_consumer_handler</code></td></tr>
+        <tr><td class="k">arguments</td><td>strings / null (<code>0:</code>) / lists / dicts; numbers ride as strings</td><td>parser.py</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span>The spike: two isolates, only Strings between them</h2>
+    <p class="lede">A composed mixin actor lives in isolate A. Isolate B holds only a <code>SendPort</code> and speaks S-expressions. The method table never crosses.</p>
+    <div class="flow"><div class="flow-inner">
+      <div class="lane"><div class="who b">isolate B (caller)</div><div class="box">holds only <code>topicIn</code> SendPort</div></div>
+      <div class="lane"><div class="who b"></div><div class="box wire">&darr; send String &nbsp;<code>"(increment 5)"</code></div></div>
+      <div class="lane"><div class="who a">isolate A (host)</div><div class="box"><code>parse</code> &rarr; dispatch(<b>increment</b>, [5]) on <em>local</em> CounterActor</div></div>
+      <div class="lane"><div class="who a"></div><div class="box wire">&uarr; reply String &nbsp;<code>"(count 5)"</code></div></div>
+    </div></div>
+    <p>The composed <code>CounterActor</code> (three mixins &mdash; <code>CounterMixin</code>, <code>GreeterMixin</code>, <code>ShareMixin</code> &mdash; flattened onto one object, the same idiom as <code>Category</code>) is constructed <em>inside</em> the host isolate and never leaves it. Every property passes and <code>dart analyze</code> is clean.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Property</th><th>What it proves</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="k">P1 wire format</td><td><code>generate</code>/<code>parse</code> round-trip on flat commands, incl. length-prefixed atoms and <code>0:</code> null &mdash; matches parser.py</td><td><span class="tag good">pass</span></td></tr>
+        <tr><td class="k">P2 boundary</td><td>mixin methods invoked <em>by name</em> across a real isolate boundary; only Strings cross; unknown command &rarr; diagnostic, not crash</td><td><span class="tag good">pass</span></td></tr>
+        <tr><td class="k">P3 EC delta</td><td><code>(update running true)</code> mutates the far-side <code>share</code> map over the identical wire</td><td><span class="tag good">pass</span></td></tr>
+        <tr><td class="k">P4 premise</td><td>see §5 &mdash; empirical characterization of object-copy</td><td><span class="tag good">pass</span></td></tr>
+      </tbody>
+    </table></div>
+    <details>
+      <summary>the by-name dispatch table &mdash; the one porting artifact</summary>
+      <div class="body">
+        <pre><span class="c">// Dart's mirrors-free stand-in for Python's __getattribute__(command).</span>
+<span class="c">// Built from the SAME method-name list a remote proxy uses.</span>
+String dispatch(CounterActor actor, String command, List&lt;String?&gt; args) {
+  switch (command) {
+    case <span class="s">'increment'</span>: actor.increment(int.parse(args[0] ?? <span class="s">'0'</span>));
+                      return generate(<span class="s">'count'</span>, [actor.count]);
+    case <span class="s">'greet'</span>:     return generate(<span class="s">'greeting'</span>, [actor.greet(args[0] ?? <span class="s">''</span>)]);
+    <span class="c">// ...</span>
+    default:          <span class="c">// mirrors actor.py "Function not found"</span>
+                      return generate(<span class="s">'error'</span>, [<span class="s">'Function not found: '</span> + command]);
+  }
+}</pre>
+        <p style="font-size:.9rem;color:var(--muted);margin:0">Spike source: <code>spike/isolate-boundary/</code> in the repo.</p>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span>A premise I had to correct by running it</h2>
+    <p class="lede">The intuition &ldquo;closures and mixin method tables can&rsquo;t serialize&rdquo; is <em>false</em> for spawned isolates &mdash; and knowing that sharpens the finding rather than threatening it.</p>
+    <p>Isolate behaviour isn&rsquo;t reasoning-verifiable, so the spike sends a real composed mixin object to a spawned isolate and asserts what actually happens. Result: Dart <strong>deep-copies</strong> the object&rsquo;s fields, and because spawned isolates share the program&rsquo;s code (an <a href="./isolate-per-actor-runtime.html">isolate group</a>), the method table resolves on the far side &mdash; the copied object&rsquo;s mixin methods run fine.</p>
+    <div class="note">
+      <div class="eyebrow">So the seam dissolves from both directions</div>
+      <p><b>If Dart actors are isolates (same group):</b> a composed mixin object <em>can</em> cross a <code>SendPort</code> &mdash; the fear was misplaced. But it doesn&rsquo;t matter, because&hellip;</p>
+      <p><b>If actors are separate processes over MQTT</b> (Aiko&rsquo;s real topology): only bytes cross a network &mdash; no Dart object graph survives a hop, ever. And Aiko already designed for exactly this: everything is S-expr strings + by-name dispatch. The mixin never needs to cross, because Aiko never sends objects.</p>
+    </div>
+    <p>Either way the within-actor mapping is untouched. The boundary carries a method name and stringified args; the method table stays home.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span>Verdict &mdash; scoped to what the spike crossed</h2>
+    <div class="note good">
+      <div class="eyebrow">&#9670; Validated at the isolate + wire-format boundary</div>
+      <p>For actor-to-actor messaging, state-sync, and discovery, <strong>the composed-mixin mapping survives the distributed seam</strong> because the seam never carries the mixin &mdash; it carries a canonical-S-expression command String, dispatched by name on the receiving side. A two-isolate Dart spike demonstrates the full round-trip (call, state delta, unknown-command diagnostic) with only Strings on the wire, and independently confirms Dart&rsquo;s object-copy behaviour so the finding rests on a run, not a guess.</p>
+    </div>
+    <p>What this does <em>not</em> yet claim, held honestly:</p>
+    <ul>
+      <li><b>The codec is spiked at the flat-command level</b>, not the full canonical-S-expression grammar (nested lists, keyword dictionaries). parser.py remains the spec; a shipped codec needs interop tests against the Python <code>generate</code>/<code>parse</code> on real payloads.</li>
+      <li><b>The dispatch table was hand-written</b> for one actor. At scale it wants generation from the interface&rsquo;s method list &mdash; the same list the proxy is built from &mdash; not hand-maintenance.</li>
+      <li><b>Leases, leader election, and the Registrar state machine</b> ride this wire but have their own liveness semantics not exercised here.</li>
+    </ul>
+    <p>None of these reopen the seam; they are the build-out beyond it. The scary question &mdash; does the shape survive the crossing &mdash; is answered: <strong>yes, because the shape was never what crossed</strong>.</p>
+
+    <div class="next">
+      <a href="./composition-mapping.html"><div class="t">&larr; The composition mapping</div><div class="d">Where this began &mdash; the within-actor validation that handed the boundary forward.</div></a>
+      <a href="./isolate-per-actor-runtime.html"><div class="t">The isolate-per-actor runtime &rarr;</div><div class="d">The design note this finding de-risks: how Dart actors relate in-process, and the build sequence.</div></a>
+      <a href="./interface-inventory.html"><div class="t">The interface inventory</div><div class="d">Every Interface and its target Dart shape &mdash; where Registrar&rsquo;s wire-only contract was first spotted.</div></a>
+    </div>
+  </section>
+
+  <footer>
+    <div class="eyebrow" style="color:var(--muted)">Sources</div>
+    <ul>
+      <li>Aiko Services &mdash; <a href="https://github.com/geekscape/aiko_services">geekscape/aiko_services</a>: <code>main/actor.py</code>, <code>main/discovery.py</code>, <code>main/transport/transport_mqtt.py</code>, <code>main/utilities/parser.py</code>, <code>main/share.py</code></li>
+      <li>Spike &mdash; <code>spike/isolate-boundary/</code> in <a href="https://github.com/nickmeinhold/aiko_services_dart">nickmeinhold/aiko_services_dart</a></li>
+      <li>Dart isolate groups &mdash; <a href="https://github.com/dart-lang/sdk/issues/36097">dart-lang/sdk#36097</a></li>
+    </ul>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -188,7 +188,7 @@ class Category with CallInit, HooksMixin, ServiceMixin,
   <h2 id="caveats">6 · What this does <em>not</em> yet prove</h2>
   <p>Honest edges, so the next builder engages them rather than inherits them:</p>
   <ul class="muted">
-    <li><b>Isolate boundaries.</b> The spike is single-isolate. Aiko's runtime is isolate-per-actor; mixin state is fine within an isolate, but the composed object can't cross an isolate boundary by reference. That's the <a href="./isolate-per-actor-runtime.html">isolate-per-actor design note</a>'s territory, not this one's — the composition mapping holds <em>inside</em> an actor.</li>
+    <li><b>Isolate boundaries. <span style="color:var(--good,#0e7c70)">— now resolved.</span></b> The spike is single-isolate. Aiko's runtime is isolate-per-actor; mixin state is fine within an isolate, but the composed object can't cross an isolate boundary by reference. It turns out it never has to: nothing but an S-expression command String ever crosses an actor boundary, so the mixin method table stays home by construction. Proven with a two-isolate spike in <a href="./distributed-seam.html">Crossing the distributed seam</a>.</li>
     <li><b>Generics / self-types.</b> None of the sampled interfaces needed F-bounded generics. If a later interface does, the mixin <code>on</code> mechanism may need a type parameter — unverified.</li>
     <li><b>The full inventory.</b> This validates the <em>mechanism</em> on <code>Category</code>'s shape. The per-interface method inventory is now written up in the <a href="./interface-inventory.html">interface inventory</a> — every Interface, its contract, and its target Dart shape, with the deepest diamond (<code>HyperSpace</code>) proven in the same spike.</li>
   </ul>
