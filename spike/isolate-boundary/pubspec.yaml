@@ -1,0 +1,14 @@
+name: isolate_boundary_spike
+description: >-
+  Throwaway spike proving Aiko's actor-to-actor wire contract (canonical
+  S-expression command strings + by-name dispatch) survives a real Dart isolate
+  boundary, and that the composed mixin object never needs to cross it. Not part
+  of the shipped port.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  test: ^1.25.0
