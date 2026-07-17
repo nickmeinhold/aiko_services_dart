@@ -108,6 +108,27 @@
         ]
       },
       "expected": "(a b: (c d))"
+    },
+    {
+      "command": "emoji",
+      "params": [
+        "a \ud83d\ude00"
+      ],
+      "expected": "(emoji 3:a \ud83d\ude00)"
+    },
+    {
+      "command": "emoji",
+      "params": [
+        "\ud83d\ude00\ud83c\udf89 x"
+      ],
+      "expected": "(emoji 4:\ud83d\ude00\ud83c\udf89 x)"
+    },
+    {
+      "command": "accents",
+      "params": [
+        "h\u00e9llo w\u00f6rld"
+      ],
+      "expected": "(accents 11:h\u00e9llo w\u00f6rld)"
     }
   ],
   "parse": [
@@ -222,6 +243,28 @@
       "command": "empty",
       "cdr": [
         ""
+      ]
+    },
+    {
+      "payload": "(emoji 3:a \ud83d\ude00)",
+      "command": "emoji",
+      "cdr": [
+        "a \ud83d\ude00"
+      ]
+    },
+    {
+      "payload": "(emoji 4:\ud83d\ude00\ud83c\udf89 x b)",
+      "command": "emoji",
+      "cdr": [
+        "\ud83d\ude00\ud83c\udf89 x",
+        "b"
+      ]
+    },
+    {
+      "payload": "(accents 11:h\u00e9llo w\u00f6rld)",
+      "command": "accents",
+      "cdr": [
+        "h\u00e9llo w\u00f6rld"
       ]
     }
   ]

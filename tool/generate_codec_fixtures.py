@@ -45,6 +45,11 @@ GENERATE_CASES = [
     ("mixed", ["a", ["c", "d"], ["e", "f", ["g", "h"]]]),
     ("a", {"b": "1", "c": "2"}),             # dict -> b: 1 c: 2
     ("a", {"b": ["c", "d"]}),                # dict with list value
+    # Unicode: length prefix counts CODE POINTS (Python len), not UTF-16
+    # units. The astral cases below caught a real Dart divergence (2026-07-18).
+    ("emoji", ["a \U0001F600"]),             # astral + space -> 3:a 😀
+    ("emoji", ["\U0001F600\U0001F389 x"]),   # two astral + space -> 4:
+    ("accents", ["héllo wörld"]),  # BMP non-ASCII + space
 ]
 
 # ---- parse() cases: payload string -> (command, cdr) --------------------
@@ -63,6 +68,9 @@ PARSE_CASES = [
     "(a 0: b)",                              # canonical null consumed pre-dict
     "(a b ())",                              # empty nested list
     '(empty "")',
+    "(emoji 3:a \U0001F600)",                # astral: 3 code points, 4 UTF-16
+    "(emoji 4:\U0001F600\U0001F389 x b)",    # astral prefix mid-list
+    "(accents 11:héllo wörld)",    # BMP non-ASCII
 ]
 
 

@@ -62,7 +62,10 @@ String _generateSExpression(List<Object?> expression) {
   var payload = '(';
   for (var element in expression) {
     if (element is String && _reDelimiters.hasMatch(element)) {
-      element = '${element.length}:$element';
+      // Length counts Unicode CODE POINTS (Python len semantics), not UTF-16
+      // code units — `a 😀` is `3:a 😀`, never `4:`. Divergence here silently
+      // corrupts astral-plane characters on the wire (probed 2026-07-18).
+      element = '${element.runes.length}:$element';
     }
     if (element is Map) {
       element = _dictToList(element);
@@ -135,8 +138,21 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
           result.add(null); // `0:` encodes null
           i = dataStart;
         } else {
-          result.add(s.substring(dataStart, dataStart + len));
-          i = dataStart + len;
+          // Consume `len` CODE POINTS (Python slice semantics) — a surrogate
+          // pair is one code point, two UTF-16 units.
+          var end = dataStart;
+          for (var taken = 0; taken < len; taken++) {
+            if (end >= s.length) {
+              throw FormatException(
+                  'Canonical symbol length $len exceeds remaining input', s, i);
+            }
+            final unit = s.codeUnitAt(end);
+            end += (unit >= 0xD800 && unit <= 0xDBFF && end + 1 < s.length)
+                ? 2
+                : 1;
+          }
+          result.add(s.substring(dataStart, end));
+          i = end;
         }
         continue;
       }
