@@ -50,6 +50,16 @@ GENERATE_CASES = [
     ("emoji", ["a \U0001F600"]),             # astral + space -> 3:a 😀
     ("emoji", ["\U0001F600\U0001F389 x"]),   # two astral + space -> 4:
     ("accents", ["héllo wörld"]),  # BMP non-ASCII + space
+    # Malformed UTF-16 (cage-match round 1, unanimous): a LONE surrogate is
+    # ONE code point to Python len() and to Dart runes — the decode walk must
+    # not pair a high surrogate with a non-low follower (it would swallow
+    # delimiters). JSON carries \ud800 escapes fine in both languages.
+    ("lone", ["\ud800x y"]),                 # lone high + ascii -> 4:
+    ("lone", ["a \ud800"]),                  # lone high at end -> 3:
+    ("lone", ["\udc00 z"]),                  # lone low -> 3:
+    # Multi-code-point grapheme: ZWJ family is ONE glyph, SEVEN code points.
+    # Guards against anyone "fixing" toward grapheme-cluster length later.
+    ("family", ["\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466 x"]),
 ]
 
 # ---- parse() cases: payload string -> (command, cdr) --------------------
@@ -71,6 +81,9 @@ PARSE_CASES = [
     "(emoji 3:a \U0001F600)",                # astral: 3 code points, 4 UTF-16
     "(emoji 4:\U0001F600\U0001F389 x b)",    # astral prefix mid-list
     "(accents 11:héllo wörld)",    # BMP non-ASCII
+    "(lone 2:\ud800x b)",                    # lone high + ascii, then next atom
+    "(lone 1:\ud800 b)",                     # lone high alone; must NOT eat the space
+    "(lone 1:\udc00 b)",                     # lone low
 ]
 
 

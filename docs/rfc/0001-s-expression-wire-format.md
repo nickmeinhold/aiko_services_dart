@@ -85,8 +85,15 @@ A symbol whose content could be misread as structure is written
 `<length>:<content>`, where `<length>` is a run of ASCII digits.
 
 - `<length>` MUST equal the number of Unicode **code points** in
-  `<content>`. It is not a count of UTF-16 code units and not a count of
-  UTF-8 bytes. `a 😀` is three code points: `3:a 😀`.
+  `<content>`. It is not a count of UTF-16 code units, not a count of UTF-8
+  bytes, and not a count of grapheme clusters (a ZWJ emoji family is one
+  glyph and seven code points). `a 😀` is three code points: `3:a 😀`.
+- In implementations whose strings can contain unpaired surrogates
+  (UTF-16-based languages), a lone surrogate is **one** code point. A
+  decoder MUST treat two units as one code point only when a high surrogate
+  (U+D800–U+DBFF) is immediately followed by a low surrogate
+  (U+DC00–U+DFFF); pairing a high surrogate with an arbitrary next unit
+  over-consumes and can swallow structural delimiters.
 - A decoder encountering `<digits>:` at the start of an element MUST consume
   exactly `<length>` code points following the `:` as the symbol's content,
   including any delimiter characters within them.

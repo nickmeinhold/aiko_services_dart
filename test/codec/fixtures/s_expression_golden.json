@@ -129,6 +129,34 @@
         "h\u00e9llo w\u00f6rld"
       ],
       "expected": "(accents 11:h\u00e9llo w\u00f6rld)"
+    },
+    {
+      "command": "lone",
+      "params": [
+        "\ud800x y"
+      ],
+      "expected": "(lone 4:\ud800x y)"
+    },
+    {
+      "command": "lone",
+      "params": [
+        "a \ud800"
+      ],
+      "expected": "(lone 3:a \ud800)"
+    },
+    {
+      "command": "lone",
+      "params": [
+        "\udc00 z"
+      ],
+      "expected": "(lone 3:\udc00 z)"
+    },
+    {
+      "command": "family",
+      "params": [
+        "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x"
+      ],
+      "expected": "(family 9:\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x)"
     }
   ],
   "parse": [
@@ -265,6 +293,30 @@
       "command": "accents",
       "cdr": [
         "h\u00e9llo w\u00f6rld"
+      ]
+    },
+    {
+      "payload": "(lone 2:\ud800x b)",
+      "command": "lone",
+      "cdr": [
+        "\ud800x",
+        "b"
+      ]
+    },
+    {
+      "payload": "(lone 1:\ud800 b)",
+      "command": "lone",
+      "cdr": [
+        "\ud800",
+        "b"
+      ]
+    },
+    {
+      "payload": "(lone 1:\udc00 b)",
+      "command": "lone",
+      "cdr": [
+        "\udc00",
+        "b"
       ]
     }
   ]

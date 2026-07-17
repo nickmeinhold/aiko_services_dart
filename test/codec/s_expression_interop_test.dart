@@ -53,6 +53,11 @@ void main() {
       ('increment', ['5']),
       ('add', ['topic', 'protocol', 'owner']),
       ('update', ['log_level', 'DEBUG']),
+      // Astral + malformed-surrogate round-trips: encode counts with
+      // String.runes, decode walks pairs by hand — these keep the two
+      // counters honest against each other (cage-match round 1).
+      ('say', ['a 😀', '😀🎉 x']),
+      ('lone', ['\ud800x y', 'a \ud800', '\udc00 z']),
     ]) {
       test('($command ...)', () {
         final (c, cdr) = parse(generate(command, args));
@@ -60,5 +65,24 @@ void main() {
         expect(cdr, equals(args));
       });
     }
+  });
+
+  group('malformed input is rejected with FormatException', () {
+    // Error-CLASS coverage only. Exact parity with parser.py's behaviour on
+    // malformed input is tracked in the hardening task: the Python reference
+    // currently crashes (unhandled TypeError) on these, per RFC-0001 §8.
+    for (final (label, payload) in const [
+      ('overlong prefix', '(c 99:ab)'),
+      ('prefix exactly one too long', '(c 3:ab'),
+      ('truncated after high surrogate count', '(c 2:\ud800'),
+    ]) {
+      test(label, () {
+        expect(() => parse(payload), throwsFormatException);
+      });
+    }
+
+    test('odd-length dictionary', () {
+      expect(() => parse('(c a: 1 b:)'), throwsFormatException);
+    });
   });
 }

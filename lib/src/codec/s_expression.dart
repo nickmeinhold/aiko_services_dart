@@ -139,7 +139,11 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
           i = dataStart;
         } else {
           // Consume `len` CODE POINTS (Python slice semantics) — a surrogate
-          // pair is one code point, two UTF-16 units.
+          // PAIR is one code point, two UTF-16 units, but only a high
+          // surrogate with a LOW surrogate after it forms a pair. A lone
+          // high surrogate is its own code point (matching `String.runes`,
+          // which the encoder counts with) — advancing 2 past `high + ')'`
+          // would swallow the delimiter and corrupt list structure.
           var end = dataStart;
           for (var taken = 0; taken < len; taken++) {
             if (end >= s.length) {
@@ -147,9 +151,10 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
                   'Canonical symbol length $len exceeds remaining input', s, i);
             }
             final unit = s.codeUnitAt(end);
-            end += (unit >= 0xD800 && unit <= 0xDBFF && end + 1 < s.length)
-                ? 2
-                : 1;
+            final isPair = (unit & 0xFC00) == 0xD800 &&
+                end + 1 < s.length &&
+                (s.codeUnitAt(end + 1) & 0xFC00) == 0xDC00;
+            end += isPair ? 2 : 1;
           }
           result.add(s.substring(dataStart, end));
           i = end;
