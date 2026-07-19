@@ -267,6 +267,30 @@
       ]
     },
     {
+      "payload": "(cmd a b c: 1 d: 2)",
+      "command": "cmd",
+      "cdr": [
+        "a",
+        "b",
+        "c:",
+        "1",
+        "d:",
+        "2"
+      ]
+    },
+    {
+      "payload": "(a b) trailing junk",
+      "command": "a",
+      "cdr": [
+        "b"
+      ]
+    },
+    {
+      "payload": "(c)(evil a: 1)",
+      "command": "c",
+      "cdr": []
+    },
+    {
       "payload": "(empty \"\")",
       "command": "empty",
       "cdr": [
@@ -318,6 +342,33 @@
         "\udc00",
         "b"
       ]
+    }
+  ],
+  "parse_errors": [
+    {
+      "payload": "(c a: 1 b:)",
+      "raises": "ValueError",
+      "message": "Error parsing S-Expression dictionary starting at keyword \"a:\", must have pairs of keywords and values"
+    },
+    {
+      "payload": "(c a: 1 (x y) 2)",
+      "raises": "ValueError",
+      "message": "Error parsing S-Expression dictionary starting at keyword \"['x', 'y']\", keyword must be a string"
+    },
+    {
+      "payload": "(c a: 1 b c: 2 d)",
+      "raises": "ValueError",
+      "message": "Error parsing S-Expression dictionary starting at keyword \"b\", keyword must end with \":\" character"
+    },
+    {
+      "payload": "(c 99:ab)",
+      "raises": "TypeError",
+      "message": "unsupported operand type(s) for +=: 'int' and 'list'"
+    },
+    {
+      "payload": "(c a b",
+      "raises": "TypeError",
+      "message": "unsupported operand type(s) for +=: 'int' and 'list'"
     }
   ]
 }

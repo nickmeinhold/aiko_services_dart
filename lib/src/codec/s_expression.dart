@@ -27,6 +27,36 @@ library;
 /// parser.py's `RE_DELIMITERS`.
 final RegExp _reDelimiters = RegExp(r'^\d+:|[\s()]');
 
+// ─────────────────────────────────────────────────────────────────────────
+// Code-point stepping — the SINGLE definition of "one Unicode code point",
+// shared by encode (length counting) and decode (symbol walking) so the two
+// sides can never drift back into the UTF-16-vs-code-point split that once
+// corrupted every astral character on the wire (82481b5).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// UTF-16 index just past the one code point that begins at [i].
+///
+/// A high surrogate is paired with a *following low surrogate* into one code
+/// point of two units; every other unit — including a LONE surrogate — is one
+/// code point of one unit (matching `String.runes` and Python `len`).
+int _codePointEnd(String s, int i) {
+  final unit = s.codeUnitAt(i);
+  final isPair = (unit & 0xFC00) == 0xD800 &&
+      i + 1 < s.length &&
+      (s.codeUnitAt(i + 1) & 0xFC00) == 0xDC00;
+  return i + (isPair ? 2 : 1);
+}
+
+/// Number of Unicode code points in [s] — Python `len(str)` semantics, the
+/// count the wire length prefix MUST use.
+int _codePointCount(String s) {
+  var n = 0;
+  for (var i = 0; i < s.length; i = _codePointEnd(s, i)) {
+    n++;
+  }
+  return n;
+}
+
 /// Port of `parser.py:generate(command, parameters)`.
 ///
 /// [parameters] is a `List<Object?>` of positional args, or a
@@ -64,8 +94,9 @@ String _generateSExpression(List<Object?> expression) {
     if (element is String && _reDelimiters.hasMatch(element)) {
       // Length counts Unicode CODE POINTS (Python len semantics), not UTF-16
       // code units — `a 😀` is `3:a 😀`, never `4:`. Divergence here silently
-      // corrupts astral-plane characters on the wire (probed 2026-07-18).
-      element = '${element.runes.length}:$element';
+      // corrupts astral-plane characters on the wire (probed 2026-07-18). The
+      // count comes from the SAME stepper the decoder walks with (_codePointEnd).
+      element = '${_codePointCount(element)}:$element';
     }
     if (element is Map) {
       element = _dictToList(element);
@@ -123,8 +154,13 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
 
 /// Index-based port of parser.py's recursive tokeniser. Parses atoms until a
 /// matching `)` (returning one past it) or end of input. A `(` recurses to a
-/// nested list.
-(List<Object?>, int) _parseTokens(String s, int start) {
+/// nested list with [mustClose] set: a nested frame that reaches end of input
+/// without its `)` is unterminated and MUST reject cleanly (RFC-0001 §8.1),
+/// where the reference implementation instead crashes with an internal
+/// `TypeError`. Only the top-level frame (which sits *after* the outer `)`) is
+/// allowed to reach end of input.
+(List<Object?>, int) _parseTokens(String s, int start,
+    {bool mustClose = false}) {
   final result = <Object?>[];
   var token = '';
   var i = start;
@@ -138,23 +174,18 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
           result.add(null); // `0:` encodes null
           i = dataStart;
         } else {
-          // Consume `len` CODE POINTS (Python slice semantics) — a surrogate
-          // PAIR is one code point, two UTF-16 units, but only a high
-          // surrogate with a LOW surrogate after it forms a pair. A lone
-          // high surrogate is its own code point (matching `String.runes`,
-          // which the encoder counts with) — advancing 2 past `high + ')'`
-          // would swallow the delimiter and corrupt list structure.
+          // Consume `len` CODE POINTS (Python slice semantics) via the SAME
+          // stepper the encoder counts with (_codePointEnd): a surrogate PAIR
+          // is one code point, a LONE surrogate is its own code point — so
+          // advancing 2 past `high + ')'` can never swallow the delimiter and
+          // corrupt list structure.
           var end = dataStart;
           for (var taken = 0; taken < len; taken++) {
             if (end >= s.length) {
               throw FormatException(
                   'Canonical symbol length $len exceeds remaining input', s, i);
             }
-            final unit = s.codeUnitAt(end);
-            final isPair = (unit & 0xFC00) == 0xD800 &&
-                end + 1 < s.length &&
-                (s.codeUnitAt(end + 1) & 0xFC00) == 0xDC00;
-            end += isPair ? 2 : 1;
+            end = _codePointEnd(s, end);
           }
           result.add(s.substring(dataStart, end));
           i = end;
@@ -170,7 +201,7 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
     }
     final c = s[i];
     if (c == '(') {
-      final (sublist, j) = _parseTokens(s, i + 1);
+      final (sublist, j) = _parseTokens(s, i + 1, mustClose: true);
       i = j;
       result.add(sublist);
     } else if (c == ')') {
@@ -186,6 +217,10 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
       token += c;
       i++;
     }
+  }
+  if (mustClose) {
+    throw FormatException(
+        'Unterminated list: expected ")" before end of input', s, s.length);
   }
   if (token.isNotEmpty) result.add(token);
   return (result, i);
@@ -205,12 +240,30 @@ Object _listToDict(Object tree) {
     }
     final map = <String, Object?>{};
     for (var i = 0; i < tree.length ~/ 2; i++) {
-      final keyword = (tree[i * 2] as String);
+      // Every even-indexed element is a keyword: it MUST be a string ending in
+      // `:` (parser.py parse_list_to_dict raises ValueError otherwise). Without
+      // these guards a mixed positional+keyword payload like `(c a: 1 b c: 2 d)`
+      // silently strips the last char off `b`/`2`, colliding empty keys into a
+      // structurally-plausible-but-wrong dict instead of rejecting.
+      final keyword = tree[i * 2];
+      if (keyword is! String) {
+        throw FormatException(
+            'S-expression dictionary keyword "$keyword" must be a string');
+      }
+      // Faithful to parser.py: the `:` check is skipped for an empty keyword
+      // (its `len()` guard), which then maps to the empty key.
+      if (keyword.isNotEmpty && !keyword.endsWith(':')) {
+        throw FormatException(
+            'S-expression dictionary keyword "$keyword" must end with ":"');
+      }
       final value = tree[i * 2 + 1];
-      map[keyword.substring(0, keyword.length - 1)] =
-          value == null ? null : _listToDict(value);
+      final key =
+          keyword.isEmpty ? '' : keyword.substring(0, keyword.length - 1);
+      map[key] = value == null ? null : _listToDict(value);
     }
     return map;
   }
-  return [for (final element in tree) element == null ? null : _listToDict(element)];
+  return [
+    for (final element in tree) element == null ? null : _listToDict(element)
+  ];
 }
