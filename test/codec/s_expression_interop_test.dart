@@ -67,12 +67,28 @@ void main() {
     }
   });
 
-  group('malformed input is rejected with FormatException', () {
-    // Error-CLASS coverage only. Exact parity with parser.py's behaviour on
-    // malformed input is tracked in the hardening task: the Python reference
-    // currently crashes (unhandled TypeError) on these, per RFC-0001 §8.
+  group('parse() rejects what the Python reference rejects', () {
+    // Oracle-pinned error parity: every payload the reference fails to decode
+    // (recorded with its own exception type in the fixture) the Dart codec MUST
+    // reject with a clean FormatException. The reference's rejection is a clean
+    // ValueError (RFC-0001 §7 MUST-reject) for the dictionary cases and an
+    // unhandled crash (§8 errata) for the unterminated/overlong cases; §7 only
+    // requires that the input not decode SUCCESSFULLY, which we assert here.
+    for (final vector in fixture['parse_errors'] as List) {
+      final v = vector as Map<String, dynamic>;
+      final payload = v['payload'] as String;
+      final raises = v['raises'] as String;
+      test('$payload (reference: $raises)', () {
+        expect(() => parse(payload), throwsFormatException);
+      });
+    }
+  });
+
+  group('parse() rejects malformed input (Dart-only boundary probes)', () {
+    // Finer-grained boundary cases not in the reference fixture: a length
+    // prefix one past the end, and a truncation mid-surrogate. Both exercise
+    // the length-walk's remaining-input bound (RFC-0001 §8.2 clean rejection).
     for (final (label, payload) in const [
-      ('overlong prefix', '(c 99:ab)'),
       ('prefix exactly one too long', '(c 3:ab'),
       ('truncated after high surrogate count', '(c 2:\ud800'),
     ]) {
@@ -80,9 +96,5 @@ void main() {
         expect(() => parse(payload), throwsFormatException);
       });
     }
-
-    test('odd-length dictionary', () {
-      expect(() => parse('(c a: 1 b:)'), throwsFormatException);
-    });
   });
 }

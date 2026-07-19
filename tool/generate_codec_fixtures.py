@@ -77,6 +77,10 @@ PARSE_CASES = [
     "(a b: 1 c: (d: 1 e: 2))",
     "(a 0: b)",                              # canonical null consumed pre-dict
     "(a b ())",                              # empty nested list
+    # Mixed positional-THEN-keyword: because the first cdr element is positional
+    # ("a"), dict detection never fires and the "c:"/"d:" markers stay literal
+    # atoms. Pinned so nobody "fixes" this into a partial dict later.
+    "(cmd a b c: 1 d: 2)",
     '(empty "")',
     "(emoji 3:a \U0001F600)",                # astral: 3 code points, 4 UTF-16
     "(emoji 4:\U0001F600\U0001F389 x b)",    # astral prefix mid-list
@@ -87,9 +91,37 @@ PARSE_CASES = [
 ]
 
 
+# ---- parse() error cases: payloads the reference REJECTS ----------------
+# The success suite is oracle-pinned but blind to malformed input; a codec can
+# be self-consistently wrong on the error paths too. Each payload here MUST
+# fail to decode under the reference. We record the reference exception type so
+# the Dart side can assert "rejects" against real Python behaviour, not an
+# author's guess. Two flavours:
+#   * ValueError — a DELIBERATE reference rejection (RFC-0001 §7 MUST-reject).
+#   * TypeError  — an UNDELIBERATE reference crash (RFC-0001 §8 errata); the
+#                  spec only requires "does not decode successfully".
+PARSE_ERROR_CASES = [
+    "(c a: 1 b:)",         # §7: odd-length dictionary
+    "(c a: 1 (x y) 2)",    # §7: keyword-position element is not a string
+    "(c a: 1 b c: 2 d)",   # §7: keyword-position string does not end with ":"
+    "(c 99:ab)",           # §8.2: overlong length prefix (reference crashes)
+    "(c a b",              # §8.1: unterminated list (reference crashes)
+]
+
+
 def car_cdr(payload):
     command, cdr = parser.parse(payload)
     return {"payload": payload, "command": command, "cdr": cdr}
+
+
+def parse_error(payload):
+    try:
+        parser.parse(payload)
+    except Exception as e:  # noqa: BLE001 — recording the reference's own type
+        return {"payload": payload, "raises": type(e).__name__,
+                "message": str(e)}
+    raise AssertionError(
+        f"PARSE_ERROR_CASES vector decoded successfully: {payload!r}")
 
 
 def main():
@@ -101,6 +133,7 @@ def main():
             for c, p in GENERATE_CASES
         ],
         "parse": [car_cdr(p) for p in PARSE_CASES],
+        "parse_errors": [parse_error(p) for p in PARSE_ERROR_CASES],
     }
     out = os.path.join(
         HERE, "..", "test", "codec", "fixtures", "s_expression_golden.json")
@@ -110,7 +143,8 @@ def main():
         json.dump(fixture, f, indent=2)
         f.write("\n")
     print(f"wrote {len(fixture['generate'])} generate + "
-          f"{len(fixture['parse'])} parse vectors -> {out}")
+          f"{len(fixture['parse'])} parse + "
+          f"{len(fixture['parse_errors'])} parse-error vectors -> {out}")
 
 
 if __name__ == "__main__":
