@@ -279,6 +279,18 @@
       ]
     },
     {
+      "payload": "(a b) trailing junk",
+      "command": "a",
+      "cdr": [
+        "b"
+      ]
+    },
+    {
+      "payload": "(c)(evil a: 1)",
+      "command": "c",
+      "cdr": []
+    },
+    {
       "payload": "(empty \"\")",
       "command": "empty",
       "cdr": [

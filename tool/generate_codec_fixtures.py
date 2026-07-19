@@ -81,6 +81,12 @@ PARSE_CASES = [
     # ("a"), dict detection never fires and the "c:"/"d:" markers stay literal
     # atoms. Pinned so nobody "fixes" this into a partial dict later.
     "(cmd a b c: 1 d: 2)",
+    # Trailing data after the first complete list is SILENTLY IGNORED by the
+    # reference (car/cdr reads only tree[0]). Pinned as PARITY — a stricter Dart
+    # envelope check would decode a payload the Python wire end accepts, so the
+    # two ends would disagree. Includes a smuggled second list, which is dropped.
+    "(a b) trailing junk",
+    "(c)(evil a: 1)",
     '(empty "")',
     "(emoji 3:a \U0001F600)",                # astral: 3 code points, 4 UTF-16
     "(emoji 4:\U0001F600\U0001F389 x b)",    # astral prefix mid-list

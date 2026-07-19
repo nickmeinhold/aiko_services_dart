@@ -254,6 +254,18 @@ revision could length-prefix all data symbols ending in `:`, making the
 grammar unambiguous; this would change canonical output and therefore needs
 a coordinated version bump.
 
+### 8.5. Trailing data after the first list
+
+The reference reads only the first parsed element (`tree[0]`) as the payload's
+car/cdr, so anything after the first complete list is silently discarded:
+`(c) garbage` and `(c)(evil a: 1)` both decode as `('c', [])`. The Dart
+implementation mirrors this exactly — a stricter Dart envelope check would
+reject payloads the reference *accepts*, making the two ends of the wire
+disagree, which is a worse failure than lenient parity. A future revision that
+wants strict single-list envelopes must change `parser.py` (§10) so both ends
+move together. Recorded, not endorsed; pinned as a parity vector in the
+conformance suite.
+
 ## 9. Security considerations
 
 - **No escape mechanism** (§3.4) and **content-blind length prefixes**
