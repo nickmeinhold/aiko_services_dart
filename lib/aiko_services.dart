@@ -4,3 +4,4 @@ library;
 
 export 'src/codec/s_expression.dart';
 export 'src/dispatch/message_dispatcher.dart';
+export 'src/transport/mqtt_transport.dart';
