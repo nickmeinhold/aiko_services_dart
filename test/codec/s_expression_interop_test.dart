@@ -7,6 +7,7 @@
 /// agrees byte-for-byte with the exact code on Andy's wire — not merely that
 /// it is self-consistent. (A codec tested only against its own inverse can be
 /// self-consistently wrong.)
+library;
 import 'dart:convert';
 import 'dart:io';
 

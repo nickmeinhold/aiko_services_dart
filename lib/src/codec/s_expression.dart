@@ -175,9 +175,7 @@ void _writeSExpression(StringBuffer buffer, List<Object?> expression) {
     if (element is String && element == '') {
       character = ' ""';
     }
-    if (element == null) {
-      element = '0:';
-    }
+    element ??= '0:';
     buffer.write(character);
     buffer.write(element);
     character = ' ';
@@ -385,7 +383,7 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
 /// String ending in `:` is a keyword dictionary; otherwise it stays a list
 /// (recursively converting nested lists). Keeps `null` and atoms as-is.
 Object _listToDict(Object tree) {
-  if (tree is! List || tree.isEmpty) return tree;
+  if (tree is! List<Object?> || tree.isEmpty) return tree;
   final head = tree[0];
   if (head is String && head.isNotEmpty && head.endsWith(':')) {
     if (tree.length.isOdd) {

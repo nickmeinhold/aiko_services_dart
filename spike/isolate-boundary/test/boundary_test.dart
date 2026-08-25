@@ -2,6 +2,7 @@
 /// Aiko's Python wire contract and the Dart isolate boundary. Claims are capped
 /// to exactly what the test crosses (the composition spike's one miss was
 /// over-generalizing a local proof — not repeated here).
+library;
 import 'dart:isolate';
 
 import 'package:isolate_boundary_spike/boundary.dart';

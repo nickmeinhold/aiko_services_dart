@@ -3,6 +3,7 @@
 /// A composed-mixin actor (same idiom as the composition spike) is invoked
 /// purely by S-expression command payloads through a MessageDispatcher, with
 /// no reference to the object crossing any boundary.
+library;
 import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 

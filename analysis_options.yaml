@@ -1,0 +1,22 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    # No implicit `dynamic` anywhere: an unsound implicit cast, an inferred
+    # `dynamic` from a missing type argument, or a bare generic all become
+    # errors rather than silently-typed holes.
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    avoid_dynamic_calls: error
+
+linter:
+  rules:
+    - avoid_dynamic_calls
+    - avoid_returning_null_for_void
+    - cancel_subscriptions
+    - close_sinks
+    - comment_references
+    - prefer_final_locals
+    - unawaited_futures
