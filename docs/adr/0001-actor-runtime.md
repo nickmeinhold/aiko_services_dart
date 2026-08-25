@@ -1,9 +1,11 @@
 # ADR-0001 — The Dart Actor runtime
 
-- **Status:** proposed — **revision 3 (recast)**, 2026-08-26. Revision 1 returned RECAST on 13
-  flaws (`0001-TEMPER.md`); revision 2 returned RECAST on 9 more (`0001-TEMPER-round2.md`),
-  unanimous across all four families. This revision folds all 9. **Round 3 is the last permitted
-  round.** No `lib/` code until it returns SOUND.
+- **Status:** proposed — **revision 4 (subtraction)**, 2026-08-26. Revision 1 returned RECAST on 13
+  flaws (`0001-TEMPER.md`); revision 2 returned RECAST on 9 more (`0001-TEMPER-round2.md`);
+  revision 3 returned NOT SOUND (`0001-TEMPER-round3.md`) with all four families converging on the
+  same fold — **delete parking**. Revision 4 is that subtraction plus the two fences it does not
+  remove. The three-round budget is **spent**; whether the simplified design gets one confirmation
+  strike is an open process question (§6e).
 - **Date:** 2026-08-25, recast 2026-08-26
 - **Context:** first framework code in `lib/`; everything after it inherits these shapes
 - **Mandate:** Nick, 2026-08-25 — *"framework port should be designed, not just ported"*
@@ -113,48 +115,58 @@ express the other two reasons, which are the ones that actually require a queue:
 3. **Completion-ordering across `await` points.** Real, necessary, and the cheapest of the three
    to obtain.
 
-### 2.3 Replies: conform to `do_request()`, and park the turn
+### 2.3 Replies: conform to `do_request()`, all the way
 
-All four families found the same flaw in revision 1: if the mailbox awaits each handler to
-completion and a reply arrives *as a message*, a handler that `await`s a reply wedges forever.
-Python is immune because `Message.invoke()` is **synchronous** — a Python handler physically
-cannot suspend mid-flight.
+All four families found revision 1's reentrancy deadlock: a mailbox that awaits each handler to
+completion, plus replies arriving as messages, wedges any handler that `await`s a reply. Python is
+immune because `Message.invoke()` is **synchronous**.
 
-The reference's answer is structural, and revision 2 correctly found it:
-`discovery.py::do_request()` has the caller nominate a **`response_topic`**, registers the
-handler at **process** level via `add_message_handler()`, fires `do_command()` and **returns
-immediately**. `pipeline.py:1873`'s `topic_response_handler` uses the identical shape, so this is
-a pattern with two independent call sites, not one function's habit.
+The reference's answer: `discovery.py::do_request()` has the caller nominate a **`response_topic`**,
+registers the handler at **process** level via `add_message_handler()`, fires `do_command()` and
+**returns immediately**. `pipeline.py:1873`'s `topic_response_handler` is the identical shape — two
+independent call sites, so this is the reference's pattern, not one function's habit.
 
-**Revision 2 then reintroduced the bug it had just diagnosed** by floating an `await`-shaped
-`Completer` API. Tesla: the reference *returns immediately*, and that is precisely why Python
-never holds an actor across a round-trip. An `await ask(...)` inside a handler head-of-line blocks
-the mailbox for **unbounded peer latency**.
+**Revisions 2 and 3 each tried to keep `await` ergonomics on top of that, and both failed.**
+Revision 2 floated an `await`-shaped `Completer`, which head-of-line blocks for unbounded peer
+latency. Revision 3 invented *parking* — awaiting would release the turn and the continuation would
+re-enter as a fresh turn. Round 3 killed it unanimously, on a fact about the language:
 
-**Decision — `ask` parks the turn.** The handler may `await`, but awaiting **releases the actor's
-turn**; the mailbox immediately dequeues the next message. When the reply lands, the continuation
-is queued and runs as a **fresh turn**.
+> **`await t.ask()` does not yield a mailbox turn.** Completing that Future resumes the handler as
+> a **microtask** — precisely the side door §2.4 exists to nail shut. The mailbox never owns "the
+> rest of the function."
+
+It also failed *deterministically where it mattered most*: §5's in-memory loopback completes a reply
+synchronously, so parking would be guaranteed **absent** on the uniform local/remote path that is
+§2.2's reason 2 — the very reason the mailbox exists. And it bought nothing: completion-ordering
+across the `await` was surrendered, while the two remaining justifications are exactly what the
+simple form still provides.
+
+**Decision — strict continuation style. A handler does not `await` a reply.**
 
 ```dart
-Future<void> join(String id, Turn t) async {
-  final (profile, t2) = await t.ask<Profile>(directory, GetProfile(id));
-  // t is spent. t2 is a NEW turn; other messages ran in between.
-  if (!profile.banned) t2.addMember(id);
+void join(String id) {
+  ask(directory, GetProfile(id), replyTo: onProfile, context: id);
+  // handler ends here. The actor keeps serving.
+}
+
+void onProfile(Profile profile, String id) {   // a fresh turn, via the mailbox
+  if (!profile.banned) addMember(id);
 }
 ```
 
-This keeps `await`'s ergonomics, keeps the actor live throughout, and honours §2.4's law exactly
-— the continuation *does* re-enter through the mailbox. What it costs is that **anything read
-before the `await` may be stale after it**, which is what D9 exists to catch.
+Two methods instead of one, and a multi-step request becomes N handlers. **That is the honest
+price, and it is the only proposal in three rounds that no family could break.** What the
+subtraction removes in one edit: the reply-before-park race, the loopback determinism hole, nested
+and concurrent `ask` semantics, continuation ordering, and the ownership of a parked caller's
+Future. `dir-id 5e1f` — remove the coupling, do not guard the window.
 
-Constraints inherited from the reference, not negotiable: reply reassembly is a **process-level**
-state machine (`(item_count N)` then N × `(response …)`) with its own timeout, and each
-`response_topic` is **single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`,
-identity-as-mutable-key).
+Inherited constraints, not negotiable: reply reassembly is a **process-level** state machine
+(`(item_count N)` then N × `(response …)`) with its own timeout, and each `response_topic` is
+**single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`).
 
-*(Candidate, not settled: parking is one hour old at the time of writing and has not been struck.
-Round 3 must hit it. The fallback if it fails is strict continuation style — `ask(…, replyTo:)`
-with no `await` — which is uglier but certainly correct.)*
+**Handlers should be synchronous wherever possible.** With replies no longer awaited, the remaining
+reasons to `await` inside a handler are local I/O — and each one holds the turn for its duration.
+That is a real constraint on authors and it is the same one Python imposes.
 
 ### 2.4 The closure law
 
@@ -218,10 +230,18 @@ Prototyped and run on Dart 3.13 with both controls: the stale arm throws
 `value read in turn 0 used in turn 1`, the re-read arm succeeds. The remaining gap — reaching for
 the dead `t` at all — is a dataflow lint (`custom_lint`), feasible and **not yet written**.
 
-**Scope deliberately narrow.** Turn-branding applies to mutations that **leave the actor** —
-`share.update()` and `publish()` — not to every private field read. That is the set where a stale
-value becomes a *wire-visible lie* that remote ECConsumers converge on. Private tearing stays
-local; a bad publish poisons the mesh.
+**The fence is ABSOLUTE — revision 3's narrowing was fatal.** Revision 3 branded only
+`share.update()` and `publish()`, arguing private tearing "stays local". Carnot supplied the
+mechanism that refutes it: a timed-out handler sets `_memberBanned = false`, fails to publish
+because its Turn is dead, and **a later valid turn reads that private field and publishes it with
+live authority. The lie leaves the actor one turn later, laundered through fresh authority.**
+Kelvin: *"the fence is a decorative feature ... ensuring eventual wire-visible corruption. There is
+no middle ground."*
+
+So a dead epoch may not: write private state, publish, update the share, **enqueue a message,
+start a timer, initiate an ask, complete an actor-visible Completer, or consume reserved mailbox
+headroom.** The rule is **authority**, not egress: *a dead epoch cannot schedule work.* Actor state
+is private behind the turn context; there are no freely-writable fields for a closure to capture.
 
 **A timed-out handler is therefore fenced, not killed.** It keeps running (Dart offers nothing
 else), but its epoch is dead, so its writes are rejected and its publishes suppressed, both
@@ -440,6 +460,36 @@ that do not cross the boundary, and one isolate's memory.
 The handler timeout survives, with its purpose corrected: it exists for **head-of-line
 loudness**, sized independently of the keepalive interval. D8 no longer claims it protects pings.
 
+**Two consequences round 3 found, and neither is optional.**
+
+**(1) Failure-linking, or we trade a false-negative for a false-positive.** Rounds 1 and 2 fixed
+"a busy process is declared dead". Round 3 found the inverse: **Dart isolates are not
+failure-linked by default**, so if the actor isolate wedges — or *dies* — the transport isolate
+keeps pinging, the broker withholds the last will, and **the fleet never fails over a corpse whose
+heart still beats on the other side of the port.** Test ● 5 goes *green* for that death.
+The LWT is our only liveness signal, and D8 has just decoupled it from the organ whose liveness it
+reports. **The actor isolate must periodically prove it is serving; if that proof lapses, the
+transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
+observable, not to the nearest green thing one hop before it.
+
+**(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** §2.6's carefully
+classed overflow table is defeated one layer upstream: drop-newest fires only *after* the port has
+already eaten the RAM and MQTT QoS has already ACKed, and `(absent)` / disconnect sit behind bulk
+publishes with no reserved headroom on the port. **Credit-based backpressure across the boundary**
+— the transport isolate issues credits, `publish()` consumes one, no credit means no send — with
+reserved credits for control frames. Kelvin: *"a system without a control loop is just a pipe
+waiting to burst."*
+
+Also inherited from the boundary and to be specified with it: per-topic ordering (one `SendPort`
+preserves order; control-vs-bulk does not), error propagation, connection-lost/reconnect and
+session state living only on the transport isolate while the runtime believes it is connected, and
+outbound flush during `close()`.
+
+**The publish fence sites in the MAIN isolate, before the `SendPort`.** §2.5 suppresses a dead
+epoch's publishes; if that check runs anywhere downstream the bytes are already across the boundary
+and the zombie has published. Test ● 2 asserts *"any byte reaches the broker"*, so the mechanism
+must sit upstream of the hand-off.
+
 **Open, and honest: the web has no real isolates.** Compiled to JavaScript, `Isolate.spawn` maps
 onto web workers with far tighter constraints, so this mitigation is unavailable for the browser
 target (#3240 / #2268). That build needs its own answer — likely "keep handlers non-blocking and
@@ -522,9 +572,17 @@ wire", so neither needs new authority — but both are reversible and flagged fo
 - **(c) MQTT on its own isolate (D8).** Taken: yes, as the default. An architecture cost, arrived
   at independently by two families once revision 2's timeout was shown incapable of protecting a
   keepalive. Flagged because it is a real cost, not because the engineering is uncertain.
-- **(d) Parking the turn (§2.3) is a CANDIDATE, not a decision.** It is hours old and unstruck,
-  and it is the newest load-bearing idea in the document. Round 3 must aim at it. Fallback:
-  strict continuation style, uglier and certainly correct.
+- **(d) Parking — CLOSED, deleted.** Struck unanimously in round 3 on a fact about the language
+  (an `await`'s continuation resumes as a microtask; the mailbox never owns it). Strict
+  continuation style adopted (§2.3). Recorded so it is not reinvented: the idea is attractive and
+  it does not work.
+- **(e) THE PROCESS QUESTION — Nick's, and the real one.** Three rounds, three non-SOUND verdicts,
+  budget spent. But rounds 2 and 3 were consumed almost entirely by **one mechanism invented
+  mid-loop** (parking), not by the inherited design — three rounds found *nothing new* in §1 or
+  D1–D7. With parking removed the document is round 1's survivors plus specification work. The
+  options: one confirmation strike on the **simplified** design; accept as-is and build; or split
+  §2 into its own ADR on its own timeline. The lesson either way (`dir-id 7c6e`): a strike is an
+  adversary, not a collaborator, and designing *inside* the loop is an expensive way to use it.
 
 **Resolved and not to be re-litigated:** the explicit `AikoRuntime` (D1, Nick 2026-08-25);
 Castaway is a Null Object and not a transport, so #3240/#2268 are conformance work against the
