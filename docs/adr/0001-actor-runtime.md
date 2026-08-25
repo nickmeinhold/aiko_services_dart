@@ -1,9 +1,9 @@
 # ADR-0001 — The Dart Actor runtime
 
-- **Status:** proposed — **revision 2 (recast)**, 2026-08-26. Revision 1 was struck by a
-  four-family design-temper and returned RECAST on 13 flaws; see `0001-TEMPER.md`. This
-  revision folds all 13. It has **not** been re-struck, and no `lib/` code should be written
-  against it until a round-2 strike returns SOUND.
+- **Status:** proposed — **revision 3 (recast)**, 2026-08-26. Revision 1 returned RECAST on 13
+  flaws (`0001-TEMPER.md`); revision 2 returned RECAST on 9 more (`0001-TEMPER-round2.md`),
+  unanimous across all four families. This revision folds all 9. **Round 3 is the last permitted
+  round.** No `lib/` code until it returns SOUND.
 - **Date:** 2026-08-25, recast 2026-08-26
 - **Context:** first framework code in `lib/`; everything after it inherits these shapes
 - **Mandate:** Nick, 2026-08-25 — *"framework port should be designed, not just ported"*
@@ -22,7 +22,14 @@ The lesson is now a design rule of its own, recorded here because it will fire a
 > behaviour is "above the wire", open the reference implementation and read the function that
 > implements it. Four reviewers agreeing is four copies of one premise, not four observations.
 
-Three things changed shape as a result, and one decision inverted outright:
+**Round 2 added a second rule, and it is the one that cost the most:**
+
+> **A fix is not folded until it has a MECHANISM.** Round 2 found that three of revision 1's
+> flaws had been *described* rather than repaired — shutdown, overflow and cancellation were each
+> answered with the phrase "by a stated rule" and no rule. A prose gate is not a gate. Every
+> policy in revision 3 either names its enforcing construct or is explicitly listed as open.
+
+Three things changed shape in revision 2, and one decision inverted outright:
 
 1. **D2/D5 were seam violations.** `lifecycle` is a live, cross-service, remotely-subscribed wire
    key, and `share` is a depth-2 tree, not a flat map. Both are now inherited contract in §1.
@@ -31,6 +38,13 @@ Three things changed shape as a result, and one decision inverted outright:
    handled at *process* level — replies never enter the actor mailbox. We conform (§2.3).
 3. **D8 inverted from a pure win to a priced tradeoff.** Deleting paho's network thread also
    deletes the thing that kept MQTT keepalives alive while a handler thought (D8).
+
+**And revision 2's own fix broke revision 2.** Its handler timeout said "abandon the wait and
+continue draining" — but **Dart cannot cancel a Future**, so the abandoned handler kept running
+and mutated state concurrently with the next one. Worse, it *published*: remote Python
+ECConsumers would converge on a corpse's last thought while the dashboard read `ready`. The
+mechanism added to make a stuck actor observable was the mechanism that made it corrupt. That is
+D9, and it is the centre of this revision.
 
 ## 1. The seam
 
@@ -99,71 +113,146 @@ express the other two reasons, which are the ones that actually require a queue:
 3. **Completion-ordering across `await` points.** Real, necessary, and the cheapest of the three
    to obtain.
 
-### 2.3 The reentrancy deadlock, and why the reference already answers it
+### 2.3 Replies: conform to `do_request()`, and park the turn
 
-All four families independently found this, and it is the flaw that most nearly sank revision 1:
-if the mailbox awaits each handler to completion before dequeuing the next, and a reply arrives
-*as a message*, then any handler that `await`s a reply wedges permanently. Python is immune
-because `Message.invoke()` is **synchronous** — a Python handler physically cannot suspend
-mid-flight — so the idiom forces continuation style. Dart's `async` invites exactly the `await`
-that kills it.
+All four families found the same flaw in revision 1: if the mailbox awaits each handler to
+completion and a reply arrives *as a message*, a handler that `await`s a reply wedges forever.
+Python is immune because `Message.invoke()` is **synchronous** — a Python handler physically
+cannot suspend mid-flight.
 
-The strike proposed reentrancy tokens, bypass lanes and bounded reentrancy. **All three are
-unnecessary.** `discovery.py::do_request()` shows the reference has already solved it, and the
-solution is structural rather than clever:
+The reference's answer is structural, and revision 2 correctly found it:
+`discovery.py::do_request()` has the caller nominate a **`response_topic`**, registers the
+handler at **process** level via `add_message_handler()`, fires `do_command()` and **returns
+immediately**. `pipeline.py:1873`'s `topic_response_handler` uses the identical shape, so this is
+a pattern with two independent call sites, not one function's habit.
 
-- the caller nominates its own **`response_topic`**;
-- the response handler is registered with `aiko.process.add_message_handler()` — at **process**
-  level, not on the actor's mailbox;
-- `do_request()` fires `do_command()` and **returns immediately**;
-- the reply is a multi-part stream, `(item_count N)` followed by N × `(response …)`.
+**Revision 2 then reintroduced the bug it had just diagnosed** by floating an `await`-shaped
+`Completer` API. Tesla: the reference *returns immediately*, and that is precisely why Python
+never holds an actor across a round-trip. An `await ask(...)` inside a handler head-of-line blocks
+the mailbox for **unbounded peer latency**.
 
-**Decision:** conform. Replies are delivered to a process-level response-topic handler and
-**never enter the originating actor's mailbox**. There is therefore no cycle to deadlock, and no
-mechanism to build.
+**Decision — `ask` parks the turn.** The handler may `await`, but awaiting **releases the actor's
+turn**; the mailbox immediately dequeues the next message. When the reply lands, the continuation
+is queued and runs as a **fresh turn**.
 
-**Consequence we accept:** a request cannot be written as `final r = await actor.ask(...)` with
-the reply routed back through the same mailbox. Dart may still offer an `await`-shaped API — a
-`Completer` completed by the process-level response handler — but the completion path must
-provably bypass the mailbox. `dir-id 5e1f`: remove the coupling, do not guard the window.
+```dart
+Future<void> join(String id, Turn t) async {
+  final (profile, t2) = await t.ask<Profile>(directory, GetProfile(id));
+  // t is spent. t2 is a NEW turn; other messages ran in between.
+  if (!profile.banned) t2.addMember(id);
+}
+```
 
-### 2.4 The closure law — what revision 1 promised but did not state
+This keeps `await`'s ergonomics, keeps the actor live throughout, and honours §2.4's law exactly
+— the continuation *does* re-enter through the mailbox. What it costs is that **anything read
+before the `await` may be stale after it**, which is what D9 exists to catch.
 
-§2.1 promises "no message observes torn state". A mailbox alone delivers only "no *mailbox
-message* observes torn state". Every other entry point into actor state is a hole, and D4 opens
-one **by design**. So the guarantee is stated as a law, in Erlang's form:
+Constraints inherited from the reference, not negotiable: reply reassembly is a **process-level**
+state machine (`(item_count N)` then N × `(response …)`) with its own timeout, and each
+`response_topic` is **single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`,
+identity-as-mutable-key).
 
-> **The mailbox is the only legal mutator of actor state. Every I/O completion, timer, reply and
-> stream event that needs to touch the actor re-enters as a message.**
+*(Candidate, not settled: parking is one hour old at the time of writing and has not been struck.
+Round 3 must hit it. The fallback if it fails is strict continuation style — `ask(…, replyTo:)`
+with no `await` — which is uglier but certainly correct.)*
 
-Concrete side doors this closes, all of which mutate *after* the mailbox has dequeued the next
-command: `unawaited(save())`, `Timer(...)`, `stream.listen`, `publish().then`, and any Zone
-microtask closing over `this`. Consequences:
+### 2.4 The closure law
 
-- **D4's `Timer` must enqueue, not execute.** Its callback posts a message; it does not run the
-  handler.
-- D3's error `Stream` is **outbound only** — nothing may mutate actor state from a subscription.
-- Inbound `(update …)` share events from the wire enter through the mailbox like any command.
+Revision 1 promised "no message observes torn state" without stating a closure condition.
+Revision 2 stated one that **contradicted §2.3** — everything re-enters as a message, versus
+replies never entering the mailbox. Kelvin's reformulation, plus Tesla's epoch clause, resolves
+it by distinguishing events that *initiate* work from events that *feed* work already in flight:
 
-This is `dir-id 6b6a` — the single door is the MUTATOR — which revision 1 applied to D2 and
-never applied to §2.
+> **Every event that INITIATES a unit of work on actor state enters as a message.**
+> **Process-level code may only resume the turn that is currently live, or enqueue a new one.**
+> **After a turn's epoch dies, nothing that turn closed over may write or publish.**
 
-### 2.5 Liveness — a hung handler must not be a silent permanent wedge
+Consequences, each with its enforcing construct rather than a promise:
 
-Head-of-line blocking is the cost of §2.4. Priced explicitly:
+| Side door | Enforcement |
+|---|---|
+| `Timer` (D4) | the callback **enqueues**; it never invokes a handler |
+| D3's error `Stream` | outbound only — the type exposes no mutator |
+| transport stream callbacks | deliver into the mailbox, never to an actor method |
+| inbound `(update …)` | enters through the mailbox like any command |
+| a closure capturing `this` | cannot reach state: mutators require a live `Turn` (D9) |
 
-- **Handler timeout**, defaulted and per-actor overridable. On expiry: abandon the wait, surface
-  a `HandlerTimeout` on D3's error stream, continue draining. A wedged actor must be *loud*
-  (`dir-id 3f6b`).
-- **Bounded mailbox** with an explicit overflow policy, also surfaced on the error stream. A
-  broker that never stops must not become an OOM.
-- **Shutdown** drains or discards pending work by a stated rule, and `close()` is observable.
-- **Priority is dequeue ordering, not preemption.** This is a correction, not a clarification:
-  if the mailbox awaits handler A to completion, priority can only reorder *the next dequeue*.
-  It cannot rescue lifecycle, `log_level` or shutdown from a stuck A. The reference is honest
-  about this — `actor.py:241`, *"First mailbox added has priority handling"* — and its roadmap
-  wants a priority mailbox precisely for `(raise_exception …)` (`actor.py:73`). Control traffic
-  that must survive a stuck handler gets a **separate cancellation path**, not a priority number.
+### 2.5 D9 — the epoch fence, and why it is one mechanism not two
+
+**Revision 2's timeout was fatally wrong.** It said "abandon the wait, surface `HandlerTimeout`,
+continue draining." Dart **cannot cancel a Future**. An abandoned handler is not stopped, only
+un-awaited — so it resumes later and mutates concurrently with whatever turn is now live. Kelvin:
+*"a wedged actor is better than a silently corrupt one."*
+
+The fix and the stale-read problem from §2.3 are **the same problem** — *work performed on behalf
+of a turn that is over* — so they get one mechanism.
+
+**Every turn carries an epoch. Every mutation that leaves the actor requires a live turn.**
+
+```dart
+extension type Turn._(({ActorState st, int epoch}) _t) {
+  int get epoch => _t.epoch;
+  bool get live => _t.st.epoch == _t.epoch;
+
+  Future<(R, Turn)> ask<R>(...) async { /* parks; bumps epoch; returns a new Turn */ }
+}
+
+extension type Reading<T>._(({T value, int epoch}) _r) {
+  T at(Turn t) {                       // unwrapping REQUIRES naming a turn
+    if (t.epoch != _r.epoch) throw StaleReadError(_r.epoch, t.epoch);
+    return _r.value;
+  }
+}
+```
+
+Two properties, and they are different in kind — the distinction matters:
+
+- **Compile-time, genuinely enforced.** `Reading<int>` is *not* an `int`. It cannot be added,
+  printed, or passed where an `int` goes. The only way to the value is `.at(someTurn)`. A stale
+  read therefore **cannot be used silently** — the language forces the author to name a turn at
+  every use site.
+- **Runtime.** Dart has no linear types, so `ask` cannot *consume* `t`; presenting the dead turn
+  is caught by the epoch check and throws deterministically at the exact line.
+
+Prototyped and run on Dart 3.13 with both controls: the stale arm throws
+`value read in turn 0 used in turn 1`, the re-read arm succeeds. The remaining gap — reaching for
+the dead `t` at all — is a dataflow lint (`custom_lint`), feasible and **not yet written**.
+
+**Scope deliberately narrow.** Turn-branding applies to mutations that **leave the actor** —
+`share.update()` and `publish()` — not to every private field read. That is the set where a stale
+value becomes a *wire-visible lie* that remote ECConsumers converge on. Private tearing stays
+local; a bad publish poisons the mesh.
+
+**A timed-out handler is therefore fenced, not killed.** It keeps running (Dart offers nothing
+else), but its epoch is dead, so its writes are rejected and its publishes suppressed, both
+reported on D3's stream. `HandlerTimeout` becomes true rather than reassuring.
+
+### 2.6 The policies revision 2 named but did not design
+
+Round 2 found these as a **class**, not three items (`dir-id 3c9d`), so they are swept together.
+
+**Shutdown.** `close()` stops admission, drains for a bounded grace period, then kills the
+remaining epoch. In-flight handlers are fenced, not awaited. Pending mailbox entries are reported
+on D3's stream, never dropped silently. Note from §1: a **clean `disconnect()` does not fire the
+last will** — so a `close()` that cannot finish must publish `(absent)` itself rather than relying
+on the broker.
+
+**Overflow, by message class** — one undifferentiated policy was the round-2 finding:
+
+| Class | Policy on a full mailbox |
+|---|---|
+| lifecycle / shutdown / cancellation | **never dropped** — reserved headroom |
+| reply continuation for in-flight work | never dropped — it completes work already begun |
+| delayed timer expiry (D4) | never dropped — its deadline was already accepted |
+| inbound remote command | drop **newest**, report on D3 |
+| local command | reject at the call site — the caller is present to be told |
+
+Drop-oldest is rejected outright: it replays the past and discards the present.
+
+**Cancellation** is the epoch kill of §2.5, not a concurrent mutator and not a priority number.
+Priority remains **dequeue ordering, not preemption** — with a stuck handler, only the epoch kill
+recovers the actor, which is why control traffic gets reserved headroom above rather than a
+higher priority.
 
 ## 3. Decisions
 
@@ -259,12 +348,22 @@ layer, the snapshot-merge rules and the dual-writer problem rather than specifyi
 - Framework keys (`lifecycle`, `log_level`, `running`) are **reserved centrally**; an application
   write to a reserved key is rejected at the mutator with an error on D3's stream.
 - Depth > 2 is rejected at the mutator, matching the reference's `ValueError`.
-- **Inbound is specified, in both directions.** An invalid framework value from a peer
-  (`(update log_level junk)`) is neither thrown (a malformed remote message must not kill an
-  actor) nor silently ignored (that is exactly the silence D3 exists to abolish): the value is
-  rejected, the previous value retained, and the rejection surfaced on the error stream.
-- `(remove <framework-key>)` from a peer is rejected the same way — a reserved key cannot be
-  removed.
+- **TWO inbound paths, because there is a tree per consumed topic** (round-2 flaw 6, Tesla).
+  Revision 2 wrote one mutator law for one tree, which is wrong for a mesh:
+  - **Our own `/control`** — an invalid framework value (`(update log_level junk)`) or a
+    `(remove <framework-key>)` is **rejected**, the previous value retained, the rejection
+    surfaced on D3's stream. Neither thrown (a malformed remote message must not kill an actor)
+    nor silently ignored (the silence D3 abolishes).
+  - **An ECConsumer replica of a peer's share** — we **store what the producer sent** and warn on
+    D3. We do *not* "correct" another service's state. Rejecting it would make Dart diverge from
+    the mesh it exists to converge with, while `pipeline.py:287` still reads whatever the peer
+    actually stored.
+- **The sealed view carries an `unknown` case.** When Python adds a lifecycle string we have not
+  enumerated, a closed Dart type would be blind to a state Python branches on. `unknown(String)`
+  preserves the value and keeps exhaustiveness honest.
+- **The tree never leaks a nested `Map`.** Handing `share['metrics']` to application code creates
+  a dual writer by alias — mutation with no mutator, no reserved-key check, no `ec_producer`
+  notification. Nested access returns copies or turn-scoped views, never the live map.
 - A missing intermediate path is a **reported** drop, not a silent one — the one place we are
   deliberately louder than the reference while remaining wire-identical.
 
@@ -314,58 +413,92 @@ code that waits on the paho thread for a condition driven by an *incoming* messa
 *Dart:* there is no second thread. The hop is a Python artifact, and **that** deadlock class
 cannot be constructed here.
 
-**RECAST — revision 1 stopped there, and that was the most consequential error in the document.**
-Deleting the network thread also deletes what it was doing for us. **MQTT keepalives now share
-the isolate with application handlers.** A slow handler — a fat S-expression parse, a long
-`await` — blocks pings; the broker fires the retained last will `(absent)` on
-`{ns}/{host}/{pid}/0/state`; and **the fleet fails over a process that was only busy.** Python's
-two-thread hop was ugly, and it also kept the heart beating while the actor thought.
+**RECAST TWICE.** Revision 1 called the thread-collapse a pure win. Revision 2 attached a cost
+but got the **physics wrong**, and Tesla caught it:
 
-Mitigations, to be chosen with measurement (`dir-id db83`) rather than by assertion:
+- **A long `await` does not block keepalives at all.** Timers and socket callbacks run during an
+  await — that is what an event loop is *for*. Revision 2 proposed bounding handler *wall-clock*
+  duration, which is the wrong quantity.
+- **The danger is uninterrupted SYNCHRONOUS work** — a fat S-expression parse, a tight loop.
+- **And during a synchronous slice no `Timer` fires**, so §2.5's handler timeout — itself a Timer
+  — *cannot fire either*. Revision 2's mitigation was provably incapable of protecting the thing
+  it was proposed to protect. A smoke alarm wired to the fire.
 
-- set the keepalive interval from a **measured** worst-case handler duration, not a default;
-- bound handler duration against the keepalive interval (§2.5's timeout, with this as its
-  sizing input, not an arbitrary constant);
-- if neither holds, keep the transport's ping on a **separate isolate** — reintroducing the hop
-  deliberately, for the one reason that justified it, rather than inheriting it by accident.
+The failure it permits: a ping is missed, the broker publishes our retained last will `(absent)`
+on `{ns}/{host}/{pid}/0/state`, and **the fleet fails over a process that was only busy.**
 
-This decision is now the strongest argument for §2.5's handler timeout: without it, a slow
-handler is not slow, it is *evicted*.
+**Decision: the MQTT client runs on its own isolate. Default, not fallback.** Reached
+independently by Kelvin and Tesla once the timeout was shown non-viable, and the third option —
+stretching keepalive to worst-case handler duration — is rejected because it deafens genuine
+crash detection.
+
+Unusually cheap for us: isolates copy what crosses the port, and **what crosses here is already
+flat text**. We hand the transport isolate the S-expression bytes we were about to put on the
+wire regardless. No object graphs, no deep copies. The costs are a little setup, stack traces
+that do not cross the boundary, and one isolate's memory.
+
+The handler timeout survives, with its purpose corrected: it exists for **head-of-line
+loudness**, sized independently of the keepalive interval. D8 no longer claims it protects pings.
+
+**Open, and honest: the web has no real isolates.** Compiled to JavaScript, `Isolate.spawn` maps
+onto web workers with far tighter constraints, so this mitigation is unavailable for the browser
+target (#3240 / #2268). That build needs its own answer — likely "keep handlers non-blocking and
+accept the risk", since MQTT-over-WebSockets has different failure behaviour anyway. Naming it
+now beats discovering it after building on the assumption.
 
 ## 4. First vertical slice
 
 Dependency order:
 
 1. `ServiceTopicPath` — the five-topic fan-out as a value type
-2. `ServiceState` — sealed lifecycle, projected over the inherited keys (D2)
-3. `Mailbox` — deadline-ordered, bounded, timeout-enforcing, dequeue-ordered
-4. `Actor` — mailbox + share facade + error stream, `topic_in` → dispatch
-5. `AikoRuntime` — identity, then LWT, then connect; service table; `addService` returning
-   `RegisteredService`
+2. `ServiceState` — sealed lifecycle **with `unknown`**, projected over inherited keys (D2)
+3. `Turn` / `Reading` / epoch fence (D9) — **before** the mailbox, because the mailbox's
+   guarantee is expressed in terms of it
+4. `Mailbox` — deadline-ordered, class-aware bounded, parking-capable
+5. `Actor` — mailbox + share facade + error stream, `topic_in` → dispatch
+6. `TransportIsolate` — MQTT on its own isolate (D8)
+7. `AikoRuntime` — identity, then LWT, then connect; `addService` → `RegisteredService`
 
-Acceptance tests first (ATDD). **Revision 1 named one test, and it could not go red** — "an async
-handler that awaits mid-mutation must not be observed torn" passes *identically* under the
-mailbox and under the rejected Future chain, so it is not evidence for the design. Every test
-below either forces the failure or distinguishes the mechanism from its alternative:
+Acceptance tests first. Round 2's finding was that revision 2's thirteen tests *"can all pass
+while the zombie still publishes — they are tests of round 1's war."* Each test below names the
+condition under which it goes **red**, and the ones marked ● are the arms that force the failure
+rather than merely observing its absence.
 
-| # | Test | Must go red when |
+| # | Test | Goes red when |
 |---|---|---|
-| 1 | async handler awaits mid-mutation; next message must not observe torn state | the serialisation mechanism is deleted |
-| 2 | a `Timer` (D4) fires mid-handler and touches state | the Timer executes instead of enqueuing — **fails under a Future chain, passes under a mailbox** |
-| 3 | request/response completes while its originating handler is suspended | replies are routed through the actor mailbox (§2.3) |
-| 4 | a handler that never completes | no timeout; must surface `HandlerTimeout`, not wedge |
-| 5 | long handler + queued control message | priority is claimed as preemption rather than dequeue ordering |
-| 6 | mailbox fed faster than drained | unbounded growth; must surface overflow |
-| 7 | shutdown with pending work | pending work vanishes silently |
-| 8 | delayed messages with out-of-order deadlines | the reference's drain-everything bug is ported |
-| 9 | app write to a reserved share key | it is accepted, or silently dropped |
-| 10 | inbound `(update log_level junk)` from a peer | it throws, **or** it is silently ignored |
-| 11 | inbound `(update a.b.c 1)` — depth 3 | it is accepted, or silently dropped without report |
-| 12 | a Python ECConsumer reads our share snapshot | `lifecycle`/`running` are missing or renamed |
-| 13 | two `ServiceDefinition`s named `'counter'` | identity is assigned before admission (D7) |
+| ● 1 | timed-out handler resumes and calls `share.update()` | the write **lands** — the epoch fence is absent or not on the mutator |
+| ● 2 | timed-out handler resumes and calls `publish()` | **any byte reaches the broker** — this is the zombie-publishes case |
+| ● 3 | value read before `await`, unwrapped after | `.at(deadTurn)` returns instead of throwing |
+| ● 4 | `close()`, then the fenced handler resumes | the zombie is not mute |
+| ● 5 | CPU-bound handler longer than the keepalive interval | the broker fires our LWT — i.e. transport is **not** on its own isolate |
+| 6 | `ask` during a long peer delay; other messages queued behind | the mailbox does not drain — parking is absent |
+| 7 | `Timer` (D4) fires mid-handler and touches state | the Timer **executes** instead of enqueuing (fails under a Future chain, passes under a mailbox) |
+| 8 | mailbox full; a shutdown message arrives | shutdown is dropped — reserved headroom absent |
+| 9 | mailbox full; a reply continuation arrives | the continuation is dropped, orphaning begun work |
+| 10 | delayed messages with out-of-order deadlines | the reference's drain-everything bug is ported |
+| 11 | app writes a reserved share key | accepted, or dropped without report |
+| 12 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
+| 13 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
+| 14 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
+| 15 | `share['metrics']` handed out and mutated | the live map escaped |
+| 16 | Python adds an unseen lifecycle string | the sealed view cannot represent it |
+| ○ 17 | a real Python ECConsumer reads our snapshot | `lifecycle`/`running` missing or renamed |
+| 18 | two `ServiceDefinition`s named `'counter'` | identity assigned before admission (D7) |
 
-Test 12 is the one that must run against the **real Python reference**, not a Dart double —
-`dir-id c0de`: a self-roundtrip proves self-consistency, not correctness.
+**● are the negative controls.** A leak/teardown/liveness suite with no arm that *forces* the bad
+state cannot clear it — if a test would report the same thing whether or not the failure is
+present, it is void. Tests 1–5 must be written and seen **red** before their mechanisms exist.
+
+**○ 17 is blocked on infrastructure and must not be counted as passing.** It needs a live Python
+reference plus a broker, and **this repo has no `.github/workflows/` at all** (`dir-id 7b3e` — a
+trigger that never fires reads as safety). Tracked separately; it is the only test standing
+between this port and a silent wire regression, so `dir-id c0de` applies: a self-roundtrip proves
+self-consistency, not correctness.
+
+**D7's admission rule, stated so test 18 has something to assert:** duplicate `name`s are
+**permitted**; `service_id` alone distinguishes mailboxes, matching `actor.py:248`'s
+`{name}/{service_id}/{topic}`. What must be impossible is a mailbox named before `service_id`
+exists — which `ServiceDefinition` having no identity field guarantees by construction.
 
 ## 5. Test transport: loopback, not Null Object
 
@@ -386,6 +519,12 @@ wire", so neither needs new authority — but both are reversible and flagged fo
 - **(b) Multiple runtimes per process.** Taken: test-only (D1). If it should be a production
   capability, identity allocation (MQTT client id, LWT ownership, retained state cleanup,
   `service_id`) needs designing first.
+- **(c) MQTT on its own isolate (D8).** Taken: yes, as the default. An architecture cost, arrived
+  at independently by two families once revision 2's timeout was shown incapable of protecting a
+  keepalive. Flagged because it is a real cost, not because the engineering is uncertain.
+- **(d) Parking the turn (§2.3) is a CANDIDATE, not a decision.** It is hours old and unstruck,
+  and it is the newest load-bearing idea in the document. Round 3 must aim at it. Fallback:
+  strict continuation style, uglier and certainly correct.
 
 **Resolved and not to be re-litigated:** the explicit `AikoRuntime` (D1, Nick 2026-08-25);
 Castaway is a Null Object and not a transport, so #3240/#2268 are conformance work against the
