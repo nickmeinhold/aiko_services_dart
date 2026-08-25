@@ -16,7 +16,10 @@ void main() {
       // Listen first: `errors` is a broadcast stream with no replay, so a
       // subscription taken after the event asserts nothing.
       expectLater(share.errors, emits(isA<ReservedKeyError>()));
-      expect(() => share.setApp('lifecycle', 'ready'), throwsA(isA<ReservedKeyError>()));
+      expect(
+        () => share.setApp('lifecycle', 'ready'),
+        throwsA(isA<ReservedKeyError>()),
+      );
     });
 
     test('a NON-reserved application key is accepted', () {
@@ -31,14 +34,23 @@ void main() {
       final share = Share.own()..setFramework('log_level', 'DEBUG');
       expectLater(share.errors, emits(isA<InvalidFrameworkValueError>()));
       share.applyInbound(const ShareUpdate('log_level', 'junk'));
-      expect(share.read('log_level'), 'DEBUG',
-          reason: 'a malformed remote message must not overwrite good state');
+      expect(
+        share.read('log_level'),
+        'DEBUG',
+        reason: 'a malformed remote message must not overwrite good state',
+      );
     });
 
-    test('it does NOT throw — a malformed remote message must not kill an actor', () {
-      final share = Share.own()..setFramework('log_level', 'DEBUG');
-      expect(() => share.applyInbound(const ShareUpdate('log_level', 'junk')), returnsNormally);
-    });
+    test(
+      'it does NOT throw — a malformed remote message must not kill an actor',
+      () {
+        final share = Share.own()..setFramework('log_level', 'DEBUG');
+        expect(
+          () => share.applyInbound(const ShareUpdate('log_level', 'junk')),
+          returnsNormally,
+        );
+      },
+    );
 
     test('(remove <reserved>) from a peer is refused', () {
       final share = Share.own()..setFramework('lifecycle', 'ready');
@@ -54,8 +66,11 @@ void main() {
       final replica = Share.replicaOf('aiko/host/1/2');
       expectLater(replica.errors, emits(isA<InvalidFrameworkValueError>()));
       replica.applyInbound(const ShareUpdate('log_level', 'junk'));
-      expect(replica.read('log_level'), 'junk',
-          reason: 'a replica mirrors its producer; it does not correct it');
+      expect(
+        replica.read('log_level'),
+        'junk',
+        reason: 'a replica mirrors its producer; it does not correct it',
+      );
     });
   });
 
@@ -66,12 +81,15 @@ void main() {
       expect(share.read('metrics.running'), 3);
     });
 
-    test('depth 3 is rejected and REPORTED — louder than the reference, same wire', () {
-      final share = Share.own();
-      expectLater(share.errors, emits(isA<ShareDepthError>()));
-      share.applyInbound(const ShareUpdate('a.b.c', 1));
-      expect(share.read('a.b.c'), isNull);
-    });
+    test(
+      'depth 3 is rejected and REPORTED — louder than the reference, same wire',
+      () {
+        final share = Share.own();
+        expectLater(share.errors, emits(isA<ShareDepthError>()));
+        share.applyInbound(const ShareUpdate('a.b.c', 1));
+        expect(share.read('a.b.c'), isNull);
+      },
+    );
 
     test('a missing intermediate path is a REPORTED drop, not a silent one', () {
       // share.py::_ec_modify_item silently no-ops here. We conform on the wire

@@ -6,12 +6,11 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 import '../codec/s_expression.dart';
 
 /// A decoded Aiko message: a function call received on an MQTT [topic].
-class AikoMessage {
-  final String topic;
-  final String command;
-  final Object? params; // List or Map, per the S-expression
-  AikoMessage(this.topic, this.command, this.params);
-
+class const AikoMessage(
+  final String topic,
+  final String command,
+  final Object? params, // List or Map, per the S-expression
+) {
   @override
   String toString() => 'AikoMessage($topic: $command $params)';
 }
@@ -24,8 +23,8 @@ class AikoMessage {
 /// protocol itself — "a function call, serialized, over MQTT" — is fully here.
 class AikoClient {
   AikoClient({this.host = 'localhost', this.port = 1883, String? clientId})
-      : clientId =
-            clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}';
+    : clientId =
+          clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}';
 
   final String host;
   final int port;
@@ -49,8 +48,9 @@ class AikoClient {
   void _onData(List<MqttReceivedMessage<MqttMessage>> events) {
     for (final event in events) {
       final message = event.payload as MqttPublishMessage;
-      final text =
-          MqttPublishPayload.bytesToStringAsString(message.payload.message);
+      final text = MqttPublishPayload.bytesToStringAsString(
+        message.payload.message,
+      );
       try {
         final (command, params) = parse(text);
         _controller.add(AikoMessage(event.topic, command, params));

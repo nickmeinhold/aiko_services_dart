@@ -4,6 +4,7 @@
 /// purely by S-expression command payloads through a MessageDispatcher, with
 /// no reference to the object crossing any boundary.
 library;
+
 import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
@@ -24,19 +25,19 @@ class CounterActor with CounterMixin, ShareMixin {}
 /// Build the receive-side dispatch map from the actor. This registration is
 /// what codegen would emit from the interface's method list.
 MessageDispatcher dispatcherFor(CounterActor actor) => MessageDispatcher({
-      'increment': (args) {
-        actor.increment(int.parse(args[0] as String));
-        return generate('count', [actor.count]);
-      },
-      'update': (args) {
-        // EC state delta: (update itemName itemValue)
-        actor.share[args[0] as String] = args[1] as String;
-        return generate('ack', [args[0]]);
-      },
-      'describe': (args) =>
-          generate('description', ['CounterActor(count=${actor.count})']),
-      'ping': (args) => null, // fire-and-forget: no reply
-    });
+  'increment': (args) {
+    actor.increment(int.parse(args[0] as String));
+    return generate('count', [actor.count]);
+  },
+  'update': (args) {
+    // EC state delta: (update itemName itemValue)
+    actor.share[args[0] as String] = args[1] as String;
+    return generate('ack', [args[0]]);
+  },
+  'describe': (args) =>
+      generate('description', ['CounterActor(count=${actor.count})']),
+  'ping': (args) => null, // fire-and-forget: no reply
+});
 
 void main() {
   test('routes commands by name to the composed actor; state persists', () {
@@ -75,6 +76,9 @@ void main() {
 
   test('commands exposes the registered names (proxy/dispatch mirror)', () {
     final d = dispatcherFor(CounterActor());
-    expect(d.commands, containsAll(['increment', 'update', 'describe', 'ping']));
+    expect(
+      d.commands,
+      containsAll(['increment', 'update', 'describe', 'ping']),
+    );
   });
 }

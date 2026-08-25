@@ -8,6 +8,7 @@
 /// it is self-consistent. (A codec tested only against its own inverse can be
 /// self-consistently wrong.)
 library;
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -45,28 +46,30 @@ void main() {
     }
   });
 
-  group('round-trip: parse(generate(x)) recovers x for wire-shaped commands',
-      () {
-    // A round-trip is a WEAKER check than the golden vectors above (it only
-    // proves self-consistency), so it is scoped to the flat command shape the
-    // wire actually uses, and layered ON TOP of the external-oracle tests.
-    for (final (command, args) in const [
-      ('increment', ['5']),
-      ('add', ['topic', 'protocol', 'owner']),
-      ('update', ['log_level', 'DEBUG']),
-      // Astral + malformed-surrogate round-trips: encode counts with
-      // String.runes, decode walks pairs by hand — these keep the two
-      // counters honest against each other (cage-match round 1).
-      ('say', ['a 😀', '😀🎉 x']),
-      ('lone', ['\ud800x y', 'a \ud800', '\udc00 z']),
-    ]) {
-      test('($command ...)', () {
-        final (c, cdr) = parse(generate(command, args));
-        expect(c, command);
-        expect(cdr, equals(args));
-      });
-    }
-  });
+  group(
+    'round-trip: parse(generate(x)) recovers x for wire-shaped commands',
+    () {
+      // A round-trip is a WEAKER check than the golden vectors above (it only
+      // proves self-consistency), so it is scoped to the flat command shape the
+      // wire actually uses, and layered ON TOP of the external-oracle tests.
+      for (final (command, args) in const [
+        ('increment', ['5']),
+        ('add', ['topic', 'protocol', 'owner']),
+        ('update', ['log_level', 'DEBUG']),
+        // Astral + malformed-surrogate round-trips: encode counts with
+        // String.runes, decode walks pairs by hand — these keep the two
+        // counters honest against each other (cage-match round 1).
+        ('say', ['a 😀', '😀🎉 x']),
+        ('lone', ['\ud800x y', 'a \ud800', '\udc00 z']),
+      ]) {
+        test('($command ...)', () {
+          final (c, cdr) = parse(generate(command, args));
+          expect(c, command);
+          expect(cdr, equals(args));
+        });
+      }
+    },
+  );
 
   group('parse() rejects what the Python reference rejects', () {
     // Oracle-pinned error parity: every payload the reference fails to decode

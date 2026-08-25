@@ -32,7 +32,7 @@ class MessageDispatcher {
   final Map<String, CommandHandler> _handlers;
 
   MessageDispatcher(Map<String, CommandHandler> handlers)
-      : _handlers = Map.unmodifiable(handlers);
+    : _handlers = Map.unmodifiable(handlers);
 
   /// The command names this dispatcher answers — the receive-side mirror of a
   /// remote proxy's method list.

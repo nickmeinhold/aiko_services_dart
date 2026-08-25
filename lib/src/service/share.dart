@@ -17,56 +17,44 @@ const reservedShareKeys = {'lifecycle', 'log_level', 'running'};
 
 const _logLevels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'};
 
-sealed class ShareError {
-  const ShareError(this.path);
-  final String path;
-}
+sealed class const ShareError(final String path);
 
-final class ReservedKeyError extends ShareError implements Exception {
-  const ReservedKeyError(super.path);
+final class const ReservedKeyError(super.path)
+    extends ShareError
+    implements Exception {
   @override
   String toString() => 'ReservedKeyError: "$path" is framework-reserved';
 }
 
-final class InvalidFrameworkValueError extends ShareError {
-  const InvalidFrameworkValueError(super.path, this.rejected);
-  final Object? rejected;
+final class const InvalidFrameworkValueError(super.path, final Object? rejected)
+    extends ShareError {
   @override
   String toString() =>
       'InvalidFrameworkValueError: "$path" rejected $rejected; previous value retained';
 }
 
-final class ShareDepthError extends ShareError {
-  const ShareDepthError(super.path);
+final class const ShareDepthError(super.path) extends ShareError {
   @override
-  String toString() => 'ShareDepthError: "$path" exceeds the inherited depth maximum of 2';
+  String toString() =>
+      'ShareDepthError: "$path" exceeds the inherited depth maximum of 2';
 }
 
-final class ShareMissingPathError extends ShareError {
-  const ShareMissingPathError(super.path);
+final class const ShareMissingPathError(super.path) extends ShareError {
   @override
-  String toString() => 'ShareMissingPathError: "$path" has no intermediate node';
+  String toString() =>
+      'ShareMissingPathError: "$path" has no intermediate node';
 }
 
 /// A `/control` mutation, in the three forms the wire carries.
-sealed class ShareCommand {
-  const ShareCommand(this.path);
-  final String path;
-}
+sealed class const ShareCommand(final String path);
 
-final class ShareUpdate extends ShareCommand {
-  const ShareUpdate(super.path, this.value);
-  final Object? value;
-}
+final class const ShareUpdate(super.path, final Object? value)
+    extends ShareCommand;
 
-final class ShareAdd extends ShareCommand {
-  const ShareAdd(super.path, this.value);
-  final Object? value;
-}
+final class const ShareAdd(super.path, final Object? value)
+    extends ShareCommand;
 
-final class ShareRemove extends ShareCommand {
-  const ShareRemove(super.path);
-}
+final class const ShareRemove(super.path) extends ShareCommand;
 
 /// Whether this tree is our own state or a mirror of a peer's.
 ///
@@ -80,9 +68,9 @@ enum ShareRole { own, replica }
 class Share {
   Share._(this.role, this.producerTopic);
 
-  factory Share.own() => Share._(ShareRole.own, null);
+  factory Share.own() => Share._(.own, null);
   factory Share.replicaOf(String producerTopic) =>
-      Share._(ShareRole.replica, producerTopic);
+      Share._(.replica, producerTopic);
 
   final ShareRole role;
   final String? producerTopic;
@@ -157,7 +145,9 @@ class Share {
       return;
     }
 
-    if (validate && reservedShareKeys.contains(parts.first) && parts.length == 1) {
+    if (validate &&
+        reservedShareKeys.contains(parts.first) &&
+        parts.length == 1) {
       if (!_valid(parts.first, value)) {
         // Both roles report. Only `own` refuses: a replica must mirror its
         // producer or it diverges from the mesh.
@@ -200,22 +190,22 @@ class Share {
   }
 
   static bool _valid(String key, Object? value) => switch (key) {
-        'log_level' => value is String && _logLevels.contains(value),
-        'running' => value is bool,
-        // `lifecycle` is deliberately open: Python may introduce a state we have
-        // not enumerated, and a closed set would make us blind to something it
-        // branches on. ServiceState carries the `unknown` case for the same reason.
-        'lifecycle' => value is String,
-        _ => true,
-      };
+    'log_level' => value is String && _logLevels.contains(value),
+    'running' => value is bool,
+    // `lifecycle` is deliberately open: Python may introduce a state we have
+    // not enumerated, and a closed set would make us blind to something it
+    // branches on. ServiceState carries the `unknown` case for the same reason.
+    'lifecycle' => value is String,
+    _ => true,
+  };
 
   /// Seeds a nested node. Only the framework may create intermediate levels.
   void seedNode(String key) => _tree[key] = <String, Object?>{};
 
   Map<String, Object?> snapshot() => Map<String, Object?>.unmodifiable({
-        for (final e in _tree.entries)
-          e.key: e.value is Map<String, Object?>
-              ? Map<String, Object?>.unmodifiable(e.value! as Map<String, Object?>)
-              : e.value,
-      });
+    for (final e in _tree.entries)
+      e.key: e.value is Map<String, Object?>
+          ? Map<String, Object?>.unmodifiable(e.value! as Map<String, Object?>)
+          : e.value,
+  });
 }
