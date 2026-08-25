@@ -157,6 +157,76 @@
         "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x"
       ],
       "expected": "(family 9:\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u0085b"
+      ],
+      "expected": "(ws 3:a\u0085b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u001cb"
+      ],
+      "expected": "(ws 3:a\u001cb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u001fb"
+      ],
+      "expected": "(ws 3:a\u001fb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\ufeffb"
+      ],
+      "expected": "(ws a\ufeffb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "\ufeff"
+      ],
+      "expected": "(ws \ufeff)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u00a0b"
+      ],
+      "expected": "(ws 3:a\u00a0b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u3000b"
+      ],
+      "expected": "(ws 3:a\u3000b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u2028b"
+      ],
+      "expected": "(ws 3:a\u2028b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u0001b"
+      ],
+      "expected": "(ws a\u0001b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u007fb"
+      ],
+      "expected": "(ws a\u007fb)"
     }
   ],
   "parse": [

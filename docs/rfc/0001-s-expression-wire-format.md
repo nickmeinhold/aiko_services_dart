@@ -127,9 +127,9 @@ The empty symbol is encoded as `""` (two QUOTATION MARK characters). See
 Encoding takes a command and its parameters and produces the payload string.
 An encoder MUST apply the following rules to each element, in order:
 
-1. If the element is a string that begins with `<digits>:` or contains a
-   space, tab, newline, `(`, or `)` — the reference pattern
-   `^\d+:|[\s()]` — replace it with `<code-point-count>:<content>` (§3.3).
+1. If the element is a string that begins with `<digits>:` or contains any
+   character of the **prefix-trigger set** (§4.1), replace it with
+   `<code-point-count>:<content>` (§3.3).
 2. If the element is a dictionary, flatten it in insertion order to the
    sequence `k₁: v₁ k₂: v₂ …` — each keyword becomes an atom `<keyword>:`,
    each value is encoded by these same rules (§5).
@@ -145,6 +145,44 @@ Elements are joined with a single space and wrapped in `(` `)`.
 An encoder MUST NOT emit quoted strings, and MUST NOT length-prefix a symbol
 that rule 1 does not require it to (the conformance suite enforces canonical
 output: `(add topic protocol owner)`, never `(add 5:topic …)`).
+
+### 4.1. The prefix-trigger set
+
+The reference implementation spells rule 1 as the pattern `^\d+:|[\s()]`.
+That pattern is **not portable**: `\s` denotes a different set of characters
+in different languages, so two conformant-looking encoders can emit different
+bytes for the same input. This specification therefore enumerates the set,
+and implementations MUST NOT substitute their host language's `\s`.
+
+An element is length-prefixed if it contains any of:
+
+| Code point(s) | |
+|---|---|
+| U+0009–U+000D | tab, LF, VT, FF, CR |
+| U+001C–U+001F | file, group, record, unit separators |
+| U+0020 | space |
+| U+0028, U+0029 | `(` and `)` |
+| U+0085 | next line (NEL) |
+| U+00A0 | no-break space |
+| U+1680 | ogham space mark |
+| U+2000–U+200A | en quad … hair space |
+| U+2028, U+2029 | line, paragraph separator |
+| U+202F, U+205F | narrow no-break, medium mathematical space |
+| U+3000 | ideographic space |
+
+U+FEFF (zero-width no-break space / BOM) is **NOT** in the set, though some
+languages include it in `\s`. Note this set is deliberately **wider** than the
+delimiter set of §3.1: a decoder separates elements on only space, tab and
+newline, so most of these characters never actually needed prefixing. The
+excess is harmless — it costs bytes, not correctness — but it is normative,
+because canonical output must be reproducible byte-for-byte by any
+implementation.
+
+Divergence here does not corrupt a round-trip: an encoder that under- or
+over-prefixes one of these still produces a payload every conformant decoder
+reads back identically. It breaks anything that hashes, signs, deduplicates or
+compares payload bytes. Conformance vectors covering both directions are in
+`test/codec/fixtures/s_expression_golden.json` (the `ws` cases).
 
 ## 5. Dictionaries
 

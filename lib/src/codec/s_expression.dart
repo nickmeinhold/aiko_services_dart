@@ -25,7 +25,63 @@ library;
 /// An element gets length-prefixed (`len:data`) when it begins with a
 /// canonical `digits:` marker or contains whitespace/parens — exactly
 /// parser.py's `RE_DELIMITERS`.
-final RegExp _reDelimiters = RegExp(r'^\d+:|[\s()]');
+/// Whether [element] must be emitted as a length-prefixed canonical symbol —
+/// `parser.py`'s `RE_DELIMITERS = ^\d+:|[\s()]`, decided without a regex.
+///
+/// The character class is spelled out rather than delegated to Dart's `\s`,
+/// because the two languages disagree about what whitespace is and the wire
+/// format is defined by the Python reference:
+///
+///   * Dart's `\s` contains U+FEFF; Python's does not, so the old regex added
+///     a length prefix the reference would not have.
+///   * Python's `\s` contains U+0085 and U+001C-U+001F; Dart's does not, so
+///     the old regex omitted a prefix the reference would have added.
+///
+/// Neither tokeniser SPLITS on those characters (both split on exactly space,
+/// tab and newline), so the divergence never corrupted a round-trip — it made
+/// the two implementations emit different bytes for the same input, which
+/// matters to anything that hashes, signs or compares wire bytes, and to
+/// RFC-0001 conformance. Found by differential-fuzzing 30k random atoms
+/// against the reference; see benchmark/ReadMe.md.
+bool _needsLengthPrefix(String element) {
+  for (var i = 0; i < element.length; i++) {
+    final c = element.codeUnitAt(i);
+    if (c <= 0x20) {
+      // 0x09-0x0d (tab, LF, VT, FF, CR), 0x1c-0x20 (the C0 separators and
+      // space). Everything else below 0x20 is an ordinary atom character.
+      if ((c >= 0x09 && c <= 0x0d) || (c >= 0x1c && c <= 0x20)) return true;
+    } else if (c == _cOpen || c == _cClose) {
+      return true;
+    } else if (c >= 0x85) {
+      if (c == 0x85 ||
+          c == 0xa0 ||
+          c == 0x1680 ||
+          (c >= 0x2000 && c <= 0x200a) ||
+          c == 0x2028 ||
+          c == 0x2029 ||
+          c == 0x202f ||
+          c == 0x205f ||
+          c == 0x3000) {
+        return true;
+      }
+    }
+    // The `^\d+:` alternative: a run of ASCII digits anchored at the start,
+    // terminated by a colon. Only reachable while every preceding character
+    // has been a digit.
+    if (c == _cColon && i > 0) {
+      var allDigits = true;
+      for (var d = 0; d < i; d++) {
+        final u = element.codeUnitAt(d);
+        if (u < _c0 || u > _c9) {
+          allDigits = false;
+          break;
+        }
+      }
+      if (allDigits) return true;
+    }
+  }
+  return false;
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Code-point stepping — the SINGLE definition of "one Unicode code point",
@@ -100,7 +156,7 @@ void _writeSExpression(StringBuffer buffer, List<Object?> expression) {
   var character = '';
   buffer.write('(');
   for (var element in expression) {
-    if (element is String && _reDelimiters.hasMatch(element)) {
+    if (element is String && _needsLengthPrefix(element)) {
       // Length counts Unicode CODE POINTS (Python len semantics), not UTF-16
       // code units — `a 😀` is `3:a 😀`, never `4:`. Divergence here silently
       // corrupts astral-plane characters on the wire (probed 2026-07-18). The
@@ -328,7 +384,21 @@ Object _listToDict(Object tree) {
     }
     return map;
   }
-  return [
-    for (final element in tree) element == null ? null : _listToDict(element)
-  ];
+  // Copy-on-write: the old unconditional rebuild allocated a fresh List for
+  // EVERY list in the tree, including the common case of a list of plain atoms
+  // where nothing changes. `_listToDict` returns its argument unchanged for
+  // anything that is not a keyword list, so an identity check tells us whether
+  // a copy is owed at all. `tree` is freshly built by `_parseTokens` and
+  // unshared, so handing it straight back is safe. Worth ~28% of parse.
+  List<Object?>? rebuilt;
+  for (var i = 0; i < tree.length; i++) {
+    final element = tree[i];
+    if (element == null) continue;
+    final converted = _listToDict(element);
+    if (!identical(converted, element)) {
+      rebuilt ??= List<Object?>.of(tree);
+      rebuilt[i] = converted;
+    }
+  }
+  return rebuilt ?? tree;
 }

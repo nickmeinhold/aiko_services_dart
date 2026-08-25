@@ -60,6 +60,23 @@ GENERATE_CASES = [
     # Multi-code-point grapheme: ZWJ family is ONE glyph, SEVEN code points.
     # Guards against anyone "fixing" toward grapheme-cluster length later.
     ("family", ["\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466 x"]),
+    # Whitespace-class parity. Dart's `\s` and Python's `\s` are NOT the same
+    # set, and RE_DELIMITERS decides whether an atom is length-prefixed -- so a
+    # regex-based Dart port emits different BYTES than the reference for these.
+    # Neither tokeniser splits on any of them (both split on exactly space, tab
+    # and newline), so a round-trip always survived; what diverged was the
+    # canonical encoding, which is what RFC-0001 pins. Found by differential
+    # fuzzing (tool/fuzz_generate_parity.dart), 3604 mismatches in 40k atoms.
+    ("ws", ["a\u0085b"]),      # NEL: Python \s, NOT Dart \s -> MUST prefix
+    ("ws", ["a\u001cb"]),      # C0 file separator: Python \s, not Dart's
+    ("ws", ["a\u001fb"]),      # C0 unit separator: Python \s, not Dart's
+    ("ws", ["a\ufeffb"]),      # BOM: Dart \s, NOT Python \s -> must NOT prefix
+    ("ws", ["\ufeff"]),        # BOM alone: bare, no prefix
+    ("ws", ["a\u00a0b"]),      # NBSP: in BOTH -> prefix
+    ("ws", ["a\u3000b"]),      # ideographic space: in BOTH -> prefix
+    ("ws", ["a\u2028b"]),      # line separator: in BOTH -> prefix
+    ("ws", ["a\u0001b"]),      # C0 SOH: in NEITHER -> must NOT prefix
+    ("ws", ["a\u007fb"]),      # DEL: in NEITHER -> must NOT prefix
 ]
 
 # ---- parse() cases: payload string -> (command, cdr) --------------------
