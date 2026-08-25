@@ -11,16 +11,22 @@ const payloads = [
 void main(List<String> args) {
   final iters = args.isEmpty ? 200000 : int.parse(args[0]);
   // warm the JIT / AOT icaches
-  for (var i = 0; i < 5000; i++) { for (final p in payloads) parse(p); }
+  for (var i = 0; i < 5000; i++) { for (final p in payloads) {
+    parse(p);
+  } }
 
   final swParse = Stopwatch()..start();
-  for (var i = 0; i < iters; i++) { for (final p in payloads) parse(p); }
+  for (var i = 0; i < iters; i++) { for (final p in payloads) {
+    parse(p);
+  } }
   swParse.stop();
 
   final parsed = [for (final p in payloads) parse(p)];
   final swGen = Stopwatch()..start();
   for (var i = 0; i < iters; i++) {
-    for (final t in parsed) generate(t.$1, t.$2 as List<Object?>);
+    for (final t in parsed) {
+      generate(t.$1, t.$2 as List<Object?>);
+    }
   }
   swGen.stop();
 

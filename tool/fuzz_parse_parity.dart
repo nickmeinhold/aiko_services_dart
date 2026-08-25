@@ -9,6 +9,7 @@
 /// A shared rejection is agreement, whatever the exception types are: the
 /// reference's TypeErrors are errata (RFC-0001 section 8), so pinning Dart to
 /// reproduce a crash type would pin a bug.
+library;
 import 'dart:convert';
 import 'dart:io';
 import 'package:aiko_services/src/codec/s_expression.dart';

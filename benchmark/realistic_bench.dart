@@ -26,10 +26,14 @@ List<String> buildCorpus(int n) {
 void main(List<String> args) {
   final reps = args.isEmpty ? 40 : int.parse(args[0]);
   final corpus = buildCorpus(5000);
-  for (var i = 0; i < 3; i++) { for (final p in corpus) parse(p); }
+  for (var i = 0; i < 3; i++) { for (final p in corpus) {
+    parse(p);
+  } }
 
   final sw = Stopwatch()..start();
-  for (var r = 0; r < reps; r++) { for (final p in corpus) parse(p); }
+  for (var r = 0; r < reps; r++) { for (final p in corpus) {
+    parse(p);
+  } }
   sw.stop();
   final n = reps * corpus.length;
   print('realistic parse ${(sw.elapsedMicroseconds / n).toStringAsFixed(3)} us/msg '
