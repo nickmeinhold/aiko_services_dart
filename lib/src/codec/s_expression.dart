@@ -120,10 +120,12 @@ String _generateSExpression(List<Object?> expression) {
 // parse — decode a canonical S-expression into (command, cdr).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Canonical length-prefixed atom marker: `123:` at the current position.
-/// No `^` anchor — `matchAsPrefix` already pins the match to the given offset,
-/// and a `^` would additionally (wrongly) demand string-start.
-final RegExp _reCanonical = RegExp(r'(\d+):');
+// Code units for the delimiter/prefix dispatch in `_parseTokens`. Comparing
+// ints avoids the one-character String that `s[i]` allocates per character.
+const _c0 = 0x30, _c9 = 0x39, _cColon = 0x3a;
+const _cQuote = 0x22, _cApos = 0x27;
+const _cOpen = 0x28, _cClose = 0x29;
+const _cSpace = 0x20, _cTab = 0x09, _cNewline = 0x0a;
 
 /// Quoted string: `"text"` or `'text'`, non-greedy (mirrors parser.py
 /// `RE_STRING`). Group 2 is the content.
@@ -162,14 +164,45 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
 (List<Object?>, int) _parseTokens(String s, int start,
     {bool mustClose = false}) {
   final result = <Object?>[];
-  var token = '';
+  // A bare token is normally the contiguous run `s[tokenStart..i]`, so it costs
+  // one substring at flush time instead of a fresh String per character. The
+  // exception is a nested `(...)` mid-token (`ab(x)cd` yields the atom `abcd`
+  // *after* the sublist, per parser.py): that splits the run, so the prefix is
+  // materialised into [tokenCarried] and the index restarts. No token in
+  // progress <=> `tokenCarried == null && tokenStart < 0`.
+  var tokenStart = -1;
+  String? tokenCarried;
   var i = start;
-  while (i < s.length) {
-    if (token.isEmpty) {
-      final canonical = _reCanonical.matchAsPrefix(s, i);
-      if (canonical != null) {
-        final len = int.parse(canonical.group(1)!);
-        final dataStart = i + canonical.group(0)!.length;
+  final n = s.length;
+
+  // NB: deliberately no `hasToken()`/`flushToken()` closures. They would
+  // capture the mutable `i`/`tokenStart`, forcing Dart to box them into a heap
+  // context object that every read in this per-character loop then loads
+  // through. The duplicated conditions below are the cost of keeping both
+  // counters in registers.
+  while (i < n) {
+    if (tokenCarried == null && tokenStart < 0) {
+      // `_reCanonical` (`(\d+):`) can only match on an ASCII digit, so scan for
+      // it directly rather than paying a regex dispatch + `Match` allocation at
+      // every token-start position. Dart's `\d` is ASCII-only, so this is exact.
+      var digitEnd = i;
+      while (digitEnd < n) {
+        final d = s.codeUnitAt(digitEnd);
+        if (d < _c0 || d > _c9) break;
+        digitEnd++;
+      }
+      if (digitEnd > i && digitEnd < n && s.codeUnitAt(digitEnd) == _cColon) {
+        // A run long enough to overflow a 64-bit int must still throw the
+        // FormatException `int.parse` used to throw, so defer to it there.
+        var len = 0;
+        if (digitEnd - i > 18) {
+          len = int.parse(s.substring(i, digitEnd));
+        } else {
+          for (var d = i; d < digitEnd; d++) {
+            len = len * 10 + (s.codeUnitAt(d) - _c0);
+          }
+        }
+        final dataStart = digitEnd + 1;
         if (len == 0) {
           result.add(null); // `0:` encodes null
           i = dataStart;
@@ -192,29 +225,45 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
         }
         continue;
       }
-      final quoted = _reString.matchAsPrefix(s, i);
-      if (quoted != null) {
-        result.add(quoted.group(2));
-        i += quoted.group(0)!.length;
-        continue;
+      // `_reString` can only match on an opening quote, so gate the regex on
+      // one integer compare. Anything else falls through to the delimiter
+      // dispatch below -- it must NOT shortcut to the bare-atom path, or `(`,
+      // `)` and whitespace get absorbed into the atom.
+      final q = s.codeUnitAt(i);
+      if (q == _cQuote || q == _cApos) {
+        final quoted = _reString.matchAsPrefix(s, i);
+        if (quoted != null) {
+          result.add(quoted.group(2));
+          i += quoted.group(0)!.length;
+          continue;
+        }
       }
     }
-    final c = s[i];
-    if (c == '(') {
+    final c = s.codeUnitAt(i);
+    if (c == _cOpen) {
+      if (tokenStart >= 0) {
+        tokenCarried = (tokenCarried ?? '') + s.substring(tokenStart, i);
+        tokenStart = -1;
+      }
       final (sublist, j) = _parseTokens(s, i + 1, mustClose: true);
       i = j;
       result.add(sublist);
-    } else if (c == ')') {
-      if (token.isNotEmpty) result.add(token);
+    } else if (c == _cClose) {
+      if (tokenCarried != null || tokenStart >= 0) {
+        result.add((tokenCarried ?? '') +
+            (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+      }
       return (result, i + 1);
-    } else if (c == ' ' || c == '\t' || c == '\n') {
-      if (token.isNotEmpty) {
-        result.add(token);
-        token = '';
+    } else if (c == _cSpace || c == _cTab || c == _cNewline) {
+      if (tokenCarried != null || tokenStart >= 0) {
+        result.add((tokenCarried ?? '') +
+            (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+        tokenCarried = null;
+        tokenStart = -1;
       }
       i++;
     } else {
-      token += c;
+      if (tokenStart < 0) tokenStart = i;
       i++;
     }
   }
@@ -222,7 +271,10 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
     throw FormatException(
         'Unterminated list: expected ")" before end of input', s, s.length);
   }
-  if (token.isNotEmpty) result.add(token);
+  if (tokenCarried != null || tokenStart >= 0) {
+    result.add((tokenCarried ?? '') +
+        (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+  }
   return (result, i);
 }
 

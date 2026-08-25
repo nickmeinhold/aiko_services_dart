@@ -94,6 +94,17 @@ PARSE_CASES = [
     "(lone 2:\ud800x b)",                    # lone high + ascii, then next atom
     "(lone 1:\ud800 b)",                     # lone high alone; must NOT eat the space
     "(lone 1:\udc00 b)",                     # lone low
+    # A nested list mid-atom does NOT terminate the atom: the reference keeps
+    # accumulating and emits the joined atom AFTER the sublist. Pinned because
+    # the Dart tokeniser tracks a bare atom as an index range into the payload,
+    # which a nested list splits -- these are the only vectors that exercise
+    # that carry path, and a "simplification" that flushed on "(" would pass
+    # every other vector here.
+    "(c ab(x)cd)",                           # -> [["x"], "abcd"]
+    "(c ab(x)cd ef)",                        # carry then a normal atom
+    "(c a(b)(d)e)",                          # TWO interruptions: -> "ae"
+    "(c (x)ab)",                             # sublist first, atom after
+    "(c ab(x))",                             # atom flushed by the closing paren
 ]
 
 

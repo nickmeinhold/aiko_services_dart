@@ -342,6 +342,60 @@
         "\udc00",
         "b"
       ]
+    },
+    {
+      "payload": "(c ab(x)cd)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "abcd"
+      ]
+    },
+    {
+      "payload": "(c ab(x)cd ef)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "abcd",
+        "ef"
+      ]
+    },
+    {
+      "payload": "(c a(b)(d)e)",
+      "command": "c",
+      "cdr": [
+        [
+          "b"
+        ],
+        [
+          "d"
+        ],
+        "ae"
+      ]
+    },
+    {
+      "payload": "(c (x)ab)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "ab"
+      ]
+    },
+    {
+      "payload": "(c ab(x))",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "ab"
+      ]
     }
   ],
   "parse_errors": [
