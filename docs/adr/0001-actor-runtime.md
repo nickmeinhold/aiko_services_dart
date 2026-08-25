@@ -1,6 +1,8 @@
 # ADR-0001 — The Dart Actor runtime
 
-- **Status:** accepted (D1 decided 2026-08-25); design-temper pending before implementation
+- **Status:** **proposed — RECAST** by a 3-family design-temper strike, 2026-08-25.
+  See `0001-TEMPER.md`. D1 is decided; the document as a whole is NOT accepted and no
+  `lib/` code may be written against it until a round-2 strike returns SOUND.
 - **Date:** 2026-08-25
 - **Context:** first framework code in `lib/`; everything after it inherits these shapes
 - **Mandate:** Nick, 2026-08-25 — *"framework port should be designed, not just ported"*
