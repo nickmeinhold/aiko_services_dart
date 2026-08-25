@@ -157,6 +157,141 @@
         "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x"
       ],
       "expected": "(family 9:\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 x)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u0085b"
+      ],
+      "expected": "(ws 3:a\u0085b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u001cb"
+      ],
+      "expected": "(ws 3:a\u001cb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u001fb"
+      ],
+      "expected": "(ws 3:a\u001fb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\ufeffb"
+      ],
+      "expected": "(ws a\ufeffb)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "\ufeff"
+      ],
+      "expected": "(ws \ufeff)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u00a0b"
+      ],
+      "expected": "(ws 3:a\u00a0b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u3000b"
+      ],
+      "expected": "(ws 3:a\u3000b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u2028b"
+      ],
+      "expected": "(ws 3:a\u2028b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u0001b"
+      ],
+      "expected": "(ws a\u0001b)"
+    },
+    {
+      "command": "ws",
+      "params": [
+        "a\u007fb"
+      ],
+      "expected": "(ws a\u007fb)"
+    },
+    {
+      "command": "update",
+      "params": [
+        "log_level",
+        {
+          "level": "DEBUG"
+        }
+      ],
+      "expected": "(update log_level (level: DEBUG))"
+    },
+    {
+      "command": "update",
+      "params": [
+        "log_level",
+        {
+          "level": "DEBUG",
+          "force": "1"
+        }
+      ],
+      "expected": "(update log_level (level: DEBUG force: 1))"
+    },
+    {
+      "command": "add",
+      "params": [
+        "topic",
+        {
+          "protocol": "mqtt",
+          "owner": "nick"
+        }
+      ],
+      "expected": "(add topic (protocol: mqtt owner: nick))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "nested": [
+            "x",
+            "y"
+          ]
+        }
+      ],
+      "expected": "(cfg a (nested: (x y)))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "k": null
+        }
+      ],
+      "expected": "(cfg a (k: 0:))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "k": "has space"
+        }
+      ],
+      "expected": "(cfg a (k: 9:has space))"
     }
   ],
   "parse": [
@@ -342,6 +477,82 @@
         "\udc00",
         "b"
       ]
+    },
+    {
+      "payload": "(c ab(x)cd)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "abcd"
+      ]
+    },
+    {
+      "payload": "(c ab(x)cd ef)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "abcd",
+        "ef"
+      ]
+    },
+    {
+      "payload": "(c a(b)(d)e)",
+      "command": "c",
+      "cdr": [
+        [
+          "b"
+        ],
+        [
+          "d"
+        ],
+        "ae"
+      ]
+    },
+    {
+      "payload": "(c (x)ab)",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "ab"
+      ]
+    },
+    {
+      "payload": "(c ab(x))",
+      "command": "c",
+      "cdr": [
+        [
+          "x"
+        ],
+        "ab"
+      ]
+    },
+    {
+      "payload": "0:",
+      "command": "0:",
+      "cdr": []
+    },
+    {
+      "payload": "12:",
+      "command": "12:",
+      "cdr": []
+    },
+    {
+      "payload": " 0:",
+      "command": "0:",
+      "cdr": []
+    },
+    {
+      "payload": "(c 0:)",
+      "command": "c",
+      "cdr": [
+        null
+      ]
     }
   ],
   "parse_errors": [
@@ -369,6 +580,51 @@
       "payload": "(c a b",
       "raises": "TypeError",
       "message": "unsupported operand type(s) for +=: 'int' and 'list'"
+    },
+    {
+      "payload": "(c 12:)",
+      "raises": "TypeError",
+      "message": "unsupported operand type(s) for +=: 'int' and 'list'"
+    }
+  ],
+  "divergences": [
+    {
+      "payload": "(0: a)",
+      "reference_car": null,
+      "reference_cdr": [
+        "a"
+      ]
+    },
+    {
+      "payload": "( 0:)",
+      "reference_car": null,
+      "reference_cdr": []
+    },
+    {
+      "payload": "((a b) c)",
+      "reference_car": [
+        "a",
+        "b"
+      ],
+      "reference_cdr": [
+        "c"
+      ]
+    },
+    {
+      "payload": "((a))",
+      "reference_car": [
+        "a"
+      ],
+      "reference_cdr": []
+    },
+    {
+      "payload": "(((a)))",
+      "reference_car": [
+        [
+          "a"
+        ]
+      ],
+      "reference_cdr": []
     }
   ]
 }

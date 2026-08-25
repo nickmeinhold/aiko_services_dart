@@ -98,6 +98,15 @@ A symbol whose content could be misread as structure is written
   exactly `<length>` code points following the `:` as the symbol's content,
   including any delimiter characters within them.
 - `0:` does not introduce a symbol; it encodes null (§3.5).
+- A length prefix is recognized only when **at least one character follows
+  the colon**. The reference pattern is `^(\d+):(.+)`, and that `.+` is
+  load-bearing: a trailing `0:` or `12:` at end of input is not a prefix at
+  all, but the ordinary atom `0:` / `12:`. Inside a payload the closing `)`
+  supplies the required character, which is why `(c 0:)` still decodes to
+  null while a bare `0:` decodes to the two-character atom. An implementation
+  that omits this reads a bare `0:` as null, and a bare `12:` as an overlong
+  prefix to be rejected — both diverging from the reference on input the
+  reference accepts.
 
 The prefix is only recognized at the *start* of an element; a `:` later in an
 atom (for example the dictionary keyword `b:`) has no length-prefix meaning.
@@ -127,9 +136,9 @@ The empty symbol is encoded as `""` (two QUOTATION MARK characters). See
 Encoding takes a command and its parameters and produces the payload string.
 An encoder MUST apply the following rules to each element, in order:
 
-1. If the element is a string that begins with `<digits>:` or contains a
-   space, tab, newline, `(`, or `)` — the reference pattern
-   `^\d+:|[\s()]` — replace it with `<code-point-count>:<content>` (§3.3).
+1. If the element is a string that begins with `<digits>:` or contains any
+   character of the **prefix-trigger set** (§4.1), replace it with
+   `<code-point-count>:<content>` (§3.3).
 2. If the element is a dictionary, flatten it in insertion order to the
    sequence `k₁: v₁ k₂: v₂ …` — each keyword becomes an atom `<keyword>:`,
    each value is encoded by these same rules (§5).
@@ -145,6 +154,44 @@ Elements are joined with a single space and wrapped in `(` `)`.
 An encoder MUST NOT emit quoted strings, and MUST NOT length-prefix a symbol
 that rule 1 does not require it to (the conformance suite enforces canonical
 output: `(add topic protocol owner)`, never `(add 5:topic …)`).
+
+### 4.1. The prefix-trigger set
+
+The reference implementation spells rule 1 as the pattern `^\d+:|[\s()]`.
+That pattern is **not portable**: `\s` denotes a different set of characters
+in different languages, so two conformant-looking encoders can emit different
+bytes for the same input. This specification therefore enumerates the set,
+and implementations MUST NOT substitute their host language's `\s`.
+
+An element is length-prefixed if it contains any of:
+
+| Code point(s) | |
+|---|---|
+| U+0009–U+000D | tab, LF, VT, FF, CR |
+| U+001C–U+001F | file, group, record, unit separators |
+| U+0020 | space |
+| U+0028, U+0029 | `(` and `)` |
+| U+0085 | next line (NEL) |
+| U+00A0 | no-break space |
+| U+1680 | ogham space mark |
+| U+2000–U+200A | en quad … hair space |
+| U+2028, U+2029 | line, paragraph separator |
+| U+202F, U+205F | narrow no-break, medium mathematical space |
+| U+3000 | ideographic space |
+
+U+FEFF (zero-width no-break space / BOM) is **NOT** in the set, though some
+languages include it in `\s`. Note this set is deliberately **wider** than the
+delimiter set of §3.1: a decoder separates elements on only space, tab and
+newline, so most of these characters never actually needed prefixing. The
+excess is harmless — it costs bytes, not correctness — but it is normative,
+because canonical output must be reproducible byte-for-byte by any
+implementation.
+
+Divergence here does not corrupt a round-trip: an encoder that under- or
+over-prefixes one of these still produces a payload every conformant decoder
+reads back identically. It breaks anything that hashes, signs, deduplicates or
+compares payload bytes. Conformance vectors covering both directions are in
+`test/codec/fixtures/s_expression_golden.json` (the `ws` cases).
 
 ## 5. Dictionaries
 
@@ -265,6 +312,30 @@ disagree, which is a worse failure than lenient parity. A future revision that
 wants strict single-list envelopes must change `parser.py` (§10) so both ends
 move together. Recorded, not endorsed; pinned as a parity vector in the
 conformance suite.
+
+### 8.6. Non-symbol command position
+
+The reference is dynamically typed, so the `car` it returns is whatever sat in
+command position: normally a symbol, but `None` for a `0:` there (`( 0:)` →
+`(None, [])`) and a list for a nested list there (`((a b) c)` → `(['a','b'],
+['c'])`).
+
+No conformant encoder can produce either shape. §4 builds a payload from a
+command and its parameters, and every reference sender supplies a symbol —
+`generate(method_name, ...)` in `transport/transport_mqtt.py` and
+`discovery.py` — so these arise only from malformed or hostile input.
+
+A decoder MUST NOT decode a payload whose command position is not a symbol; it
+SHOULD reject it the same way as §7. This is a deliberate narrowing of the
+accept-set relative to the reference, made because a command names a method to
+dispatch and neither shape can name one. A statically typed implementation that
+instead widens its return type to admit them propagates the ambiguity to every
+caller; the Dart implementation raises `FormatException` and pins the reference
+values as conformance vectors (the `divergences` fixture group).
+
+Found by differential-fuzzing the decoder against the reference: the nested-list
+form crashed the Dart cast with an exception outside the declared contract, and
+the null form was silently flattened to the empty command.
 
 ## 9. Security considerations
 

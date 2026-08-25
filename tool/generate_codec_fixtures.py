@@ -12,6 +12,14 @@ Usage:
 
 Defaults to the sibling checkout `../aiko_services`. Re-run whenever
 parser.py changes upstream; commit the regenerated fixture.
+
+REGEN DEPENDENCY: parser.py is imported directly, standalone, so this only
+works while it imports nothing but `re` and `sys`. If upstream adds an
+intra-package import, this script fails loudly at import time. That is a
+REGENERATION-time dependency only -- the fixtures are committed, so the test
+suite is unaffected and CI stays green; you simply cannot refresh the oracle
+until the import is satisfied (pass the repo path as argv[1], or import via
+the installed package).
 """
 import json
 import os
@@ -60,6 +68,36 @@ GENERATE_CASES = [
     # Multi-code-point grapheme: ZWJ family is ONE glyph, SEVEN code points.
     # Guards against anyone "fixing" toward grapheme-cluster length later.
     ("family", ["\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466 x"]),
+    # Whitespace-class parity. Dart's `\s` and Python's `\s` are NOT the same
+    # set, and RE_DELIMITERS decides whether an atom is length-prefixed -- so a
+    # regex-based Dart port emits different BYTES than the reference for these.
+    # Neither tokeniser splits on any of them (both split on exactly space, tab
+    # and newline), so a round-trip always survived; what diverged was the
+    # canonical encoding, which is what RFC-0001 pins. Found by differential
+    # fuzzing (tool/fuzz_generate_parity.dart), 3604 mismatches in 40k atoms.
+    ("ws", ["a\u0085b"]),      # NEL: Python \s, NOT Dart \s -> MUST prefix
+    ("ws", ["a\u001cb"]),      # C0 file separator: Python \s, not Dart's
+    ("ws", ["a\u001fb"]),      # C0 unit separator: Python \s, not Dart's
+    ("ws", ["a\ufeffb"]),      # BOM: Dart \s, NOT Python \s -> must NOT prefix
+    ("ws", ["\ufeff"]),        # BOM alone: bare, no prefix
+    ("ws", ["a\u00a0b"]),      # NBSP: in BOTH -> prefix
+    ("ws", ["a\u3000b"]),      # ideographic space: in BOTH -> prefix
+    ("ws", ["a\u2028b"]),      # line separator: in BOTH -> prefix
+    ("ws", ["a\u0001b"]),      # C0 SOH: in NEITHER -> must NOT prefix
+    ("ws", ["a\u007fb"]),      # DEL: in NEITHER -> must NOT prefix
+    # Mixed positional + keyword in ONE payload. This is not hypothetical: it
+    # is the exact shape the remote proxy puts on the wire. Both
+    # transport/transport_mqtt.py:79 and discovery.py:164 build parameters as
+    #     args if not kwargs else [args[0], kwargs]
+    # so a kwargs call sends EXACTLY ONE positional followed by the dict, and
+    # silently DISCARDS args[1:]. These pin the wire shape the Dart proxy must
+    # mirror when it is written (issue #2038).
+    ("update", ["log_level", {"level": "DEBUG"}]),
+    ("update", ["log_level", {"level": "DEBUG", "force": "1"}]),
+    ("add", ["topic", {"protocol": "mqtt", "owner": "nick"}]),
+    ("cfg", ["a", {"nested": ["x", "y"]}]),      # dict value that is a list
+    ("cfg", ["a", {"k": None}]),                 # dict value that is null
+    ("cfg", ["a", {"k": "has space"}]),          # dict value needing a prefix
 ]
 
 # ---- parse() cases: payload string -> (command, cdr) --------------------
@@ -94,6 +132,28 @@ PARSE_CASES = [
     "(lone 2:\ud800x b)",                    # lone high + ascii, then next atom
     "(lone 1:\ud800 b)",                     # lone high alone; must NOT eat the space
     "(lone 1:\udc00 b)",                     # lone low
+    # A nested list mid-atom does NOT terminate the atom: the reference keeps
+    # accumulating and emits the joined atom AFTER the sublist. Pinned because
+    # the Dart tokeniser tracks a bare atom as an index range into the payload,
+    # which a nested list splits -- these are the only vectors that exercise
+    # that carry path, and a "simplification" that flushed on "(" would pass
+    # every other vector here.
+    "(c ab(x)cd)",                           # -> [["x"], "abcd"]
+    "(c ab(x)cd ef)",                        # carry then a normal atom
+    "(c a(b)(d)e)",                          # TWO interruptions: -> "ae"
+    "(c (x)ab)",                             # sublist first, atom after
+    "(c ab(x))",                             # atom flushed by the closing paren
+    # Canonical-symbol boundary: RE_CANONICAL_SYMBOL is `^(\d+):(.+)`, and that
+    # `(.+)` demands at least one character AFTER the colon. So a trailing
+    # `0:` / `12:` at end of input is NOT a canonical symbol -- it is the
+    # ordinary atom "0:" / "12:". Inside a payload the closing paren supplies
+    # the required character, which is why `(ping 0:)` is still null. Found by
+    # differential fuzzing (tool/fuzz_parse_parity.dart); the Dart scan
+    # initially decoded a bare `0:` as null and threw on a bare `12:`.
+    "0:",                                    # bare -> atom "0:", NOT null
+    "12:",                                   # bare -> atom "12:", NOT a throw
+    " 0:",                                   # leading whitespace, same
+    "(c 0:)",                                # inside a list -> IS null
 ]
 
 
@@ -112,7 +172,41 @@ PARSE_ERROR_CASES = [
     "(c a: 1 b c: 2 d)",   # §7: keyword-position string does not end with ":"
     "(c 99:ab)",           # §8.2: overlong length prefix (reference crashes)
     "(c a b",              # §8.1: unterminated list (reference crashes)
+    # §8.2 again, at the canonical-symbol boundary: the `)` satisfies the
+    # `(.+)` so `12:` IS parsed as a length prefix here, and 12 characters
+    # overrun the input. Sibling of the bare `12:` in PARSE_CASES, which is an
+    # ordinary atom precisely because nothing follows the colon.
+    "(c 12:)",
 ]
+
+
+# ---- deliberate divergences: reference DECODES, Dart MUST REJECT --------
+# A third category, distinct from PARSE_ERROR_CASES (where the reference also
+# fails). Here the reference decodes and the Dart port deliberately refuses,
+# so the fixture records what the reference produced -- making the divergence
+# a reviewable, pinned decision rather than an undocumented behaviour drift.
+#
+# The reference is dynamically typed, so its `car` can come back as None (a
+# `0:` in command position) or as a nested list (`((a b) c)`). Dart's parse
+# returns (String, Object), which admits neither; before this was pinned, the
+# list crashed the cast with a raw TypeError (escaping the "decodes or throws
+# FormatException" contract on untrusted input) and the null was silently
+# flattened to "". We reject both: a command names a method to dispatch, and
+# every reference sender builds one via generate(method_name, ...) with a str,
+# so no conformant encoder emits either shape. RFC-0001 §8.6.
+DIVERGENCE_CASES = [
+    "(0: a)",          # null in command position
+    "( 0:)",           # null command, no arguments
+    "((a b) c)",       # nested list in command position (crashed the cast)
+    "((a))",           # nested list, no arguments
+    "(((a)))",         # doubly nested
+]
+
+
+def divergence(payload):
+    """Record what the reference decodes, for a payload Dart must reject."""
+    car, cdr = parser.parse(payload)
+    return {"payload": payload, "reference_car": car, "reference_cdr": cdr}
 
 
 def car_cdr(payload):
@@ -140,6 +234,7 @@ def main():
         ],
         "parse": [car_cdr(p) for p in PARSE_CASES],
         "parse_errors": [parse_error(p) for p in PARSE_ERROR_CASES],
+        "divergences": [divergence(p) for p in DIVERGENCE_CASES],
     }
     out = os.path.join(
         HERE, "..", "test", "codec", "fixtures", "s_expression_golden.json")
@@ -150,7 +245,8 @@ def main():
         f.write("\n")
     print(f"wrote {len(fixture['generate'])} generate + "
           f"{len(fixture['parse'])} parse + "
-          f"{len(fixture['parse_errors'])} parse-error vectors -> {out}")
+          f"{len(fixture['parse_errors'])} parse-error + "
+          f"{len(fixture['divergences'])} divergence vectors -> {out}")
 
 
 if __name__ == "__main__":
