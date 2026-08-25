@@ -97,7 +97,8 @@ bool _needsLengthPrefix(String element) {
 /// code point of one unit (matching `String.runes` and Python `len`).
 int _codePointEnd(String s, int i) {
   final unit = s.codeUnitAt(i);
-  final isPair = (unit & 0xFC00) == 0xD800 &&
+  final isPair =
+      (unit & 0xFC00) == 0xD800 &&
       i + 1 < s.length &&
       (s.codeUnitAt(i + 1) & 0xFC00) == 0xDC00;
   return i + (isPair ? 2 : 1);
@@ -125,7 +126,8 @@ String generate(String command, Object parameters) {
     params = parameters;
   } else {
     throw ArgumentError(
-        'parameters must be a List or Map, got ${parameters.runtimeType}');
+      'parameters must be a List or Map, got ${parameters.runtimeType}',
+    );
   }
   return _generateSExpression(<Object?>[command, ...params]);
 }
@@ -234,9 +236,10 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
       // deliberate receive-side divergence.
       if (command is! String) {
         throw FormatException(
-            'S-expression command must be a symbol, got '
-            '${command == null ? 'null (0:)' : command.runtimeType}',
-            payload);
+          'S-expression command must be a symbol, got '
+          '${command == null ? 'null (0:)' : command.runtimeType}',
+          payload,
+        );
       }
       car = command;
       cdr = head.sublist(1);
@@ -252,8 +255,11 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
 /// where the reference implementation instead crashes with an internal
 /// `TypeError`. Only the top-level frame (which sits *after* the outer `)`) is
 /// allowed to reach end of input.
-(List<Object?>, int) _parseTokens(String s, int start,
-    {bool mustClose = false}) {
+(List<Object?>, int) _parseTokens(
+  String s,
+  int start, {
+  bool mustClose = false,
+}) {
   final result = <Object?>[];
   // A bare token is normally the contiguous run `s[tokenStart..i]`, so it costs
   // one substring at flush time instead of a fresh String per character. The
@@ -317,7 +323,10 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
           for (var taken = 0; taken < len; taken++) {
             if (end >= s.length) {
               throw FormatException(
-                  'Canonical symbol length $len exceeds remaining input', s, i);
+                'Canonical symbol length $len exceeds remaining input',
+                s,
+                i,
+              );
             }
             end = _codePointEnd(s, end);
           }
@@ -351,14 +360,18 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
       result.add(sublist);
     } else if (c == _cClose) {
       if (tokenCarried != null || tokenStart >= 0) {
-        result.add((tokenCarried ?? '') +
-            (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+        result.add(
+          (tokenCarried ?? '') +
+              (tokenStart < 0 ? '' : s.substring(tokenStart, i)),
+        );
       }
       return (result, i + 1);
     } else if (c == _cSpace || c == _cTab || c == _cNewline) {
       if (tokenCarried != null || tokenStart >= 0) {
-        result.add((tokenCarried ?? '') +
-            (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+        result.add(
+          (tokenCarried ?? '') +
+              (tokenStart < 0 ? '' : s.substring(tokenStart, i)),
+        );
         tokenCarried = null;
         tokenStart = -1;
       }
@@ -370,11 +383,15 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
   }
   if (mustClose) {
     throw FormatException(
-        'Unterminated list: expected ")" before end of input', s, s.length);
+      'Unterminated list: expected ")" before end of input',
+      s,
+      s.length,
+    );
   }
   if (tokenCarried != null || tokenStart >= 0) {
-    result.add((tokenCarried ?? '') +
-        (tokenStart < 0 ? '' : s.substring(tokenStart, i)));
+    result.add(
+      (tokenCarried ?? '') + (tokenStart < 0 ? '' : s.substring(tokenStart, i)),
+    );
   }
   return (result, i);
 }
@@ -388,8 +405,9 @@ Object _listToDict(Object tree) {
   if (head is String && head.isNotEmpty && head.endsWith(':')) {
     if (tree.length.isOdd) {
       throw FormatException(
-          'S-expression dictionary starting at "$head" must have pairs of '
-          'keywords and values');
+        'S-expression dictionary starting at "$head" must have pairs of '
+        'keywords and values',
+      );
     }
     final map = <String, Object?>{};
     for (var i = 0; i < tree.length ~/ 2; i++) {
@@ -401,17 +419,20 @@ Object _listToDict(Object tree) {
       final keyword = tree[i * 2];
       if (keyword is! String) {
         throw FormatException(
-            'S-expression dictionary keyword "$keyword" must be a string');
+          'S-expression dictionary keyword "$keyword" must be a string',
+        );
       }
       // Faithful to parser.py: the `:` check is skipped for an empty keyword
       // (its `len()` guard), which then maps to the empty key.
       if (keyword.isNotEmpty && !keyword.endsWith(':')) {
         throw FormatException(
-            'S-expression dictionary keyword "$keyword" must end with ":"');
+          'S-expression dictionary keyword "$keyword" must end with ":"',
+        );
       }
       final value = tree[i * 2 + 1];
-      final key =
-          keyword.isEmpty ? '' : keyword.substring(0, keyword.length - 1);
+      final key = keyword.isEmpty
+          ? ''
+          : keyword.substring(0, keyword.length - 1);
       map[key] = value == null ? null : _listToDict(value);
     }
     return map;
