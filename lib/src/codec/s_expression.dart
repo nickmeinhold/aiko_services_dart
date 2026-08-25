@@ -88,8 +88,17 @@ List<Object?> _dictToList(Map<Object?, Object?> expression) {
 /// check, then dict, then list, then empty-string, then null) matches the
 /// Python line-for-line so edge cases like `""` and `0:` encode identically.
 String _generateSExpression(List<Object?> expression) {
+  final buffer = StringBuffer();
+  _writeSExpression(buffer, expression);
+  return buffer.toString();
+}
+
+/// Writes into a caller-supplied buffer so a nested list appends in place
+/// rather than building its own String for the parent to concatenate — the
+/// same quadratic accumulation the tokeniser had, once per nesting level.
+void _writeSExpression(StringBuffer buffer, List<Object?> expression) {
   var character = '';
-  var payload = '(';
+  buffer.write('(');
   for (var element in expression) {
     if (element is String && _reDelimiters.hasMatch(element)) {
       // Length counts Unicode CODE POINTS (Python len semantics), not UTF-16
@@ -102,7 +111,10 @@ String _generateSExpression(List<Object?> expression) {
       element = _dictToList(element);
     }
     if (element is List) {
-      element = _generateSExpression(element);
+      buffer.write(character);
+      _writeSExpression(buffer, element);
+      character = ' ';
+      continue;
     }
     if (element is String && element == '') {
       character = ' ""';
@@ -110,10 +122,11 @@ String _generateSExpression(List<Object?> expression) {
     if (element == null) {
       element = '0:';
     }
-    payload = '$payload$character$element';
+    buffer.write(character);
+    buffer.write(element);
     character = ' ';
   }
-  return '$payload)';
+  buffer.write(')');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
