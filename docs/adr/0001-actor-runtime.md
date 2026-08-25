@@ -24,6 +24,8 @@ anything here. Concretely, the contracts we inherit unchanged:
 | shared state | `(add k v)` / `(update k v)` / `(remove k)` on `/control` |
 | subscription | `(share <topic> <lease> *)` or `… (lifecycle x)` on `/control` |
 | proxy send | `args if not kwargs else [args[0], kwargs]` — one positional + dict, `args[1:]` discarded |
+| presence | MQTT **last will** `(absent)`, retained by the broker, published on `{namespace}/{host}/{pid}/0/state` when a process dies ungracefully — a clean `disconnect()` does *not* fire it |
+| broker transport | `tcp` (1883) or **`websockets` (1884, WSS 9884)** — already selectable in the reference via `AIKO_MQTT_TRANSPORT` |
 
 Everything above that line is ours. Where the Python's shape is an artifact of
 *Python*, we take the shape Dart wants.
@@ -159,6 +161,31 @@ Dart must preserve both. A `Service` is therefore constructed *unregistered*
 and acquires identity on admission — which the type system should make
 explicit rather than leaving a half-built object reachable.
 
+### D8 — The two-thread hop collapses, and a documented deadlock disappears
+
+*Python:* paho-mqtt's `loop_start()` runs network I/O on a **background thread**.
+`ProcessImplementation.on_message()` therefore does nothing but
+`event.queue_put(...)`, bouncing every incoming message onto the main event loop
+so application handlers never run on the MQTT thread. `message.md` documents the
+bug this leaves behind: framework code that waits on the paho thread for a
+condition driven by an *incoming* message deadlocks, because the same thread
+must deliver that message. The reference's own proposed fix is "queue all
+incoming messages onto the main event loop by default".
+
+*Dart:* there is no second thread to bounce off. `mqtt_client` delivers on the
+same isolate's event loop, so the hop is not a workaround we port — it is a
+Python artifact, and **the deadlock class cannot be constructed in Dart at all.**
+
+Two consequences we take deliberately:
+
+- The `wait_connected()` / `wait_disconnected()` / `wait_published()` family —
+  1 ms busy-wait polls, capped at ~2 s, that log an error and then *continue
+  anyway* — become `Future`s. A timeout becomes a `TimeoutException` a caller
+  can see, not a log line the caller never reads (`dir-id 3f6b` again).
+- The mailbox's ordering guarantee (§2) is now the *only* serialisation
+  mechanism in the stack, rather than one of two. That raises the stakes on §2
+  being right, which is exactly why it is the first thing the temper should hit.
+
 ## 4. First vertical slice
 
 Smallest thing that is genuinely end-to-end, in dependency order:
@@ -179,18 +206,35 @@ fails if we got the mailbox wrong.
 **(a) The `aiko` global (D1) — ✅ RESOLVED.** Explicit `AikoRuntime` object; see
 D1 for the decision and rationale.
 
-**(b) Castaway.** `process.md` names `aiko.message` as "MQTT **or Castaway**".
-If a non-MQTT transport already exists in the reference, it changes the shape of
-#3240 (web conditional-import split) and #2268 (browser target). Read
-`message.md` before committing to a transport abstraction.
+**(b) Castaway — ✅ RESOLVED 2026-08-25 by reading `message.md` in full.**
+Castaway is **not** an alternative transport. It is the *Null Object* of the
+`Message` family — a no-op `publish`/`subscribe` used when no broker can be
+reached, so a process can run standalone (`mqtt_connection_required=False`).
+It carries no wire format of its own.
+
+Two things fall out of that reading, and both are better news than the fork was:
+
+1. **#3240 / #2268 are conformance, not invention.** The reference already
+   selects `AIKO_MQTT_TRANSPORT=websockets` on port 1884 (9884 WSS). A Dart
+   `MqttBrowserClient` behind the conditional-import split talks to the *same
+   broker on the same documented port* as the IO client. The browser target is
+   a config the reference already supports, not a protocol we have to design.
+2. **The Dart in-memory runtime should be a LOOPBACK, not a Null Object.**
+   Castaway silently drops every publish, which is dir-id 3f6b (*silence reads
+   as success*) at the transport layer — a test against Castaway passes whether
+   or not the message was correct. `AikoRuntime.inMemory()` therefore uses an
+   in-process broker that actually round-trips through the codec, so acceptance
+   tests exercise the wire without a server.
 
 **(c) Design-temper before implementing? — ✅ RESOLVED: yes.** Nick chose to
 temper this document BEFORE any `lib/` code. The two claims most worth striking:
-§2 (the mailbox is non-redundant in Dart because scheduling ≠ completion) and D5
+§2 (the mailbox is non-redundant in Dart because scheduling ≠ completion — now
+load-bearing alone, see D8) and D5
 (splitting `share` into a typed framework slice plus an open app map). Recast on
 a landed hit, then build.
 
-**(b) remains genuinely open** — it is the only one left.
+**No forks remain open.** (a), (b) and (c) are all resolved; the next gate is the
+design-temper strike itself.
 
 ## 6. What this document does NOT claim
 
