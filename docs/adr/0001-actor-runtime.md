@@ -1,6 +1,6 @@
 # ADR-0001 — The Dart Actor runtime
 
-- **Status:** proposed
+- **Status:** accepted (D1 decided 2026-08-25); design-temper pending before implementation
 - **Date:** 2026-08-25
 - **Context:** first framework code in `lib/`; everything after it inherits these shapes
 - **Mandate:** Nick, 2026-08-25 — *"framework port should be designed, not just ported"*
@@ -78,7 +78,21 @@ first-class feature."
 *Dart:* an explicit `AikoRuntime` object, threaded through construction. One per
 process by convention, not by language enforcement.
 
-**This is a flagged fork — see §5(a). Do not build past it without Nick.**
+**DECIDED 2026-08-25 (Nick):** the explicit `AikoRuntime` object, over both the
+module-level global and a Zone-scoped current-runtime. Rationale for the record:
+the Zone option is ambient-but-scoped and would give real isolation, but it makes
+the dependency invisible at the call site; threading the reference is more typing
+and more honest.
+
+```dart
+final runtime = AikoRuntime(transport: mqtt);
+final counter  = CounterActor(runtime, name: 'counter');
+await runtime.run();
+
+// tests get isolation without process teardown:
+final rt = AikoRuntime.inMemory();
+addTearDown(rt.dispose);
+```
 
 ### D2 — Lifecycle as a sealed state, not two dict keys
 
@@ -162,19 +176,21 @@ fails if we got the mailbox wrong.
 
 ## 5. Open forks — Nick's call, not to be built past silently
 
-**(a) The `aiko` global (D1).** Explicit runtime object vs. a module-level
-singleton mirroring the Python. Explicit costs threading a reference through
-every constructor; it buys testability, multiple runtimes per process, and the
-roadmap's multiple-Actors-per-Process. **Touches every file, so it is Nick's.**
+**(a) The `aiko` global (D1) — ✅ RESOLVED.** Explicit `AikoRuntime` object; see
+D1 for the decision and rationale.
 
 **(b) Castaway.** `process.md` names `aiko.message` as "MQTT **or Castaway**".
 If a non-MQTT transport already exists in the reference, it changes the shape of
 #3240 (web conditional-import split) and #2268 (browser target). Read
 `message.md` before committing to a transport abstraction.
 
-**(c) Design-temper before implementing?** First framework code sets the pattern
-for everything after it. A cross-family adversarial strike on *this document* is
-cheap now and expensive later.
+**(c) Design-temper before implementing? — ✅ RESOLVED: yes.** Nick chose to
+temper this document BEFORE any `lib/` code. The two claims most worth striking:
+§2 (the mailbox is non-redundant in Dart because scheduling ≠ completion) and D5
+(splitting `share` into a typed framework slice plus an open app map). Recast on
+a landed hit, then build.
+
+**(b) remains genuinely open** — it is the only one left.
 
 ## 6. What this document does NOT claim
 
