@@ -216,7 +216,31 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
     if (head is String) {
       car = head;
     } else if (head is List && head.isNotEmpty) {
-      car = head[0] as String? ?? '';
+      final command = head[0];
+      // The reference is dynamically typed, so its `car` can come back as a
+      // String, as `None` (a `0:` in command position) or as a nested List
+      // (`((a b) c)`). Dart's return type admits only the first, and the two
+      // others failed in the worst available ways: the List crashed the cast
+      // with a raw TypeError -- escaping the documented "decodes, or throws
+      // FormatException" contract on untrusted wire input -- and the null was
+      // silently flattened to '', conflating "no command" with "empty
+      // command". Both found by differential-fuzzing parse() against the
+      // reference (tool/fuzz_parse_parity.dart): 103 crashes, 579 wrong values.
+      //
+      // We reject instead of widening the return type. A command names a
+      // method to dispatch, and every reference sender builds one with
+      // `generate(method_name, ...)` where method_name is a str, so no
+      // conformant encoder can emit either shape. Rejecting is fail-closed at
+      // a trust boundary; widening to `Object?` would push the same type
+      // confusion into every caller. RFC-0001 section 8.6 records this as a
+      // deliberate receive-side divergence.
+      if (command is! String) {
+        throw FormatException(
+            'S-expression command must be a symbol, got '
+            '${command == null ? 'null (0:)' : command.runtimeType}',
+            payload);
+      }
+      car = command;
       cdr = head.sublist(1);
     }
   }
@@ -260,7 +284,17 @@ final RegExp _reString = RegExp('''(['"])(.*?)\\1''');
         if (d < _c0 || d > _c9) break;
         digitEnd++;
       }
-      if (digitEnd > i && digitEnd < n && s.codeUnitAt(digitEnd) == _cColon) {
+      // `digitEnd + 1 < n` reproduces the `(.+)` in the reference's
+      // `^(\d+):(.+)`: a canonical symbol requires at least one character
+      // AFTER the colon, so a trailing `0:` or `12:` at end of input is not a
+      // canonical symbol at all -- it is the ordinary atom "0:" / "12:".
+      // Inside a payload the closing `)` supplies that character, which is why
+      // `(ping 0:)` still decodes to null. Dropping this made a bare `0:`
+      // decode as null and a bare `12:` throw, where the reference returns an
+      // atom for both (differential fuzz, tool/fuzz_parse_parity.dart).
+      if (digitEnd > i &&
+          digitEnd + 1 < n &&
+          s.codeUnitAt(digitEnd) == _cColon) {
         // A run long enough to overflow a 64-bit int must still throw the
         // FormatException `int.parse` used to throw, so defer to it there.
         var len = 0;

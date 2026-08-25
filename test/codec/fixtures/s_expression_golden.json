@@ -227,6 +227,71 @@
         "a\u007fb"
       ],
       "expected": "(ws a\u007fb)"
+    },
+    {
+      "command": "update",
+      "params": [
+        "log_level",
+        {
+          "level": "DEBUG"
+        }
+      ],
+      "expected": "(update log_level (level: DEBUG))"
+    },
+    {
+      "command": "update",
+      "params": [
+        "log_level",
+        {
+          "level": "DEBUG",
+          "force": "1"
+        }
+      ],
+      "expected": "(update log_level (level: DEBUG force: 1))"
+    },
+    {
+      "command": "add",
+      "params": [
+        "topic",
+        {
+          "protocol": "mqtt",
+          "owner": "nick"
+        }
+      ],
+      "expected": "(add topic (protocol: mqtt owner: nick))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "nested": [
+            "x",
+            "y"
+          ]
+        }
+      ],
+      "expected": "(cfg a (nested: (x y)))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "k": null
+        }
+      ],
+      "expected": "(cfg a (k: 0:))"
+    },
+    {
+      "command": "cfg",
+      "params": [
+        "a",
+        {
+          "k": "has space"
+        }
+      ],
+      "expected": "(cfg a (k: 9:has space))"
     }
   ],
   "parse": [
@@ -466,6 +531,28 @@
         ],
         "ab"
       ]
+    },
+    {
+      "payload": "0:",
+      "command": "0:",
+      "cdr": []
+    },
+    {
+      "payload": "12:",
+      "command": "12:",
+      "cdr": []
+    },
+    {
+      "payload": " 0:",
+      "command": "0:",
+      "cdr": []
+    },
+    {
+      "payload": "(c 0:)",
+      "command": "c",
+      "cdr": [
+        null
+      ]
     }
   ],
   "parse_errors": [
@@ -493,6 +580,51 @@
       "payload": "(c a b",
       "raises": "TypeError",
       "message": "unsupported operand type(s) for +=: 'int' and 'list'"
+    },
+    {
+      "payload": "(c 12:)",
+      "raises": "TypeError",
+      "message": "unsupported operand type(s) for +=: 'int' and 'list'"
+    }
+  ],
+  "divergences": [
+    {
+      "payload": "(0: a)",
+      "reference_car": null,
+      "reference_cdr": [
+        "a"
+      ]
+    },
+    {
+      "payload": "( 0:)",
+      "reference_car": null,
+      "reference_cdr": []
+    },
+    {
+      "payload": "((a b) c)",
+      "reference_car": [
+        "a",
+        "b"
+      ],
+      "reference_cdr": [
+        "c"
+      ]
+    },
+    {
+      "payload": "((a))",
+      "reference_car": [
+        "a"
+      ],
+      "reference_cdr": []
+    },
+    {
+      "payload": "(((a)))",
+      "reference_car": [
+        [
+          "a"
+        ]
+      ],
+      "reference_cdr": []
     }
   ]
 }

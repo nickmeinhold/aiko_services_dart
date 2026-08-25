@@ -84,6 +84,29 @@ void main() {
     }
   });
 
+  group('parse() DELIBERATELY rejects what the reference decodes', () {
+    // A divergence, pinned rather than hidden. The reference is dynamically
+    // typed, so its `car` can be None (a `0:` in command position) or a nested
+    // list (`((a b) c)`); Dart's parse returns (String, Object), which admits
+    // neither. Before this was pinned the list crashed the cast with a raw
+    // TypeError -- escaping the "decodes, or throws FormatException" contract
+    // on untrusted wire input -- and the null was silently flattened to "".
+    //
+    // We reject instead of widening the return type: a command names a method
+    // to dispatch, and every reference sender builds one via
+    // generate(method_name, ...) with a str, so no conformant encoder emits
+    // either shape. The fixture carries what the reference produced, so this
+    // stays a reviewable decision (RFC-0001 §8.6) rather than behaviour drift.
+    for (final vector in fixture['divergences'] as List) {
+      final v = vector as Map<String, dynamic>;
+      final payload = v['payload'] as String;
+      test('$payload (reference decodes to '
+          '${jsonEncode(v['reference_car'])})', () {
+        expect(() => parse(payload), throwsFormatException);
+      });
+    }
+  });
+
   group('parse() rejects malformed input (Dart-only boundary probes)', () {
     // Finer-grained boundary cases not in the reference fixture: a length
     // prefix one past the end, and a truncation mid-surrogate. Both exercise

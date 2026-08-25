@@ -98,6 +98,15 @@ A symbol whose content could be misread as structure is written
   exactly `<length>` code points following the `:` as the symbol's content,
   including any delimiter characters within them.
 - `0:` does not introduce a symbol; it encodes null (§3.5).
+- A length prefix is recognized only when **at least one character follows
+  the colon**. The reference pattern is `^(\d+):(.+)`, and that `.+` is
+  load-bearing: a trailing `0:` or `12:` at end of input is not a prefix at
+  all, but the ordinary atom `0:` / `12:`. Inside a payload the closing `)`
+  supplies the required character, which is why `(c 0:)` still decodes to
+  null while a bare `0:` decodes to the two-character atom. An implementation
+  that omits this reads a bare `0:` as null, and a bare `12:` as an overlong
+  prefix to be rejected — both diverging from the reference on input the
+  reference accepts.
 
 The prefix is only recognized at the *start* of an element; a `:` later in an
 atom (for example the dictionary keyword `b:`) has no length-prefix meaning.
@@ -303,6 +312,30 @@ disagree, which is a worse failure than lenient parity. A future revision that
 wants strict single-list envelopes must change `parser.py` (§10) so both ends
 move together. Recorded, not endorsed; pinned as a parity vector in the
 conformance suite.
+
+### 8.6. Non-symbol command position
+
+The reference is dynamically typed, so the `car` it returns is whatever sat in
+command position: normally a symbol, but `None` for a `0:` there (`( 0:)` →
+`(None, [])`) and a list for a nested list there (`((a b) c)` → `(['a','b'],
+['c'])`).
+
+No conformant encoder can produce either shape. §4 builds a payload from a
+command and its parameters, and every reference sender supplies a symbol —
+`generate(method_name, ...)` in `transport/transport_mqtt.py` and
+`discovery.py` — so these arise only from malformed or hostile input.
+
+A decoder MUST NOT decode a payload whose command position is not a symbol; it
+SHOULD reject it the same way as §7. This is a deliberate narrowing of the
+accept-set relative to the reference, made because a command names a method to
+dispatch and neither shape can name one. A statically typed implementation that
+instead widens its return type to admit them propagates the ambiguity to every
+caller; the Dart implementation raises `FormatException` and pins the reference
+values as conformance vectors (the `divergences` fixture group).
+
+Found by differential-fuzzing the decoder against the reference: the nested-list
+form crashed the Dart cast with an exception outside the declared contract, and
+the null form was silently flattened to the empty command.
 
 ## 9. Security considerations
 
