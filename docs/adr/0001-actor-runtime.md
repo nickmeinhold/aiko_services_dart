@@ -1,6 +1,6 @@
 # ADR-0001 — The Dart Actor runtime
 
-- **Status:** proposed — **revision 4 (subtraction)**, 2026-08-26. Revision 1 returned RECAST on 13
+- **Status:** proposed — **revision 5 (split)**, 2026-08-26. Revision 1 returned RECAST on 13
   flaws (`0001-TEMPER.md`); revision 2 returned RECAST on 9 more (`0001-TEMPER-round2.md`);
   revision 3 returned NOT SOUND (`0001-TEMPER-round3.md`) with all four families converging on the
   same fold — **delete parking**. Revision 4 is that subtraction plus the two fences it does not
@@ -9,6 +9,17 @@
 - **Date:** 2026-08-25, recast 2026-08-26
 - **Context:** first framework code in `lib/`; everything after it inherits these shapes
 - **Mandate:** Nick, 2026-08-25 — *"framework port should be designed, not just ported"*
+
+> **SPLIT 2026-08-26 (Nick's call).** The concurrency model — the mailbox, the epoch fence, the
+> transport isolate, and decisions D4, D6, D8, D9 — moved to **`0002-actor-concurrency-model.md`**,
+> which is **not converged** and gates no work here. This document keeps the surface that
+> converged: the wire seam and the value types.
+>
+> **Evidence for that claim, stated at its proven scope:** three cross-family strikes hit this
+> whole document. Round 1 found flaws in D1, D2, D5 and D7; they were folded in revision 2, and
+> **rounds 2 and 3 found nothing new in any of them.** That is "struck three times, unchanged
+> since round 1" — not a clean SOUND verdict, which this document has never received. It is
+> enough to build on; it is not enough to stop testing.
 
 ## 0. What the recast changed, and why it is worth reading twice
 
@@ -78,203 +89,7 @@ this table**. It does not move to accommodate anything here.
 Everything above that line is ours. Where the Python's shape is an artifact of *Python*, we take
 the shape Dart wants.
 
-## 2. The central question: does Dart need a mailbox?
-
-### 2.1 The physics (unchanged, and unchallenged by the strike)
-
-Python needs an explicit mailbox because its threads are preemptive and share state. Dart's event
-loop already serialises, so the tempting answer is that the mailbox is redundant.
-
-That answer is wrong:
-
-> Dart gives one-at-a-time **scheduling** for free. It does not give one-at-a-time
-> **completion**.
-
-A synchronous handler runs to completion uninterrupted. An `async` handler yields at every
-`await` — so message B can begin, and observe state, while message A is suspended half-way
-through mutating it. Every family accepted this. The mailbox stays.
-
-### 2.2 Why it stays — reordered, because revision 1 had this backwards
-
-Revision 1 led with completion-ordering and called it "the real one". It is the *weakest* of the
-three, because completion-ordering alone does not need a mailbox — it needs three lines:
-
-```dart
-_tail = _tail.then((_) => handler());   // a serialising Future chain
-```
-
-No queue, no drain loop, no dequeue policy. **Considered and rejected**, because it cannot
-express the other two reasons, which are the ones that actually require a queue:
-
-1. **Uniform local/remote call path.** Behaviour must not depend on where the caller lives. A
-   local call is enqueued exactly as a remote one is — which is why, in the reference,
-   `actor.test(1)` does *nothing* until the loop runs. A Future chain has no queue to inspect,
-   reorder, defer, or drain on shutdown.
-2. **Deferral, delayed commands, and priority ordering** (D4). A chain cannot hold an item
-   against a deadline.
-3. **Completion-ordering across `await` points.** Real, necessary, and the cheapest of the three
-   to obtain.
-
-### 2.3 Replies: conform to `do_request()`, all the way
-
-All four families found revision 1's reentrancy deadlock: a mailbox that awaits each handler to
-completion, plus replies arriving as messages, wedges any handler that `await`s a reply. Python is
-immune because `Message.invoke()` is **synchronous**.
-
-The reference's answer: `discovery.py::do_request()` has the caller nominate a **`response_topic`**,
-registers the handler at **process** level via `add_message_handler()`, fires `do_command()` and
-**returns immediately**. `pipeline.py:1873`'s `topic_response_handler` is the identical shape — two
-independent call sites, so this is the reference's pattern, not one function's habit.
-
-**Revisions 2 and 3 each tried to keep `await` ergonomics on top of that, and both failed.**
-Revision 2 floated an `await`-shaped `Completer`, which head-of-line blocks for unbounded peer
-latency. Revision 3 invented *parking* — awaiting would release the turn and the continuation would
-re-enter as a fresh turn. Round 3 killed it unanimously, on a fact about the language:
-
-> **`await t.ask()` does not yield a mailbox turn.** Completing that Future resumes the handler as
-> a **microtask** — precisely the side door §2.4 exists to nail shut. The mailbox never owns "the
-> rest of the function."
-
-It also failed *deterministically where it mattered most*: §5's in-memory loopback completes a reply
-synchronously, so parking would be guaranteed **absent** on the uniform local/remote path that is
-§2.2's reason 2 — the very reason the mailbox exists. And it bought nothing: completion-ordering
-across the `await` was surrendered, while the two remaining justifications are exactly what the
-simple form still provides.
-
-**Decision — strict continuation style. A handler does not `await` a reply.**
-
-```dart
-void join(String id) {
-  ask(directory, GetProfile(id), replyTo: onProfile, context: id);
-  // handler ends here. The actor keeps serving.
-}
-
-void onProfile(Profile profile, String id) {   // a fresh turn, via the mailbox
-  if (!profile.banned) addMember(id);
-}
-```
-
-Two methods instead of one, and a multi-step request becomes N handlers. **That is the honest
-price, and it is the only proposal in three rounds that no family could break.** What the
-subtraction removes in one edit: the reply-before-park race, the loopback determinism hole, nested
-and concurrent `ask` semantics, continuation ordering, and the ownership of a parked caller's
-Future. `dir-id 5e1f` — remove the coupling, do not guard the window.
-
-Inherited constraints, not negotiable: reply reassembly is a **process-level** state machine
-(`(item_count N)` then N × `(response …)`) with its own timeout, and each `response_topic` is
-**single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`).
-
-**Handlers should be synchronous wherever possible.** With replies no longer awaited, the remaining
-reasons to `await` inside a handler are local I/O — and each one holds the turn for its duration.
-That is a real constraint on authors and it is the same one Python imposes.
-
-### 2.4 The closure law
-
-Revision 1 promised "no message observes torn state" without stating a closure condition.
-Revision 2 stated one that **contradicted §2.3** — everything re-enters as a message, versus
-replies never entering the mailbox. Kelvin's reformulation, plus Tesla's epoch clause, resolves
-it by distinguishing events that *initiate* work from events that *feed* work already in flight:
-
-> **Every event that INITIATES a unit of work on actor state enters as a message.**
-> **Process-level code may only resume the turn that is currently live, or enqueue a new one.**
-> **After a turn's epoch dies, nothing that turn closed over may write or publish.**
-
-Consequences, each with its enforcing construct rather than a promise:
-
-| Side door | Enforcement |
-|---|---|
-| `Timer` (D4) | the callback **enqueues**; it never invokes a handler |
-| D3's error `Stream` | outbound only — the type exposes no mutator |
-| transport stream callbacks | deliver into the mailbox, never to an actor method |
-| inbound `(update …)` | enters through the mailbox like any command |
-| a closure capturing `this` | cannot reach state: mutators require a live `Turn` (D9) |
-
-### 2.5 D9 — the epoch fence, and why it is one mechanism not two
-
-**Revision 2's timeout was fatally wrong.** It said "abandon the wait, surface `HandlerTimeout`,
-continue draining." Dart **cannot cancel a Future**. An abandoned handler is not stopped, only
-un-awaited — so it resumes later and mutates concurrently with whatever turn is now live. Kelvin:
-*"a wedged actor is better than a silently corrupt one."*
-
-The fix and the stale-read problem from §2.3 are **the same problem** — *work performed on behalf
-of a turn that is over* — so they get one mechanism.
-
-**Every turn carries an epoch. Every mutation that leaves the actor requires a live turn.**
-
-```dart
-extension type Turn._(({ActorState st, int epoch}) _t) {
-  int get epoch => _t.epoch;
-  bool get live => _t.st.epoch == _t.epoch;
-
-  Future<(R, Turn)> ask<R>(...) async { /* parks; bumps epoch; returns a new Turn */ }
-}
-
-extension type Reading<T>._(({T value, int epoch}) _r) {
-  T at(Turn t) {                       // unwrapping REQUIRES naming a turn
-    if (t.epoch != _r.epoch) throw StaleReadError(_r.epoch, t.epoch);
-    return _r.value;
-  }
-}
-```
-
-Two properties, and they are different in kind — the distinction matters:
-
-- **Compile-time, genuinely enforced.** `Reading<int>` is *not* an `int`. It cannot be added,
-  printed, or passed where an `int` goes. The only way to the value is `.at(someTurn)`. A stale
-  read therefore **cannot be used silently** — the language forces the author to name a turn at
-  every use site.
-- **Runtime.** Dart has no linear types, so `ask` cannot *consume* `t`; presenting the dead turn
-  is caught by the epoch check and throws deterministically at the exact line.
-
-Prototyped and run on Dart 3.13 with both controls: the stale arm throws
-`value read in turn 0 used in turn 1`, the re-read arm succeeds. The remaining gap — reaching for
-the dead `t` at all — is a dataflow lint (`custom_lint`), feasible and **not yet written**.
-
-**The fence is ABSOLUTE — revision 3's narrowing was fatal.** Revision 3 branded only
-`share.update()` and `publish()`, arguing private tearing "stays local". Carnot supplied the
-mechanism that refutes it: a timed-out handler sets `_memberBanned = false`, fails to publish
-because its Turn is dead, and **a later valid turn reads that private field and publishes it with
-live authority. The lie leaves the actor one turn later, laundered through fresh authority.**
-Kelvin: *"the fence is a decorative feature ... ensuring eventual wire-visible corruption. There is
-no middle ground."*
-
-So a dead epoch may not: write private state, publish, update the share, **enqueue a message,
-start a timer, initiate an ask, complete an actor-visible Completer, or consume reserved mailbox
-headroom.** The rule is **authority**, not egress: *a dead epoch cannot schedule work.* Actor state
-is private behind the turn context; there are no freely-writable fields for a closure to capture.
-
-**A timed-out handler is therefore fenced, not killed.** It keeps running (Dart offers nothing
-else), but its epoch is dead, so its writes are rejected and its publishes suppressed, both
-reported on D3's stream. `HandlerTimeout` becomes true rather than reassuring.
-
-### 2.6 The policies revision 2 named but did not design
-
-Round 2 found these as a **class**, not three items (`dir-id 3c9d`), so they are swept together.
-
-**Shutdown.** `close()` stops admission, drains for a bounded grace period, then kills the
-remaining epoch. In-flight handlers are fenced, not awaited. Pending mailbox entries are reported
-on D3's stream, never dropped silently. Note from §1: a **clean `disconnect()` does not fire the
-last will** — so a `close()` that cannot finish must publish `(absent)` itself rather than relying
-on the broker.
-
-**Overflow, by message class** — one undifferentiated policy was the round-2 finding:
-
-| Class | Policy on a full mailbox |
-|---|---|
-| lifecycle / shutdown / cancellation | **never dropped** — reserved headroom |
-| reply continuation for in-flight work | never dropped — it completes work already begun |
-| delayed timer expiry (D4) | never dropped — its deadline was already accepted |
-| inbound remote command | drop **newest**, report on D3 |
-| local command | reject at the call site — the caller is present to be told |
-
-Drop-oldest is rejected outright: it replays the past and discards the present.
-
-**Cancellation** is the epoch kill of §2.5, not a concurrent mutator and not a priority number.
-Priority remains **dequeue ordering, not preemption** — with a stuck handler, only the epoch kill
-recovers the actor, which is why control traffic gets reserved headroom above rather than a
-higher priority.
-
-## 3. Decisions
+## 2. Decisions
 
 ### D1 — `AikoRuntime`, not a global
 
@@ -304,6 +119,9 @@ final counter = runtime.addService(CounterDefinition(name: 'counter'));
 final rt = AikoRuntime.inMemory();   // loopback, NOT a null transport — see §5
 addTearDown(rt.dispose);
 ```
+
+**Scope after the split:** this document owns `AikoRuntime`'s *construction order* only. The
+running loop, the mailbox it drives and the transport isolate belong to `0002`.
 
 **Recast — multiple runtimes are TEST-ONLY.** Revision 1 sold multiple-runtimes-per-process as a
 win without pricing it. Two runtimes in one VM contend over MQTT client identity, LWT ownership,
@@ -344,14 +162,6 @@ logging. Outbound only (§2.4). This costs nothing on the wire and is `dir-id 3f
 Now also carries: `HandlerTimeout`, mailbox overflow, share-path drops (§1's silent no-op), and
 invalid inbound framework values (D5).
 
-### D4 — Delayed messages honour their deadlines
-
-*Python:* the timer starts only on an empty→non-empty transition, and when it fires it drains the
-**entire** queue regardless of each entry's deadline — so longer-delayed entries fire **early**.
-
-*Dart:* a deadline-ordered queue with a `Timer` for the earliest deadline only, rescheduled on
-insert. **The Timer enqueues a message; it never executes a handler** (§2.4).
-
 ### D5 — A typed facade over one canonical share tree
 
 **RECAST — revision 1 had the wrong data model, not merely a missing collision policy.** It
@@ -387,13 +197,6 @@ layer, the snapshot-merge rules and the dual-writer problem rather than specifyi
 - A missing intermediate path is a **reported** drop, not a silent one — the one place we are
   deliberately louder than the reference while remaining wire-identical.
 
-### D6 — `run()` lives on Actor, not Service
-
-*Python:* `Service.run()` raises `SystemExit` — *"currently only supported by Actor."*
-
-*Dart:* that is a runtime throw standing in for a fact the type system can state. `run()` belongs
-to the type that can actually do it.
-
 ### D7 — Registration is the constructor boundary
 
 **RECAST — revision 1 named the requirement and skipped the decision.** All four families called
@@ -423,134 +226,43 @@ exists to delete.
 is still deliberately not composable because it *creates* the context the composition machinery
 needs.
 
-### D8 — The two-thread hop collapses — and that is a tradeoff, not a win
 
-*Python:* paho's `loop_start()` runs network I/O on a **background thread**, so
-`ProcessImplementation.on_message()` does nothing but `event.queue_put(...)`, bouncing every
-incoming message onto the main event loop. `message.md` documents the bug this leaves: framework
-code that waits on the paho thread for a condition driven by an *incoming* message deadlocks.
+## 3. First vertical slice — the part that does not need a mailbox
 
-*Dart:* there is no second thread. The hop is a Python artifact, and **that** deadlock class
-cannot be constructed here.
+Everything here is a value type or a pure state container. None of it depends on ADR-0002.
 
-**RECAST TWICE.** Revision 1 called the thread-collapse a pure win. Revision 2 attached a cost
-but got the **physics wrong**, and Tesla caught it:
-
-- **A long `await` does not block keepalives at all.** Timers and socket callbacks run during an
-  await — that is what an event loop is *for*. Revision 2 proposed bounding handler *wall-clock*
-  duration, which is the wrong quantity.
-- **The danger is uninterrupted SYNCHRONOUS work** — a fat S-expression parse, a tight loop.
-- **And during a synchronous slice no `Timer` fires**, so §2.5's handler timeout — itself a Timer
-  — *cannot fire either*. Revision 2's mitigation was provably incapable of protecting the thing
-  it was proposed to protect. A smoke alarm wired to the fire.
-
-The failure it permits: a ping is missed, the broker publishes our retained last will `(absent)`
-on `{ns}/{host}/{pid}/0/state`, and **the fleet fails over a process that was only busy.**
-
-**Decision: the MQTT client runs on its own isolate. Default, not fallback.** Reached
-independently by Kelvin and Tesla once the timeout was shown non-viable, and the third option —
-stretching keepalive to worst-case handler duration — is rejected because it deafens genuine
-crash detection.
-
-Unusually cheap for us: isolates copy what crosses the port, and **what crosses here is already
-flat text**. We hand the transport isolate the S-expression bytes we were about to put on the
-wire regardless. No object graphs, no deep copies. The costs are a little setup, stack traces
-that do not cross the boundary, and one isolate's memory.
-
-The handler timeout survives, with its purpose corrected: it exists for **head-of-line
-loudness**, sized independently of the keepalive interval. D8 no longer claims it protects pings.
-
-**Two consequences round 3 found, and neither is optional.**
-
-**(1) Failure-linking, or we trade a false-negative for a false-positive.** Rounds 1 and 2 fixed
-"a busy process is declared dead". Round 3 found the inverse: **Dart isolates are not
-failure-linked by default**, so if the actor isolate wedges — or *dies* — the transport isolate
-keeps pinging, the broker withholds the last will, and **the fleet never fails over a corpse whose
-heart still beats on the other side of the port.** Test ● 5 goes *green* for that death.
-The LWT is our only liveness signal, and D8 has just decoupled it from the organ whose liveness it
-reports. **The actor isolate must periodically prove it is serving; if that proof lapses, the
-transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
-observable, not to the nearest green thing one hop before it.
-
-**(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** §2.6's carefully
-classed overflow table is defeated one layer upstream: drop-newest fires only *after* the port has
-already eaten the RAM and MQTT QoS has already ACKed, and `(absent)` / disconnect sit behind bulk
-publishes with no reserved headroom on the port. **Credit-based backpressure across the boundary**
-— the transport isolate issues credits, `publish()` consumes one, no credit means no send — with
-reserved credits for control frames. Kelvin: *"a system without a control loop is just a pipe
-waiting to burst."*
-
-Also inherited from the boundary and to be specified with it: per-topic ordering (one `SendPort`
-preserves order; control-vs-bulk does not), error propagation, connection-lost/reconnect and
-session state living only on the transport isolate while the runtime believes it is connected, and
-outbound flush during `close()`.
-
-**The publish fence sites in the MAIN isolate, before the `SendPort`.** §2.5 suppresses a dead
-epoch's publishes; if that check runs anywhere downstream the bytes are already across the boundary
-and the zombie has published. Test ● 2 asserts *"any byte reaches the broker"*, so the mechanism
-must sit upstream of the hand-off.
-
-**Open, and honest: the web has no real isolates.** Compiled to JavaScript, `Isolate.spawn` maps
-onto web workers with far tighter constraints, so this mitigation is unavailable for the browser
-target (#3240 / #2268). That build needs its own answer — likely "keep handlers non-blocking and
-accept the risk", since MQTT-over-WebSockets has different failure behaviour anyway. Naming it
-now beats discovering it after building on the assumption.
-
-## 4. First vertical slice
-
-Dependency order:
-
-1. `ServiceTopicPath` — the five-topic fan-out as a value type
+1. `ServiceTopicPath` — the five-topic fan-out (§1)
 2. `ServiceState` — sealed lifecycle **with `unknown`**, projected over inherited keys (D2)
-3. `Turn` / `Reading` / epoch fence (D9) — **before** the mailbox, because the mailbox's
-   guarantee is expressed in terms of it
-4. `Mailbox` — deadline-ordered, class-aware bounded, parking-capable
-5. `Actor` — mailbox + share facade + error stream, `topic_in` → dispatch
-6. `TransportIsolate` — MQTT on its own isolate (D8)
-7. `AikoRuntime` — identity, then LWT, then connect; `addService` → `RegisteredService`
+3. `Share` — the canonical depth-2 wire-shaped tree with a typed facade (D5)
+4. `ServiceDefinition` → `RegisteredService` — registration as the constructor boundary (D7)
+5. `AikoRuntime` construction *order* only — identity, then LWT, then connect (D1). The running
+   loop belongs to ADR-0002.
 
-Acceptance tests first. Round 2's finding was that revision 2's thirteen tests *"can all pass
-while the zombie still publishes — they are tests of round 1's war."* Each test below names the
-condition under which it goes **red**, and the ones marked ● are the arms that force the failure
-rather than merely observing its absence.
+ATDD: every test below names the condition under which it goes **red**, and the ● arms force the
+failure rather than observing its absence. Write the ● arms and see them red **before** the
+mechanism exists.
 
 | # | Test | Goes red when |
 |---|---|---|
-| ● 1 | timed-out handler resumes and calls `share.update()` | the write **lands** — the epoch fence is absent or not on the mutator |
-| ● 2 | timed-out handler resumes and calls `publish()` | **any byte reaches the broker** — this is the zombie-publishes case |
-| ● 3 | value read before `await`, unwrapped after | `.at(deadTurn)` returns instead of throwing |
-| ● 4 | `close()`, then the fenced handler resumes | the zombie is not mute |
-| ● 5 | CPU-bound handler longer than the keepalive interval | the broker fires our LWT — i.e. transport is **not** on its own isolate |
-| 6 | `ask` during a long peer delay; other messages queued behind | the mailbox does not drain — parking is absent |
-| 7 | `Timer` (D4) fires mid-handler and touches state | the Timer **executes** instead of enqueuing (fails under a Future chain, passes under a mailbox) |
-| 8 | mailbox full; a shutdown message arrives | shutdown is dropped — reserved headroom absent |
-| 9 | mailbox full; a reply continuation arrives | the continuation is dropped, orphaning begun work |
-| 10 | delayed messages with out-of-order deadlines | the reference's drain-everything bug is ported |
-| 11 | app writes a reserved share key | accepted, or dropped without report |
-| 12 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
-| 13 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
-| 14 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
-| 15 | `share['metrics']` handed out and mutated | the live map escaped |
-| 16 | Python adds an unseen lifecycle string | the sealed view cannot represent it |
-| ○ 17 | a real Python ECConsumer reads our snapshot | `lifecycle`/`running` missing or renamed |
-| 18 | two `ServiceDefinition`s named `'counter'` | identity assigned before admission (D7) |
+| ● 1 | app writes a reserved share key (`lifecycle`/`log_level`/`running`) | accepted, or dropped without report |
+| ● 2 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
+| ● 3 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
+| ● 4 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
+| ● 5 | `share['metrics']` handed out and mutated | the live map escaped |
+| 6 | Python adds an unseen lifecycle string | the sealed view cannot represent it (`unknown`) |
+| 7 | `(update metrics.running 3)` round-trips | dotted-path addressing is not honoured |
+| 8 | `(remove lifecycle)` from a peer on our `/control` | a reserved key is removable |
+| 9 | topic fan-out from one path | any of the five derived topics is wrong |
+| 10 | `ServiceDefinition` exposes `topicPath` or `serviceId` | identity exists before admission (D7) |
+| 11 | two `ServiceDefinition`s named `'counter'` | duplicate names are rejected — `service_id` distinguishes them |
+| ○ 12 | a real Python ECConsumer reads our share snapshot | `lifecycle`/`running` missing or renamed |
 
-**● are the negative controls.** A leak/teardown/liveness suite with no arm that *forces* the bad
-state cannot clear it — if a test would report the same thing whether or not the failure is
-present, it is void. Tests 1–5 must be written and seen **red** before their mechanisms exist.
+**○ 12 is blocked on infrastructure** and must not be counted as passing: it needs a live Python
+reference plus a broker, and this repo has **no `.github/workflows/` at all**. It is the only test
+standing between the port and a silent wire regression (`dir-id c0de` — a self-roundtrip proves
+self-consistency, not correctness).
 
-**○ 17 is blocked on infrastructure and must not be counted as passing.** It needs a live Python
-reference plus a broker, and **this repo has no `.github/workflows/` at all** (`dir-id 7b3e` — a
-trigger that never fires reads as safety). Tracked separately; it is the only test standing
-between this port and a silent wire regression, so `dir-id c0de` applies: a self-roundtrip proves
-self-consistency, not correctness.
-
-**D7's admission rule, stated so test 18 has something to assert:** duplicate `name`s are
-**permitted**; `service_id` alone distinguishes mailboxes, matching `actor.py:248`'s
-`{name}/{service_id}/{topic}`. What must be impossible is a mailbox named before `service_id`
-exists — which `ServiceDefinition` having no identity field guarantees by construction.
-
-## 5. Test transport: loopback, not Null Object
+## 4. Test transport: loopback, not Null Object
 
 `Castaway` is the reference's Null Object — no-op publish/subscribe when no broker is reachable.
 `AikoRuntime.inMemory()` must **not** copy it. Castaway silently drops every publish, so a test
@@ -558,7 +270,7 @@ against it passes whether or not the message was correct. The in-memory runtime 
 **loopback** that round-trips through the real codec, so acceptance tests exercise the wire
 without a server.
 
-## 6. Open — Nick's call, and Andy's
+## 5. Open — Nick's call, and Andy's
 
 **Conservative arms taken 2026-08-26 so the recast was not blocked. Both are "conform below the
 wire", so neither needs new authority — but both are reversible and flagged for veto.**
@@ -569,14 +281,15 @@ wire", so neither needs new authority — but both are reversible and flagged fo
 - **(b) Multiple runtimes per process.** Taken: test-only (D1). If it should be a production
   capability, identity allocation (MQTT client id, LWT ownership, retained state cleanup,
   `service_id`) needs designing first.
-- **(c) MQTT on its own isolate (D8).** Taken: yes, as the default. An architecture cost, arrived
+- **(c) MQTT on its own isolate (D8) — MOVED to `0002`.** Recorded here because it was taken as a decision: yes, as the default. An architecture cost, arrived
   at independently by two families once revision 2's timeout was shown incapable of protecting a
   keepalive. Flagged because it is a real cost, not because the engineering is uncertain.
 - **(d) Parking — CLOSED, deleted.** Struck unanimously in round 3 on a fact about the language
   (an `await`'s continuation resumes as a microtask; the mailbox never owns it). Strict
   continuation style adopted (§2.3). Recorded so it is not reinvented: the idea is attractive and
   it does not work.
-- **(e) THE PROCESS QUESTION — Nick's, and the real one.** Three rounds, three non-SOUND verdicts,
+- **(e) THE PROCESS QUESTION — RESOLVED 2026-08-26 (Nick): split §2 into its own ADR and build
+  the settled surface now.** Original framing kept for the record: Three rounds, three non-SOUND verdicts,
   budget spent. But rounds 2 and 3 were consumed almost entirely by **one mechanism invented
   mid-loop** (parking), not by the inherited design — three rounds found *nothing new* in §1 or
   D1–D7. With parking removed the document is round 1's survivors plus specification work. The
@@ -588,7 +301,7 @@ wire", so neither needs new authority — but both are reversible and flagged fo
 Castaway is a Null Object and not a transport, so #3240/#2268 are conformance work against the
 reference's existing `AIKO_MQTT_TRANSPORT=websockets` on 1884/9884.
 
-## 7. What this document does NOT claim
+## 6. What this document does NOT claim
 
 The codec beneath this is **parity-tested against a reference that has its own bugs** — a parity
 claim, not a correctness claim.
