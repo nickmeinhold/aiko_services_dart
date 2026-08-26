@@ -46,9 +46,16 @@ Three things changed shape in revision 2, and one decision inverted outright:
 
 1. **D2/D5 were seam violations.** `lifecycle` is a live, cross-service, remotely-subscribed wire
    key, and `share` is a depth-2 tree, not a flat map. Both are now inherited contract in §1.
-2. **§2's deadlock has an answer already in the reference**, and it is better than anything the
-   strike proposed. `do_request()` is continuation-style with a caller-nominated response topic
-   handled at *process* level — replies never enter the actor mailbox. We conform (§2.3).
+2. **§2's deadlock has an answer already in the reference**, and its *shape* is better than
+   anything the strike proposed. `do_request()` is continuation-style with a caller-nominated
+   response topic handled at *process* level — replies never enter the actor mailbox. We conform
+   to that shape (ADR-0002 §2.3). **Amended 2026-08-26: we do NOT conform "all the way".**
+   `do_request()` carries **no request identity** — no correlation id, one shared
+   `_RESPONSE_TOPIC`, handlers never removed — and is safe only because all four of its call sites
+   pass `terminate=True`, bounding each process to one in-flight request. It is a one-shot CLI
+   primitive. Our actors are long-lived and will have several requests outstanding, so adding
+   request identity is required, and that is a **wire change belonging to Andy**. See ADR-0002
+   §2.3 for the source reading and the measurement.
 3. **D8 inverted from a pure win to a priced tradeoff.** Deleting paho's network thread also
    deletes the thing that kept MQTT keepalives alive while a handler thought (D8).
 
@@ -80,7 +87,7 @@ this table**. It does not move to accommodate anything here.
 | **share missing path** | **`_ec_modify_item()` with `create_path=False` silently no-ops when an intermediate level is absent. A malformed path is dropped, not reported.** |
 | **framework share keys** | **`lifecycle` (str), `log_level` (str), `running` (bool) at top level. `lifecycle` is read cross-service (`pipeline.py:287` reads *another element's*), branched on (`:949`, `:1032`), and published remotely (`lifecycle.py:265` → `(update lifecycle absent)`).** |
 | subscription | `(share <topic> <lease> *)` or `… (lifecycle x)` on `/control` — **the subscription form names the key, so key names are protocol** |
-| **request/response** | **`discovery.py::do_request()` — caller nominates a `response_topic`, registers a handler at *process* level via `add_message_handler()`, fires `do_command()` and returns immediately. The reply is a multi-part stream: `(item_count N)` then N × `(response …)`.** |
+| **request/response** | **`discovery.py::do_request()` — caller nominates a `response_topic`, registers a handler at *process* level via `add_message_handler()`, fires `do_command()` and returns immediately. The reply is a multi-part stream: `(item_count N)` then N × `(response …)`.** ⚠ **No correlation id**: the reply carries nothing identifying which request it answers, every caller passes the same `aiko.topic_in`, and handlers are never removed. Safe only under `terminate=True` (one request per process). See ADR-0002 §2.3. |
 | **mailbox naming** | **`f"{name}/{service_id}/{topic}"` (`actor.py:248`), bound at registration time in `__init__`** |
 | presence | MQTT **last will** `(absent)`, retained by the broker, published on `{namespace}/{host}/{pid}/0/state` when a process dies ungracefully — a clean `disconnect()` does *not* fire it |
 | broker transport | `tcp` (1883) or **`websockets` (1884, WSS 9884)** — already selectable in the reference via `AIKO_MQTT_TRANSPORT` |

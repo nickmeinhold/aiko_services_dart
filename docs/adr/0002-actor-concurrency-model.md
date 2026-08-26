@@ -110,7 +110,7 @@ express the other two reasons, which are the ones that actually require a queue:
 3. **Completion-ordering across `await` points.** Real, necessary, and the cheapest of the three
    to obtain.
 
-### 2.3 Replies: conform to `do_request()`, all the way
+### 2.3 Replies: conform to `do_request()`'s SHAPE — but it has no request identity
 
 All four families found revision 1's reentrancy deadlock: a mailbox that awaits each handler to
 completion, plus replies arriving as messages, wedges any handler that `await`s a reply. Python is
@@ -155,9 +155,75 @@ subtraction removes in one edit: the reply-before-park race, the loopback determ
 and concurrent `ask` semantics, continuation ordering, and the ownership of a parked caller's
 Future. `dir-id 5e1f` — remove the coupling, do not guard the window.
 
-Inherited constraints, not negotiable: reply reassembly is a **process-level** state machine
+Inherited constraints: reply reassembly is a **process-level** state machine
 (`(item_count N)` then N × `(response …)`) with its own timeout, and each `response_topic` is
 **single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`).
+
+#### The single-use constraint is real, and the reference does not satisfy it
+
+*Amended 2026-08-26. Revision 4 recorded the single-use rule as a constraint the reference
+**provides**. It is a constraint the reference **requires and never enforces**, and none of its own
+callers satisfy it.* Read from `discovery.py:217` at `d31ba17`:
+
+- **There is no correlation id anywhere.** The reply payload carries `(item_count N)` and
+  `(response …)` and nothing that identifies *which request* it answers.
+- **`response_topic` is a parameter, and every caller passes the same value** —
+  `_RESPONSE_TOPIC = aiko.topic_in`, the process's own inbound topic. Four call sites:
+  `discovery.py:334`, `process_manager.py:468`, `category.py:178`,
+  `examples/aloha_honua/aloha_honua_3.py:92`.
+- **Handlers are added and never removed.** `do_request` calls `add_message_handler` and never
+  `remove_message_handler` — which exists (`process.py:221`) and is used elsewhere
+  (`share.py:531`, `dashboard.py:712`). A completed request keeps its handler registered.
+- **The accumulator is shared and resettable.** `nonlocal item_count, items_received, response`,
+  and the `item_count` branch sets `items_received = 0; response = []`. A *second* request's
+  `(item_count N)` therefore resets the *first* closure's accumulator mid-flight.
+
+**Measured** against a live broker with two real peer Actors (by the peer Claude session working in
+`aiko_services`; mechanism above verified independently from source here). Two requests issued
+A-then-B, A replying at 4s and B at 0.5s:
+
+```
+t=0.684  HANDLER(to_A_slow) fired  <- [['peer_B:to_B_fast']]     <- B's payload
+t=0.684  HANDLER(to_B_fast) fired  <- [['peer_B:to_B_fast']]
+t=4.783  HANDLER(to_A_slow) fired  <- [['peer_A:to_A_slow']]
+t=4.783  HANDLER(to_B_fast) fired  <- [['peer_A:to_A_slow']]     <- already completed
+```
+
+**Two requests, four firings.** Each handler saw every response; `to_A_slow` fired with B's payload
+before its own peer had replied. Null arm: one request to one peer fires exactly once.
+
+Also measured: a requester torn down with a request in flight exits cleanly, the peer replies into
+a dead topic, and **neither side notices**. A peer that never replies produces no timeout, no
+completion and no cleanup — the handler stays registered for the life of the process.
+
+#### Why this is not a defect report, and what it means for us
+
+**Every one of the four call sites also passes `terminate=True`.** `do_request` fires one request,
+runs the response handler, and terminates the process. Under that usage there is exactly **one
+in-flight request per process lifetime** — so no correlation id is needed, a leaked handler is
+irrelevant, and reusing `aiko.topic_in` is harmless. `do_request` is a **one-shot CLI primitive**
+and it is correct as one.
+
+The error was ours. **"Conform all the way" bound a long-lived actor runtime to the semantics of a
+fire-once-and-exit helper**, and it made §4.1 unanswerable: *"do two replies arrive in request
+order, arrival order or causal order?"* presupposes a correlation the wire does not carry. Three
+temper rounds never caught it because all four families reasoned about ordering for a mechanism
+that has no request identity to order by — the same shared-premise failure as round 1's flat-map
+description of `share` (`dir-id 7c2a`: N rounds from one unverified premise are one premise counted
+N times).
+
+**Amended decision.** We conform to `do_request()`'s **shape** — continuation style, caller-nominated
+response topic, process-level handling, multi-part `(item_count N)` + N × `(response …)`
+reassembly. We do **not** conform to its absence of request identity, because our actors are
+long-lived and will have more than one request in flight.
+
+**Adding request identity is a WIRE change, and the wire is Andy's.** Same class as the
+`lifecycle`/`running` consolidation: a proposal he is likely to welcome, not a pushback. §4.1 is
+therefore **withdrawn, not answered** — it is replaced by an upstream question, and ADR-0002 cannot
+settle continuation ordering until that question has an answer.
+
+**Do not "fix" this locally by picking a per-request topic scheme.** A Dart-side correlation the
+Python side does not read is not interop; it is a second protocol wearing the first one's clothes.
 
 **Handlers should be synchronous wherever possible.** With replies no longer awaited, the remaining
 reasons to `await` inside a handler are local I/O — and each one holds the turn for its duration.
@@ -396,8 +462,12 @@ split (WebSockets vs raw TCP) is a different axis that stands on its own.
 
 Carried from `0001-TEMPER-round3.md`, none of it folded yet:
 
-1. **Continuation ordering.** Two outstanding `ask`s from one actor: do their replies run in
-   original-turn order, arrival order, or causal order? Unspecified.
+1. ~~**Continuation ordering.**~~ **WITHDRAWN 2026-08-26 — the question was malformed.** It asked
+   whether two outstanding `ask` replies run in original-turn, arrival or causal order. All three
+   presuppose a correlation between request and reply that **the wire does not carry** (§2.3). The
+   reference broadcasts every reply to every registered handler; measured at two requests → four
+   firings, with cross-talk. This is now blocked on an upstream wire proposal to Andy (request
+   identity), not on a decision available to this document.
 2. **`ask` Future/handler completion, exhaustively** — peer timeout, actor close, epoch kill,
    cancellation, mailbox overflow, malformed `item_count` stream, partial response, transport
    loss. Every path must complete exactly once.
