@@ -11,14 +11,18 @@ const payloads = [
 void main(List<String> args) {
   final iters = args.isEmpty ? 200000 : int.parse(args[0]);
   // warm the JIT / AOT icaches
-  for (var i = 0; i < 5000; i++) { for (final p in payloads) {
-    parse(p);
-  } }
+  for (var i = 0; i < 5000; i++) {
+    for (final p in payloads) {
+      parse(p);
+    }
+  }
 
   final swParse = Stopwatch()..start();
-  for (var i = 0; i < iters; i++) { for (final p in payloads) {
-    parse(p);
-  } }
+  for (var i = 0; i < iters; i++) {
+    for (final p in payloads) {
+      parse(p);
+    }
+  }
   swParse.stop();
 
   final parsed = [for (final p in payloads) parse(p)];
@@ -31,8 +35,12 @@ void main(List<String> args) {
   swGen.stop();
 
   final n = iters * payloads.length;
-  print('dart parse   ${swParse.elapsedMicroseconds / n} us/msg  '
-      '(${(n / (swParse.elapsedMicroseconds / 1e6)).round()} msg/s)');
-  print('dart generate ${swGen.elapsedMicroseconds / n} us/msg  '
-      '(${(n / (swGen.elapsedMicroseconds / 1e6)).round()} msg/s)');
+  print(
+    'dart parse   ${swParse.elapsedMicroseconds / n} us/msg  '
+    '(${(n / (swParse.elapsedMicroseconds / 1e6)).round()} msg/s)',
+  );
+  print(
+    'dart generate ${swGen.elapsedMicroseconds / n} us/msg  '
+    '(${(n / (swGen.elapsedMicroseconds / 1e6)).round()} msg/s)',
+  );
 }
