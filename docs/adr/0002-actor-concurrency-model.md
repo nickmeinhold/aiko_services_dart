@@ -335,6 +335,110 @@ Priority remains **dequeue ordering, not preemption** — with a stuck handler, 
 recovers the actor, which is why control traffic gets reserved headroom above rather than a
 higher priority.
 
+## 2.7 Acceptance tests — restored, renamespaced, and audited
+
+**These were LOST in the split (`1405a56`), and this document has been citing them ever since.**
+The pre-split ADR-0001 held one table of 18 tests. The split moved §2's *prose* here and kept
+tests 11–18 (the value types) in ADR-0001, renumbered `1–12`. Tests 1–10 — every concurrency
+test, the ones that test *this* document — were **deleted from both**.
+
+Three references here dangled, and two of them dangled **invisibly**:
+
+| this document said | resolved to (ADR-0001) | actually meant |
+|---|---|---|
+| "Test ● 5 goes *green* for that death" (D8) | `share['metrics']` escaped | CPU-bound handler vs keepalive |
+| "Test ● 2 asserts *any byte reaches the broker*" (§2.5) | `(update log_level junk)` | zombie publishes |
+| "whether tests ● 1–5 can be written red-first" (§4.6) | — | **nothing; the table was gone** |
+
+A reviewer following "Test ● 2" landed on a real, plausible, wrong test in a sibling document.
+`dir-id f7a8` — a label reused as a stable key silently collides.
+
+**Fixed by renamespacing, not by care.** This document's tests are **`C1…C10`** (concurrency);
+ADR-0001's are **`V1…V12`** (value types). The two sets can no longer be confused, and no future
+split can make them ambiguous again. `dir-id 5e1f` — remove the coupling, do not guard the window.
+
+### The tests
+
+**● marks a negative control.** A leak/teardown/liveness suite with no arm that *forces* the bad
+state cannot clear it: if a test reports the same thing whether or not the failure is present, it
+is **void**. The ● arms must be written and seen **red** before their mechanisms exist.
+
+| # | Test | Goes red when |
+|---|---|---|
+| ● C1 | timed-out handler resumes and calls `share.update()` | the write **lands** — the epoch fence is absent or not on the mutator |
+| ● C2 | timed-out handler resumes and calls `publish()` | **any byte reaches the broker** — the zombie-publishes case |
+| ● C3 | value read before `await`, unwrapped after | `.at(deadTurn)` returns instead of throwing |
+| ● C4 | `close()`, then the fenced handler resumes | the zombie is not mute |
+| ● C5 | *(void as written — see the audit)* | — |
+| C6 | *(stale — see the audit)* | — |
+| C7 | `Timer` (D4) fires **during a handler's `await`** and touches state | the Timer **executes** instead of enqueuing |
+| C8 | mailbox full; a shutdown message arrives | shutdown is dropped — reserved headroom absent |
+| C9 | mailbox full; a reply continuation arrives | the continuation is dropped, orphaning begun work |
+| C10 | delayed messages with out-of-order deadlines | the reference's drain-everything bug is ported |
+
+### The audit — §4.6 answered
+
+§4.6 asked whether C1–C5 can be written red-first. **Five can, in some form; two cannot as
+written, and one has a precondition that was already documented and is easy to violate.**
+
+**C1, C3, C4, C8, C10 — writable red-first.** C1's failure is not hypothetical: §1 F2 *is* the
+rig. A timed-out handler demonstrably resumes and mutates state 200ms after the caller gave up,
+so removing the fence produces the red arm directly. C3 is the `Reading<T>` epoch check, already
+prototyped on 3.13 with both a compile-time and a runtime control.
+
+**C2 — writable ONLY against a recording loopback.** §4 already warns that
+`AikoRuntime.inMemory()` must not copy the reference's `Castaway` Null Object, because Castaway
+silently drops every publish. A test asserting *"no byte reached the broker"* passes **trivially**
+against a dropper. This is the void-instrument trap and the document already knew it; it is
+restated here as a **precondition of C2**, not a note elsewhere.
+
+**C5 — VOID AS WRITTEN. It goes green for the death it exists to detect.** It was
+*"CPU-bound handler longer than the keepalive interval → red when the broker fires our LWT."*
+D8's round-3 consequence is that once the transport is on its own isolate, a **dead** actor also
+never fires the LWT, because the transport keeps pinging over the corpse (§1 F3: a dead isolate's
+`SendPort` accepts sends silently forever, and the parent is told nothing). So C5 is satisfied by
+a runtime that never fails over **anything** — including a genuinely dead one. It must be **split
+in two**, and neither half is optional:
+
+- **C5a** *(busy is not dead)* — CPU-bound handler exceeds the keepalive interval → **red if the
+  LWT fires.**
+- **C5b** *(dead IS dead)* — the actor isolate is killed outright → **red if the LWT does NOT
+  fire within the liveness-proof deadline.**
+
+Without C5b, C5a is passed by disconnecting the LWT entirely. **This is the same defect the
+tests exist to catch, sitting in the test.**
+
+Both are **○-class**: they need a real broker and real keepalive timing, so they are blocked on
+the same infrastructure as ADR-0001's `○ V12` and **must not be counted as passing** until it
+exists.
+
+**C6 — STALE. Its red condition names a mechanism that was deleted.** It read *"`ask` during a
+long peer delay, other messages queued behind → red when the mailbox does not drain — **parking is
+absent**."* Parking is dead (§5). The test asserts the presence of a mechanism this document now
+forbids, so as written it must **always** be red. Rewriting it needs the continuation-ordering
+answer, which is **withdrawn and blocked upstream** (§2.3, §4.1) — so C6 stays empty and named,
+rather than quietly deleted.
+
+**C7 — needs an F1 qualification, or it cannot construct its own condition.** It read *"`Timer`
+fires **mid-handler**"*. §1 F1: during a **synchronous** slice **no `Timer` fires at all**. So
+against a synchronous handler the Timer cannot fire mid-handler, the condition never occurs, and
+the test passes for the wrong reason. "Mid-handler" is only constructible **during an `await`**,
+and C7 now says so.
+
+**C9 — partially blocked upstream.** "A reply continuation arrives" presupposes knowing *which*
+request a reply belongs to. Per §2.3 the wire carries no request identity, so C9 is writable for
+a **single** in-flight request and not for the concurrent case it is really about.
+
+### What this says about the document
+
+§4.6 asked *"can these tests be written red-first?"*. The honest answer is that **the question
+could not be executed as asked, because the tests were not there** — and of the eight that
+survive scrutiny, one was void, one was stale, and one could not construct its own precondition.
+
+**No strike should be scheduled against this document until C5a/C5b, C6 and C7 are settled.** An
+adversarial round grades a design against its acceptance criteria; three cross-family rounds
+already read "Test ● 2" and "Test ● 5" and agreed with sentences pointing at nothing.
+
 ## 3. Decisions held here
 
 ### D4 — Delayed messages honour their deadlines
@@ -400,7 +504,8 @@ failure-linked by default** (**measured: §1, F3** — a corpse's `SendPort` acc
 forever and the parent receives neither error nor exit signal unless both ports were requested at
 `spawn`), so if the actor isolate wedges — or *dies* — the transport isolate
 keeps pinging, the broker withholds the last will, and **the fleet never fails over a corpse whose
-heart still beats on the other side of the port.** Test ● 5 goes *green* for that death.
+heart still beats on the other side of the port.** Test **C5** goes *green* for that death — which
+is why §2.7 splits it into C5a/C5b.
 The LWT is our only liveness signal, and D8 has just decoupled it from the organ whose liveness it
 reports. **The actor isolate must periodically prove it is serving; if that proof lapses, the
 transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
@@ -422,7 +527,7 @@ outbound flush during `close()`.
 
 **The publish fence sites in the MAIN isolate, before the `SendPort`.** §2.5 suppresses a dead
 epoch's publishes; if that check runs anywhere downstream the bytes are already across the boundary
-and the zombie has published. Test ● 2 asserts *"any byte reaches the broker"*, so the mechanism
+and the zombie has published. Test **C2** asserts *"any byte reaches the broker"*, so the mechanism
 must sit upstream of the hand-off.
 
 **The web has no isolates at all — MEASURED, and the earlier wording was wrong.** Revision 4 said
@@ -477,7 +582,10 @@ Carried from `0001-TEMPER-round3.md`, none of it folded yet:
    class, the classification point when the queue is already full, starvation rules.
 5. **Isolate failure-linking and credit-based backpressure** (D8), plus per-topic ordering,
    error propagation, reconnect/session state, and outbound flush during close.
-6. **Whether tests ● 1–5 can be written red-first** at all. Test 5 depends on broker LWT timing,
+6. ~~**Whether tests ● 1–5 can be written red-first**~~ **ANSWERED 2026-08-26 in §2.7** — and the
+   question could not be executed as asked, because the tests had been lost in the split. C5 was
+   VOID (green for the death it detects), C6 STALE (its red condition names deleted `parking`), C7
+   could not construct its own condition (F1). Original note follows. Test 5 depends on broker LWT timing,
    keepalive configuration and isolate scheduling; until the boundary is specified it is an
    aspiration, not an acceptance test.
 

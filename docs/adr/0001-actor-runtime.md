@@ -249,22 +249,26 @@ ATDD: every test below names the condition under which it goes **red**, and the 
 failure rather than observing its absence. Write the ● arms and see them red **before** the
 mechanism exists.
 
+**Namespaced `V…` (value types) as of 2026-08-26.** ADR-0002's concurrency tests are `C…`. The
+split (`1405a56`) left both sets numbered `● 1–5`, and ADR-0002's prose then resolved to *this*
+table — silently, onto real and wrong tests. See ADR-0002 §2.7.
+
 | # | Test | Goes red when |
 |---|---|---|
-| ● 1 | app writes a reserved share key (`lifecycle`/`log_level`/`running`) | accepted, or dropped without report |
-| ● 2 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
-| ● 3 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
-| ● 4 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
-| ● 5 | `share['metrics']` handed out and mutated | the live map escaped |
-| 6 | Python adds an unseen lifecycle string | the sealed view cannot represent it (`unknown`) |
-| 7 | `(update metrics.running 3)` round-trips | dotted-path addressing is not honoured |
-| 8 | `(remove lifecycle)` from a peer on our `/control` | a reserved key is removable |
-| 9 | topic fan-out from one path | any of the five derived topics is wrong |
-| 10 | `ServiceDefinition` exposes `topicPath` or `serviceId` | identity exists before admission (D7) |
-| 11 | two `ServiceDefinition`s named `'counter'` | duplicate names are rejected — `service_id` distinguishes them |
-| ○ 12 | a real Python ECConsumer reads our share snapshot | `lifecycle`/`running` missing or renamed |
+| ● V1 | app writes a reserved share key (`lifecycle`/`log_level`/`running`) | accepted, or dropped without report |
+| ● V2 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
+| ● V3 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
+| ● V4 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
+| ● V5 | `share['metrics']` handed out and mutated | the live map escaped |
+| V6 | Python adds an unseen lifecycle string | the sealed view cannot represent it (`unknown`) |
+| V7 | `(update metrics.running 3)` round-trips | dotted-path addressing is not honoured |
+| V8 | `(remove lifecycle)` from a peer on our `/control` | a reserved key is removable |
+| V9 | topic fan-out from one path | any of the five derived topics is wrong |
+| V10 | `ServiceDefinition` exposes `topicPath` or `serviceId` | identity exists before admission (D7) |
+| V11 | two `ServiceDefinition`s named `'counter'` | duplicate names are rejected — `service_id` distinguishes them |
+| ○ V12 | a real Python ECConsumer reads our share snapshot | `lifecycle`/`running` missing or renamed |
 
-**○ 12 is blocked on infrastructure** and must not be counted as passing: it needs a live Python
+**○ V12 is blocked on infrastructure** and must not be counted as passing: it needs a live Python
 reference plus a broker, and this repo has **no `.github/workflows/` at all**. It is the only test
 standing between the port and a silent wire regression (`dir-id c0de` — a self-roundtrip proves
 self-consistency, not correctness).
