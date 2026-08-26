@@ -403,7 +403,10 @@ in two**, and neither half is optional:
 - **C5a** *(busy is not dead)* — CPU-bound handler exceeds the keepalive interval → **red if the
   LWT fires.**
 - **C5b** *(dead IS dead)* — the actor isolate is killed outright → **red if the LWT does NOT
-  fire within the liveness-proof deadline.**
+  fire within the liveness-proof deadline.** The deadline now has a **measured** benchmark to beat:
+  the reference takes **86 seconds** to notice a frozen-but-socket-alive process (D8). A liveness
+  proof whose deadline is not far below that buys nothing, so C5b's threshold is a real number and
+  not a placeholder.
 
 Without C5b, C5a is passed by disconnecting the LWT entirely. **This is the same defect the
 tests exist to catch, sitting in the test.**
@@ -510,6 +513,89 @@ The LWT is our only liveness signal, and D8 has just decoupled it from the organ
 reports. **The actor isolate must periodically prove it is serving; if that proof lapses, the
 transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
 observable, not to the nearest green thing one hop before it.
+
+#### D8's hole, measured: **86 seconds** — and the LWT is per-PROCESS, not per-Actor
+
+*Added 2026-08-26. Measured by the peer Claude session in `aiko_services` against a live broker,
+Registrar, victim and peer, with `mosquitto_sub` capturing the raw wire as an independent
+instrument. Every source claim below verified here at `d31ba17`.*
+
+**The structural finding changes the shape of the answer.** `process.py:101-104`:
+
+```python
+topic_path = f"{topic_path_process}/0"      # service id 0 IS the Process
+topic_lwt  = f"{topic_path}/state"
+```
+
+The last will is registered **per-Process, on service id 0**, hardcoded. Actors get other ids via
+`get_topic_path(service_id)`. So:
+
+- **There is no per-Actor liveness signal anywhere.** An observer watching an Actor's
+  `.../1/state` sees nothing, ever — the signal was always on `.../0/state`.
+- **N Actors in one Process die as one indistinguishable unit.** The OS process is the only fault
+  boundary, now with wire evidence rather than source reading.
+
+**The corpse case, measured directly.** `SIGSTOP` freezes the app while the kernel holds the TCP
+socket `ESTABLISHED` — D8's scenario exactly:
+
+```
+20:56:31  SIGSTOP                          process TN, socket ESTABLISHED
+20:57:57  aiko/…/20050/0/state (absent)    ← +86 seconds
+```
+
+Consistent with MQTT's 1.5 × `keepalive`, and `keepalive=60` (`mqtt.py:130`). **For 86 seconds the
+Actor stayed registered, discoverable, returned by `do_discovery`, and accepting pings into a
+frozen process. No peer could tell.**
+
+> **So D8's liveness proof is not belt-and-braces. It is the only thing that closes an 86-second
+> hole.** Any fleet that must fail over faster than ~90s for anything short of outright process
+> death gets nothing from the reference, and an application-level heartbeat is mandatory.
+
+By contrast, **process death is fast and for an uninteresting reason**: on both clean `terminate()`
+and `SIGKILL` the LWT fires in under a second — because the OS closes the socket, not because
+anything detected anything. `keepalive` is irrelevant when the socket closes.
+
+**Two consequences we would otherwise have got wrong.**
+
+**(a) A graceful disconnect would DELETE the only death signal.** `terminate()` calls only
+`event.terminate()` — no deregistration, no farewell publish — and the process exits *without*
+sending an MQTT DISCONNECT, which is precisely why the broker fires the will. `mqtt.py:143` is
+explicit: `disconnect()  # Note: Does not cause LWT to be sent`. Adding a "proper" graceful
+shutdown path to the Dart port would **suppress** the death notification. This is a landmine
+labelled as an improvement.
+
+**(b) Liveness routes through the Registrar, not from the dying Actor.** Nothing reaches a peer
+from the corpse. The peer learns because it is subscribed to the Registrar's `/out`, which
+publishes `(remove <topic>)` ~0.3s after the LWT. **No Registrar means no death notification
+regardless of the LWT.** That dependency is inherited and must be stated wherever D8's liveness
+proof is specified.
+
+#### The silent proxy — architectural, not a Dart regression, and it hands us a free win
+
+14+ `proxy.ping(n)` calls after confirmed death, every one returning normally with no error.
+`_make_service_proxy` closes over `aiko.message.publish(...)` with no error path; the publishes
+land on a topic with zero subscribers and the broker discards them.
+
+This is the exact analogue of §1 F3's silent `SendPort`. **Both runtimes fail the same way, so
+this is a property of the architecture and D8 is the right shape rather than a Dart-specific
+patch.** We are not inheriting a regression.
+
+But the sharpest detail is an opportunity, not a warning:
+
+> **The same process had already fired `remove_handler` for that Actor at t=7.9s, and went on
+> calling the proxy at t=8, 9, 10…** The liveness information was *in the process*. The proxy does
+> not consult it.
+
+That is an **unconsulted** signal, not a missing one. A Dart proxy can consult the Registrar state
+the runtime already holds and fail loudly on a known-dead target — **no wire change, no upstream
+dependency, strictly better than the reference.** Recorded here rather than built: it belongs with
+D8's liveness specification.
+
+**Scope of the measurement, honestly.** Single host, localhost, one broker, one Registrar.
+`SIGSTOP` models a *frozen application with a live socket*. A true network partition also stops
+kernel ACKs, so TCP retransmission timers could interact and that case is **not measured**. The
+86s figure is "frozen app, socket alive" and must not be quoted as a partition-detection time.
+
 
 **(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** **Measured: §1, F4** —
 400,000 messages into a paused consumer in 478ms, +345MB RSS, zero drained, producer never blocked. §2.6's carefully
