@@ -201,8 +201,47 @@ completion and no cleanup — the handler stays registered for the life of the p
 **Every one of the four call sites also passes `terminate=True`.** `do_request` fires one request,
 runs the response handler, and terminates the process. Under that usage there is exactly **one
 in-flight request per process lifetime** — so no correlation id is needed, a leaked handler is
-irrelevant, and reusing `aiko.topic_in` is harmless. `do_request` is a **one-shot CLI primitive**
-and it is correct as one.
+irrelevant, and reusing `aiko.topic_in` is harmless. `do_request` is a **one-shot CLI primitive**,
+and under that usage it is *apparently survivable* — deliberately not "correct". One hypothesis is
+still open and unmeasured: the completion guard is `if items_received == item_count`, and a fresh
+closure has **both at zero**, so a message on `response_topic` matching neither branch and arriving
+before any real reply hits `0 == 0` and fires `response_handler([])` — an empty result, and under
+`terminate=True`, process termination. Since `aiko.topic_in` is where *all* inbound calls arrive,
+any method call on the process while a request is pending may trip it. **CONFIRMED by measurement 2026-08-26**, with the
+null arm, against a copy of `discovery.py` diffed byte-identical to `origin/master`:
+
+```
+NULL ARM   — undisturbed, peer replies at 4s
+  t=4.84  RESPONSE HANDLER FIRED #1 <- [['peer_SLOW:real']]      (one firing, correct)
+INTERFERENCE — one unrelated `(ping 1)` to the response topic at t=2
+  t=2.68  RESPONSE HANDLER FIRED #1 <- []                        (spurious, EMPTY)
+  t=4.83  RESPONSE HANDLER FIRED #2 <- [['peer_SLOW:real']]
+WITH terminate=True (what all four call sites use)
+  t=2.38  RESPONSE HANDLER FIRED #1 <- []
+  --- process exited, code 0 ---                                 (success, empty, before the answer)
+```
+
+**Latent, not live** — and *why* it is latent is the important part. `aiko.topic_in` is
+`<host>/<pid>/`**`0`**`/in`, the **Process** topic. Actor method calls arrive on `/1/in`, `/2/in`,
+… so an Actor in the same process cannot trip it, and the only shipped publisher to `/0/in` is a
+peer replying via `get_service_proxy`, whose payloads are exactly `item_count` and `response`.
+`terminate=True` and a process topic that carries nothing else are **jointly** what keep it
+hidden — the same two properties that make the shared `_RESPONSE_TOPIC` safe.
+
+#### This strengthens the single-use rule into something stronger than revision 4 had it
+
+A `do_request` closure starts at `item_count == items_received == 0`, so it treats **any**
+unrecognised message on its response topic as completion. Therefore:
+
+> **A response topic is not merely single-*use*. It must be private to exactly one request and
+> carry NO other traffic at all, ever.** A per-request topic gives that by construction. **A
+> long-lived actor's inbox never can.**
+
+That is the concrete reason §4.1's upstream question matters, and it cuts both ways: if
+per-request `response_topic` is the intended use, the `0 == 0` guard is harmless-but-undefended;
+if the topic may be shared, it is a live defect. Either way, **a merely *reusable* `do_request` is
+not sufficient for this port** — we need a *private* reply channel per request, which is a
+stronger requirement than "don't overlap two requests".
 
 The error was ours. **"Conform all the way" bound a long-lived actor runtime to the semantics of a
 fire-once-and-exit helper**, and it made §4.1 unanswerable: *"do two replies arrive in request
