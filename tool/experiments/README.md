@@ -162,3 +162,69 @@ plausible, wrong results:
 Each was caught by asking what the instrument would report *if the failure were
 present*. Where the answer was "the same thing", the run was discarded. Every
 experiment here now carries either a positive control, a null arm, or both.
+
+---
+
+## F7 — One dart2js artifact can serve as page, dedicated Worker AND SharedWorker
+
+`e7_one_artifact_two_roles.dart` · run it with `e7_serve.sh` · **needs a real browser
+and TWO tabs**
+
+This was the load-bearing unknown behind treating an actor as *anything on the other end of
+a duplex text channel*. A `Worker` takes a **script URL**; dart2js does **whole-program**
+compilation. If one artifact could not detect its own scope and branch at `main()`, the web
+would need two build artifacts — or no offload at all.
+
+It can. The artifact reads its global scope's constructor name (`Window`,
+`DedicatedWorkerGlobalScope`, `SharedWorkerGlobalScope`) and dispatches. Measured in Chrome,
+carrying our **real** S-expression codec, not a toy string:
+
+| Probe | Result |
+|---|---|
+| **A** — one artifact, two roles | `(test 1 two 3.5)` → worker → `(worker_parsed 21:(test, [1, two, 3.5]))`. **The codec ran inside the Worker.** |
+| **B** — `BroadcastChannel` | `(share lifecycle ready)` round-tripped. A **broker-less same-origin mesh** between tabs is available. |
+| **C** — `SharedWorker` | Tab 1: `this_connection 1 connections_total 1`. Tab 2: **`this_connection 2 connections_total 2`.** |
+
+> **Probe C is the one with no isolate analogue.** The second tab incremented *Dart state
+> created by the first*. That is **one actor instance serving N browser tabs** — one MQTT
+> connection, one registrar presence, one last-will, N views. You cannot share an isolate
+> across processes; the VM cannot express this at all.
+
+*Instrument note:* an earlier version of probe C only **constructed** a `SharedWorker` and
+reported success. That proves the constructor does not throw and nothing else — the weakest
+possible evidence under the strongest claim in the set. The port is now wired, and the claim
+is discriminating: **a second tab reading `connections_total 1` would have refuted it.**
+
+**Scope of this finding.** Chrome only. `SharedWorker` support in **Safari** is *not*
+established here and must be checked before any design depends on probe C. Probes A and B
+are on much safer compatibility ground than C.
+
+## F8 — `dart:io` in the dependency graph does NOT break a web build
+
+Probed while setting up F7, and it **refutes the stated premise of task #10**.
+
+`lib/aiko_services.dart` re-exports `mqtt_transport.dart`, which imports
+`package:mqtt_client/mqtt_server_client.dart` and so pulls `dart:io`. Task #10 says this
+"makes the whole package **non-web-compilable** — any consumer targeting a browser fails to
+build."
+
+Measured: it does not.
+
+| Program | `dart compile js` |
+|---|---|
+| imports the barrel, calls `generate` | **compiles** |
+| imports the barrel, **constructs `AikoClient`** | **compiles**, and runs under node, printing `Instance of 'AikoClient'` |
+
+The failure is **deferred to runtime**, at the point real socket work happens — exactly like
+`Isolate` (F6): the web patches are stubs that compile fine and throw when called.
+
+> **Task #10's acceptance criterion — "`dart compile js` builds against the package" — is
+> already satisfied and cannot fail.** It is a test that cannot create the failure it exists
+> to clear. The work in #10 is still worth doing (a browser consumer needs `MqttBrowserClient`
+> over WebSockets, because raw TCP genuinely does not exist there), but it needs a **runtime**
+> acceptance test, not a compile one.
+
+*Instrument note:* the first attempt at this probe lived in `/tmp`, outside the package, and
+failed with `Couldn't resolve the package 'aiko_services'`. That looked exactly like a
+confirmation of #10's premise and was nearly recorded as one. A package-resolution error and
+a platform-incompatibility error are not the same finding.
