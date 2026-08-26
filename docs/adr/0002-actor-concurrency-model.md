@@ -7,6 +7,11 @@
   and 3 were consumed almost entirely by one mechanism invented mid-loop (parking, now deleted).
   Holding the settled surface hostage to the contested one was costing build time for no evidence.
 - **Strike record:** `0001-TEMPER.md`, `0001-TEMPER-round2.md`, `0001-TEMPER-round3.md`.
+- **Substrate pass (2026-08-26):** §1 records six measurements of what Dart actually does, taken
+  before any prose here was revised. They **confirmed** D8's keepalive physics, its failure-linking
+  consequence and its unbounded-`SendPort` consequence; they **corrected** two factual errors (§5's
+  account of why parking dies, and D8's claim that web isolates map onto web workers); and F5 is
+  **new**, constraining §4.1. Rigs: `tool/experiments/`.
 - **Gate:** no `lib/` code implementing anything in this document until it survives a strike. The
   value types in ADR-0001 are explicitly NOT blocked by this.
 
@@ -24,6 +29,49 @@ laundering path through private state. That coupling is real, so these decisions
 > cross-family round is an expensive way to iterate on it — two of three rounds went to one idea
 > that a language fact killed outright. Bring a design to the fire; do not design in it.
 > (`dir-id 7c6e` — an outlier in your own process metric is a stop-and-reframe signal.)
+
+## 1. The measured substrate
+
+*Added 2026-08-26, before any prose below it was revised.*
+
+Every claim in this section is a **measurement**, not an argument, and each one is a runnable file
+in `tool/experiments/` with a positive control, a null arm, or both. Findings are stated for
+**Dart SDK 3.13.0 (stable), macos_arm64**; re-run `tool/experiments/` on an SDK bump before
+relying on one.
+
+This section exists because two of the three temper rounds on ADR-0001 were spent on `parking`, a
+mechanism one ten-line script would have killed on day one. The order is now inverted:
+
+> **Pin the substrate by experiment first, then strike.**
+
+| | Measured fact | What it forbids this document from claiming |
+|---|---|---|
+| **F1** | A **synchronous** slice starves microtasks, `Timer`s and inbound isolate messages alike. Every `Timer` whose deadline expires during a 300ms slice fires *together*, late, after it. A long `await` starves nothing — 4 keepalive ticks landed during a 250ms `await`. | That any `Timer`-based `HandlerTimeout` can fire during the slice it exists to interrupt. It fires only once the actor yields — when it is no longer needed. |
+| **F1b** | With all three genuinely pending at the yield point, service order is **microtask → `Timer` → inbound isolate message**, 8/8 runs. | That transport traffic is serviced promptly relative to timers. Inbound messages queue *behind* every already-due `Timer`. |
+| **F2** | `.timeout()` abandons the **wait**, not the **work**. The caller timed out at 100ms; the handler ran to completion at 300ms, **mutated actor state**, and the abandoned future still completed with a value. | That a timed-out `ask` is over. Every abandoned `ask` leaves a live handler that will still mutate state at an unbounded later time. "Timed out" describes the caller only. |
+| **F3** | Isolates are **not** failure-linked. A child that throws dies; its `SendPort` accepts further sends silently, forever; the parent gets no error and no exit signal. `onExit`/`onError` fire only if requested at `spawn`. The death prints a stack trace to **stderr** — visible to a human, invisible to the program. | That a dead actor is detectable without explicit wiring. Supervision is opt-in at spawn time, and its absence looks healthy in production while looking loud in dev. |
+| **F4** | `SendPort` never blocks and never signals. With the consumer paused, a producer sent **400,000 messages in 478ms** and the receiving isolate's RSS grew **+345MB** with **zero** drained. Live-consumer control arm: all 400,000 drained, RSS flat. | That the transport provides any backpressure. Credit must be carried **in-band**; the port will never tell a producer to stop. |
+| **F5** | An `await` continuation resumes as a microtask, and its **tick cost depends on when the awaited future's completion was *scheduled*, not on whether the future is complete when awaited.** `Future.value` / a pre-completed `Completer` / `Future.microtask` schedule at **construction** (`_Future.immediate` → `_asyncCompleteWithValue`) and their continuation runs *inside* that microtask, preempting microtasks queued later. `Future.sync` / `await null` complete synchronously at construction (`_Future.zoneValue` → `_setValue`) and schedule at **await** time, running after. | That reply ordering follows await order. It is entangled with **future construction order**. Any §4.1 guarantee must be stated against construction order or it is not a guarantee. |
+| **F6** | There are no isolates on **either** web backend. Under dart2js, `ReceivePort.sendPort` throws `UnsupportedError` — a port cannot even be obtained. `dart:isolate` is a pure stub on both: 221 lines of `throw` in `js_runtime/lib/isolate_patch.dart`, 197 in `wasm/common/isolate_patch.dart`, against 827 lines of real implementation in `vm/lib/isolate_patch.dart`. | That web isolates are a *constrained* version of the real thing. They are absent, and the failure is one layer lower than "spawn fails". |
+
+**Corollary to F6, and a trap worth naming.** Flutter's `compute()` — the usual reach for "move
+this off the main thread" — is, on web, verbatim from `_isolates_web.dart`:
+
+```dart
+await null;
+return callback(message);
+```
+
+It runs the callback **on the main thread**, one microtask later. Same API, same call site, same
+green tests, no offload. Combined with F1, a synchronous callback there starves everything,
+timers included.
+
+**Three of these experiments were void on their first pass** and returned plausible, wrong
+results — e4's "slow consumer" never awaited; e1b settled before the slice so the contest never
+happened (its corrected run *inverts* the original ordering); e6 read a successful
+`dart compile js` as "isolates work on web". The methodological record is kept in
+`tool/experiments/README.md` rather than tidied away, because it is the same failure shape that
+cost this design three rounds.
 
 ## 2. The central question: does Dart need a mailbox?
 
@@ -252,12 +300,15 @@ cannot be constructed here.
 but got the **physics wrong**, and Tesla caught it:
 
 - **A long `await` does not block keepalives at all.** Timers and socket callbacks run during an
-  await — that is what an event loop is *for*. Revision 2 proposed bounding handler *wall-clock*
+  await — that is what an event loop is *for*. **Measured: §1, F1** — 4 keepalive ticks fired during
+  a 250ms `await`. Revision 2 proposed bounding handler *wall-clock*
   duration, which is the wrong quantity.
 - **The danger is uninterrupted SYNCHRONOUS work** — a fat S-expression parse, a tight loop.
 - **And during a synchronous slice no `Timer` fires**, so §2.5's handler timeout — itself a Timer
   — *cannot fire either*. Revision 2's mitigation was provably incapable of protecting the thing
-  it was proposed to protect. A smoke alarm wired to the fire.
+  it was proposed to protect. A smoke alarm wired to the fire. **Measured: §1, F1** — a 300ms slice
+  held a `Timer(0)`, a `Timer(50ms)` and a `Timer(150ms)`, all three firing together and already
+  late once it ended.
 
 The failure it permits: a ping is missed, the broker publishes our retained last will `(absent)`
 on `{ns}/{host}/{pid}/0/state`, and **the fleet fails over a process that was only busy.**
@@ -279,7 +330,9 @@ loudness**, sized independently of the keepalive interval. D8 no longer claims i
 
 **(1) Failure-linking, or we trade a false-negative for a false-positive.** Rounds 1 and 2 fixed
 "a busy process is declared dead". Round 3 found the inverse: **Dart isolates are not
-failure-linked by default**, so if the actor isolate wedges — or *dies* — the transport isolate
+failure-linked by default** (**measured: §1, F3** — a corpse's `SendPort` accepts sends silently
+forever and the parent receives neither error nor exit signal unless both ports were requested at
+`spawn`), so if the actor isolate wedges — or *dies* — the transport isolate
 keeps pinging, the broker withholds the last will, and **the fleet never fails over a corpse whose
 heart still beats on the other side of the port.** Test ● 5 goes *green* for that death.
 The LWT is our only liveness signal, and D8 has just decoupled it from the organ whose liveness it
@@ -287,7 +340,8 @@ reports. **The actor isolate must periodically prove it is serving; if that proo
 transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
 observable, not to the nearest green thing one hop before it.
 
-**(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** §2.6's carefully
+**(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** **Measured: §1, F4** —
+400,000 messages into a paused consumer in 478ms, +345MB RSS, zero drained, producer never blocked. §2.6's carefully
 classed overflow table is defeated one layer upstream: drop-newest fires only *after* the port has
 already eaten the RAM and MQTT QoS has already ACKed, and `(absent)` / disconnect sit behind bulk
 publishes with no reserved headroom on the port. **Credit-based backpressure across the boundary**
@@ -305,11 +359,37 @@ epoch's publishes; if that check runs anywhere downstream the bytes are already 
 and the zombie has published. Test ● 2 asserts *"any byte reaches the broker"*, so the mechanism
 must sit upstream of the hand-off.
 
-**Open, and honest: the web has no real isolates.** Compiled to JavaScript, `Isolate.spawn` maps
-onto web workers with far tighter constraints, so this mitigation is unavailable for the browser
-target (#3240 / #2268). That build needs its own answer — likely "keep handlers non-blocking and
-accept the risk", since MQTT-over-WebSockets has different failure behaviour anyway. Naming it
-now beats discovering it after building on the assumption.
+**The web has no isolates at all — MEASURED, and the earlier wording was wrong.** Revision 4 said
+`Isolate.spawn` "maps onto web workers with far tighter constraints". It does not map onto anything.
+F6: `dart:isolate` is a pure stub on **both** web backends, and the failure lands one layer lower
+than spawn — under dart2js `ReceivePort.sendPort` itself throws `UnsupportedError`, so a port cannot
+even be obtained to hand a child.
+
+Two consequences, neither optional:
+
+- **The platform seam must sit ABOVE the port abstraction**, not around `Isolate.spawn`. Anything
+  typed in terms of `SendPort` is already unbuildable on web.
+- **`compute()` is not an escape hatch** — see §1's corollary. On web it runs the callback on the
+  main thread after one microtask, so it satisfies the type checker and the test suite while
+  offloading nothing.
+
+The JS equivalent of an isolate is a **Web Worker** (`worker_threads` under Node), and the models
+correspond closely: separate heap, no shared mutable state, copy-on-boundary (structured clone),
+transferables ≈ `TransferableTypedData`. Dart does not bridge them because `Isolate.spawn` takes a
+**function** and `Worker` takes a **script URL**, and a closure cannot be structured-cloned.
+
+So the browser target has two honest answers, and this document does not yet pick one:
+
+1. **A hand-written Web Worker over `dart:js_interop`** — a second compiled entry point, with
+   S-expression **text** across `postMessage`. Unusually viable for us: what crosses our boundary is
+   already flat text, so structured clone's type limits cost nothing. This is the only option that
+   preserves D8's shape.
+2. **No offload** — keep handlers non-blocking and accept the risk, since MQTT-over-WebSockets has
+   different failure behaviour anyway.
+
+Option 1 is a separate design with its own tracker item; it is deliberately **not** folded in here,
+because it is a second build artifact rather than a conditional import, and #3240's conditional-import
+split (WebSockets vs raw TCP) is a different axis that stands on its own.
 
 
 ## 4. What must be settled before any of this is built
@@ -335,9 +415,19 @@ Carried from `0001-TEMPER-round3.md`, none of it folded yet:
 
 **Parking (`await` releases the turn; the continuation re-enters as a fresh turn) does not work.**
 `await`'s continuation resumes as a **microtask**; the mailbox never owns "the rest of the
-function". It also fails *deterministically* on the in-memory loopback, which completes replies
-synchronously — i.e. exactly on the uniform local/remote path the mailbox exists to make
-identical. It is an attractive idea. It is not implementable in Dart.
+function". Measured in `e5_await_ordering.dart`: handler B's body ran between handler A's two halves
+and mutated state under it.
+
+*Revision 4 stated the second half of this wrong, and F5 corrects it.* It said the in-memory loopback
+"completes replies synchronously". No `await` continuation ever runs synchronously — it is always a
+microtask. What is actually true is sharper, and worse for parking: **the tick at which a continuation
+runs depends on when the awaited future's completion was scheduled, not on whether it is complete when
+awaited** (§1, F5). So on the loopback the continuation does not merely resume in the wrong *turn* — it
+can resume ahead of microtasks queued after the reply future was constructed, i.e. its position depends
+on **construction order**, which no mailbox observes. The verdict is unchanged and now rests on a
+measurement rather than on a mis-stated mechanism.
+
+It is an attractive idea. It is not implementable in Dart.
 
 **Likewise: a `Completer`-based `await`-shaped `ask` inside a handler** head-of-line blocks the
 actor for unbounded peer latency. Both attempts had the same motive — keep `await`'s ergonomics —
