@@ -219,7 +219,8 @@ mixin FakeDependencyMixin on CallInit {
   bool isType(String type) => type == 'fake';
 }
 
-class TestCategory with CallInit, HooksMixin, ServiceMixin, FakeDependencyMixin {
+class TestCategory
+    with CallInit, HooksMixin, ServiceMixin, FakeDependencyMixin {
   TestCategory(Context ctx) {
     initService(ctx);
     initDependency(ctx);

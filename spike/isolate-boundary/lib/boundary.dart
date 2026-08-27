@@ -177,8 +177,7 @@ String dispatch(CounterActor actor, String command, List<String?> args) {
     case 'greet':
       return generate('greeting', [actor.greet(args[0] ?? '')]);
     case 'describe':
-      return generate(
-          'description', ['CounterActor(count=${actor.count})']);
+      return generate('description', ['CounterActor(count=${actor.count})']);
     case 'update': // EC state delta: (update itemName itemValue)
       actor.applyDelta('update', args[0] ?? '', args.length > 1 ? args[1] : '');
       return generate('ack', [args[0]]);

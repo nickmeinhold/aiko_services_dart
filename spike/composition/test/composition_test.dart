@@ -4,7 +4,8 @@ import 'package:test/test.dart';
 void main() {
   group('P1 — multi-interface flatten onto one object (the Category acid test)',
       () {
-    test('Category exposes Actor, Service, Hooks AND Dependency behaviour on '
+    test(
+        'Category exposes Actor, Service, Hooks AND Dependency behaviour on '
         'one shared self', () {
       final c = Category(Context('cat-0'));
 
@@ -48,7 +49,8 @@ void main() {
   });
 
   group('P4-deep — the HyperSpace two-level diamond', () {
-    test('Actor (and Service) initialize exactly once when reached via '
+    test(
+        'Actor (and Service) initialize exactly once when reached via '
         'Category AND directly', () {
       final h = HyperSpace(Context('hs-0'));
       // Category-init cascades to Actor; the constructor also inits Actor
