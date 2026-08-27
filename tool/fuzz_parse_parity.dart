@@ -18,15 +18,9 @@ import 'package:aiko_services/src/codec/s_expression.dart';
 
 /// Why the Dart codec rejected a payload the Python reference decoded.
 ///
-/// A CLOSED set, which is the whole point: `ref-only-decodes` is allowed only
-/// while every instance lands in a class RFC-0001 deliberately chose, and
-/// [other] is the "nobody chose this" bucket the gate treats as drift.
-///
-/// This was a String, and the stringly-typed version shipped a dead gate. The
-/// classifier wrote `'OTHER: $message'` — bucket and detail concatenated into
-/// one key — while the gate read `rejectCauses['OTHER']`. Map lookup is exact,
-/// so the unclassified count was structurally always zero and the check could
-/// never fire. An enum cannot collide its own bucket with its own detail.
+/// A CLOSED set: `ref-only-decodes` is allowed only while every instance lands
+/// in a class RFC-0001 deliberately chose, and [other] is the bucket the gate
+/// treats as drift. [label] is display-only and must never be used as a key.
 enum RejectCause {
   overlongLengthPrefix('overlong length prefix (RFC-0001 s8.2)'),
   nonSymbolCommand('non-symbol command (RFC-0001 s8.6)'),
@@ -55,27 +49,13 @@ enum RejectCause {
 
 void main(List<String> args) {
   final cases = jsonDecode(File(args[0]).readAsStringSync()) as List;
-  // Optional second argument: the minimum number of cases that MUST be
-  // compared. Every bucket being zero is indistinguishable from having read an
-  // empty corpus, and this rig printed GATE PASSED over `cases 0`.
+  // Two gates, not interchangeable: minimumCases asks whether the corpus
+  // arrived, minimumCompared whether we ran against it. Errata are skipped
+  // before any comparison — ~25% of a normal run — so a full-size corpus can
+  // compare nothing, and every bucket reading zero looks identical to an
+  // empty corpus.
   final minimumCases = args.length > 1 ? int.parse(args[1]) : 1;
-  // Declared by the generator (its COMPARABLE line): total cases minus the ones
-  // tagged as reference errata, which are skipped before any comparison. Was a
-  // 0.5 ratio, a constant whose meaning moves whenever the errata
-  // classification does.
   final minimumCompared = args.length > 2 ? int.parse(args[2]) : 1;
-  // TWO numbers, two gates, and the comment must not promise the other one.
-  // `minimumCases` gates cases.length (did the corpus arrive); `minimumCompared`
-  // gates the compared count (did we run against it). An earlier version of
-  // this comment described minimumCases as "the minimum number of cases that
-  // MUST be compared", which is a trap: a later hand aligning the code to the
-  // comment would gate compared < 20000 on a corpus that healthily compares
-  // ~15000, and the instrument could never go green again. Errata entries are counted and `continue`d without ever
-  // reaching a comparison, so a full-size corpus of nothing but errata clears a
-  // cases.length gate with every fatal bucket at zero — GATE PASSED over no
-  // comparison at all. Not hypothetical: a normal run already skips ~25% of the
-  // corpus as errata (4915 of 20000), so the compared count is not pinned to the
-  // corpus size and cannot be inferred from it.
   var bothDecodeDiffer = 0, refOnlyDecodes = 0, dartOnlyDecodes = 0, agree = 0;
   var crashes = 0, errata = 0;
   final rejectCauses = <RejectCause, int>{};
@@ -137,12 +117,7 @@ void main(List<String> args) {
       refOnlyDecodes++;
       final cause = rejectReason ?? RejectCause.other;
       rejectCauses[cause] = (rejectCauses[cause] ?? 0) + 1;
-      // Collected HERE, in the same arm that increments the gate's counter. It
-      // used to be collected at classification time, before the ref/Dart
-      // branch — so a shared rejection (agreement, not a finding) contributed
-      // messages while the gate counted only ref-only-decodes. The printed
-      // evidence could then be six rejections from a bucket the verdict never
-      // looked at: verdict and evidence out of phase.
+      // Same arm as the counter, so printed evidence matches the verdict.
       if (cause == RejectCause.other) unclassifiedMessages.add(rejectMessage);
       sample(
         'DART REJECTS, ref decodes',
@@ -178,9 +153,7 @@ void main(List<String> args) {
       print('  $d');
     }
   });
-  // Declared before the summary line that reports it: how many cases were
-  // actually COMPARED is a different number from how many were READ, and the
-  // reader needs both side by side to notice a gap opening between them.
+  // Reported beside cases.length so a read/compared gap is visible.
   final compared =
       agree + bothDecodeDiffer + refOnlyDecodes + dartOnlyDecodes + crashes;
   print(

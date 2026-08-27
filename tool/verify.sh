@@ -35,20 +35,12 @@ SEED="${AIKO_FUZZ_SEED:-20260825}"
 # How many decoder cases to request. Passed to BOTH the generator and the rig's
 # floor, so the two cannot drift apart.
 DECODER_CASES="${AIKO_FUZZ_CASES:-20000}"
-# Requested, not read back. Passed to the generator AND to the rig as its floor,
-# so a generator that silently produced fewer cases trips the gate. Deriving it
-# from the written corpus (the previous shape) compared a file against its own
-# length — theatre that could only fail if two JSON parsers disagreed.
 ENCODER_CASES="${AIKO_FUZZ_ENCODER_CASES:-40000}"
 
-# Validate the knobs BEFORE any work, and refuse non-positive counts. A
-# configurable floor that accepts zero is entropy with a command-line
-# interface: AIKO_FUZZ_ENCODER_CASES=0 made the generator emit its single
-# seed case, passed 0 as the rig's floor so `cases.length < minimumCases`
-# could not fire, and the whole gate reported ALL CHECKS PASSED over one
-# empty-string comparison. Checked here rather than at the point of use so
-# --quick fails too: a misconfigured run should not get further than the
-# configuration.
+# Checked before any work, so a misconfigured run gets no further than its
+# configuration and --quick fails too. A count of 0 would leave the generator
+# emitting only its seed case and the floor at 0 — a whole differential fuzz
+# reduced to one comparison, under ALL CHECKS PASSED.
 for _knob in DECODER_CASES ENCODER_CASES SEED; do
   eval "_v=\$$_knob"
   case "$_v" in
@@ -57,24 +49,11 @@ for _knob in DECODER_CASES ENCODER_CASES SEED; do
       exit 2;;
   esac
 done
-# ERRATA BUDGET: how much of a requested corpus is allowed to be unusable
-# before the run stops meaning anything. The floor is then REQUEST minus this
-# budget — a number chosen by the caller, computed before the corpus exists,
-# and therefore independent of it.
-#
-# The previous shape asked the generator to declare how many cases it had made
-# comparable and used that as the floor. It looked rigorous and could not fail:
-# the rig's `checked` IS the count the generator reported, both derived from one
-# file, so the comparison held by construction. It was also a REGRESSION on what
-# it replaced — a 0.5 ratio is a badly chosen constant, but it is an independent
-# one, and independence is the property that matters here.
-#
-# Budgets are set against measured rates with headroom, and the measurement is
-# named so a future reader can re-check it rather than trust it: the encoder
-# corpus is normally 100% comparable, the decoder ~75% (4915 of 20000 skipped as
-# reference errata, RFC-0001 s8). Exceeding a budget is a real signal — the
-# oracle started throwing, or the errata classification widened — and should
-# stop the run rather than quietly shrink the evidence.
+# How much of a requested corpus may be unusable before the run stops meaning
+# anything. The rigs' floor is REQUEST minus this, computed before the corpus
+# exists so it cannot be derived from what it checks.
+# Measured rates the budgets allow headroom over: encoder ~100% comparable,
+# decoder ~75% (4915 of 20000 skipped as RFC-0001 s8 errata).
 ENCODER_ERRATA_BUDGET_PCT="${AIKO_ENCODER_ERRATA_BUDGET_PCT:-10}"
 DECODER_ERRATA_BUDGET_PCT="${AIKO_DECODER_ERRATA_BUDGET_PCT:-40}"
 
@@ -90,11 +69,8 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok()   { printf '   \033[32mok\033[0m  %s\n' "$1"; }
 bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; FAILED+=("$1"); }
 
-# A fresh clone has no .dart_tool anywhere (it is gitignored), and the spike
-# packages are separate packages that `dart analyze` DOES walk into. Without
-# this, a clean checkout fails at step one with 27 unresolved-import errors,
-# which meant "verify.sh green" was a fact about one laptop rather than about
-# the commit.
+# .dart_tool is gitignored, and `dart analyze` walks into the spike packages —
+# without this a fresh clone fails at step one on unresolved imports.
 step "resolve dependencies (root + spikes)"
 BOOTSTRAP_OK=1
 dart pub get >/dev/null 2>&1 || BOOTSTRAP_OK=0
@@ -107,9 +83,6 @@ step "analyze (strict-casts / strict-inference / strict-raw-types)"
 dart analyze && ok "no issues" || bad "dart analyze"
 
 step "format"
-# spike/ included. analyze walks the spikes (that was the 27-import surprise on
-# a fresh clone) and the suites now run there too, so leaving format out kept
-# them half-in — the one option this PR already called clearly wrong.
 if dart format --output=none --set-exit-if-changed lib/ test/ tool/ benchmark/ spike/; then
   ok "formatted"
 else
@@ -119,11 +92,8 @@ fi
 step "tests"
 dart test && ok "suite green" || bad "dart test"
 
-# The spike packages are separate pub packages, so the root `dart test` never
-# discovers them, while `dart analyze` above DOES cover them. Half-in is the
-# worst of the two: thirteen tests — including the ones pinning the
-# mixin-composition and isolate deep-copy premise corrections — were passing
-# unobservedly, and nobody would have learned if they broke.
+# Separate pub packages, so the root `dart test` never discovers them while
+# `dart analyze` above does.
 for spike in spike/*/; do
   step "tests: $spike"
   if (cd "$spike" && dart test); then
@@ -145,28 +115,11 @@ else
     printf 'The oracle must be pinnable to a ref. A skip is NOT a pass.\n'
     bad "fuzz rigs did not run (reference is not a git repo)"
   else
-    # Oracle against a SNAPSHOT of a pinned ref, never the live checkout.
-    #
-    # That directory is somebody's working tree. It moved across four branches
-    # in one evening while these rigs were being run against it, and no result
-    # recorded which. We got away with it — parser.py happened to be identical
-    # on all four — but which of those two outcomes you get is a fact about the
-    # environment, not about this code, and it can change with nothing here
-    # changing.
-    #
-    # `git archive` makes the oracle git-derivable by construction. Recording
-    # the SHA would only report the problem, and would need somebody to compare
-    # the number afterwards.
-    # One temp dir for the oracle snapshot AND both corpora. The corpora used
-    # fixed names under /tmp, so two concurrent runs of this script overwrote
-    # each other between generation, counting and replay — a false red at best,
-    # and at worst a green earned against another run's oracle or seed. This
-    # repo demonstrably has concurrent sessions.
-    # mktemp failing (disk full, bad TMPDIR) assigns an EMPTY string, which
-    # `set -u` does not catch because the variable IS set. `tar -x -C ""` then
-    # extracts the reference into the current working tree, and
-    # "$CORPUS_DIR/encoder.json" becomes "/encoder.json". Refuse rather than
-    # guess, the same way the generators refuse to guess an oracle.
+    # $REF is a working tree somebody else edits; it moved across four branches
+    # in one evening while these rigs ran against it. Snapshot a pinned ref so
+    # the oracle is git-derivable rather than whatever is checked out now.
+    # mktemp failing assigns an EMPTY string, which `set -u` does not catch
+    # because the variable IS set — and `tar -x -C ""` extracts into the cwd.
     SNAPSHOT_OK=1
     SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/aiko-oracle.XXXXXX")"
     CORPUS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aiko-corpus.XXXXXX")"
@@ -191,18 +144,8 @@ else
     if [ -n "$(git -C "$REF" status --porcelain 2>/dev/null)" ]; then
       printf '\033[2m   note: that checkout has uncommitted changes; they are NOT in the snapshot\033[0m\n'
     fi
-    # No `|| <same command without the reference>` fallback here any more. That
-    # shape hid a caller/callee disagreement: the primary invocation failed on
-    # every run and the fallback quietly rescued it, so the disagreement never
-    # surfaced. A fallback that absorbs a mismatch produces a green that means
-    # nothing.
     if [ "$SNAPSHOT_OK" = "0" ]; then
-      # Without a snapshot there is no oracle, so the fuzz steps below cannot
-      # mean anything. Running them anyway reported the SAME failure three
-      # times — once for the real cause and twice for its symptoms — with the
-      # symptoms last and loudest. Worse, it left the run leaning on the
-      # generators staying strict: soften them and this path becomes a fuzz
-      # against a half-extracted tree.
+      # No snapshot means no oracle, so the rigs below cannot mean anything.
       printf '\n\033[33m   skipping both fuzz rigs: no oracle snapshot. A skip is NOT a pass.\033[0m\n'
     else
     step "encoder differential fuzz vs CPython parser.py"
@@ -212,8 +155,6 @@ else
     # ratio whose meaning moved whenever the generator did.
     ENC_FLOOR=$(( ENCODER_CASES * (100 - ENCODER_ERRATA_BUDGET_PCT) / 100 ))
     if ENC_OUT=$(python3 tool/generate_fuzz_corpus.py "$CORPUS_DIR/encoder.json" "$SNAPSHOT" "$ENCODER_CASES"); then
-      # The generator's COMPARABLE line is a LOG, not the floor. The floor came
-      # from the request above, before this corpus existed.
       ENC_COMPARABLE=$(printf '%s\n' "$ENC_OUT" | sed -n 's/^COMPARABLE=//p')
       dart run tool/fuzz_generate_parity.dart "$CORPUS_DIR/encoder.json" "$ENCODER_CASES" "$ENC_FLOOR" \
         && ok "encoder parity ($ENCODER_CASES requested, floor $ENC_FLOOR, $ENC_COMPARABLE comparable)" \
