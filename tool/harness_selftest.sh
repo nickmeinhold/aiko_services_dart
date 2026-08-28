@@ -61,9 +61,8 @@ trap cleanup EXIT
 note() { printf '\033[2m   %s\033[0m\n' "$1"; }
 red()   { RESULTS+=("  \033[32mRED\033[0m    $1"); }
 blind() { RESULTS+=("  \033[31mBLIND\033[0m  $1  <- gate stayed green under a defect it should catch"); BLIND=$((BLIND+1)); }
-# A skip is not a pass. An arm that did not run tells you nothing about the
-# instrument it was built to test, and reporting it beside the reds — under a
-# triumphant final line — is the exact failure this script exists to catch.
+# A skip is not a pass: an arm that did not run says nothing about the
+# instrument it was built to test.
 skip()  { RESULTS+=("  \033[33mSKIP\033[0m   $1  <- DID NOT RUN"); SKIPPED=$((SKIPPED+1)); }
 # An arm that went red for a reason OTHER than the one it names has not tested
 # the instrument it claims to test. Distinct from BLIND (gate saw nothing) and
@@ -97,25 +96,15 @@ note "baseline green"
 
 # arm <name> <plant-fn> <command...>
 #
-# The plant is VERIFIED to have changed the tree before the gate is run. A
-# plant that silently does nothing produces an arm whose outcome is independent
-# of the thing it checks — the exact defect this script exists to find, and
-# `plant_codepoint_bug` is one reformat of s_expression.dart:166 away from being
-# a no-op regex. Without this check that no-op would report BLIND, accusing a
-# healthy instrument; a plant whose no-op happened to leave the gate red would
-# be worse, minting false confidence.
-#
-# `plant_nothing` is the deliberate exception: the empty-corpus arms plant no
-# defect at all, they pass a degenerate corpus as an argument. They declare that
-# by name so the check can allow it rather than treating it as a failed plant.
+# The plant is verified to have changed the tree first: every perl plant here
+# is one reformat of its target line away from being a silent no-op.
+# `plant_nothing` is the deliberate exception — the degenerate-corpus arms plant
+# nothing and pass the corpus as an argument.
 # arm_expect <name> <plant-fn> <expected-failure-substring> <command...>
 #
-# Asserts not merely that the gate went red, but that it went red ON THE CHECK
-# THE ARM NAMES. Without this, an arm's outcome is not conditional on the
-# instrument it tests: planting a decoder codec bug and running the full gate
-# reports RED whether or not the decoder rig works, because `dart test` runs
-# first and catches the same defect. That is this script's own defect class one
-# layer up — a check whose outcome is independent of the thing it checks.
+# Asserts the gate went red ON THE CHECK THE ARM NAMES. `dart test` runs before
+# the fuzz rigs and catches codec bugs too, so a full-gate arm would otherwise
+# report RED whether or not the rig it names works.
 arm_expect() {
   local name="$1"; local plant="$2"; local expect="$3"; shift 3
   git checkout -- . >/dev/null 2>&1
@@ -158,12 +147,8 @@ import 'package:test/test.dart';
 void main() => test('planted by harness_selftest: MUST fail', () => expect(1, equals(2)));
 EOF
 }
-# One arm per spike package, generated from the packages that actually exist.
-# Planting only in spike/composition proved the gate notices ONE nested package,
-# not that the class is closed: a verify.sh that iterated over only the first
-# package would leave spike/isolate-boundary dark with this arm still green —
-# and isolate-boundary is precisely the suite this PR found unobserved. Guard
-# the set, not a representative path.
+# One arm per spike package, generated from the packages that exist — guarding
+# the set rather than one representative path.
 plant_failing_spike_test_in() {
   cat > "$1/test/selftest_planted_test.dart" <<'EOF'
 import 'package:test/test.dart';
@@ -185,22 +170,14 @@ plant_decoder_codepoint_bug() {
     lib/src/codec/s_expression.dart
 }
 
-# Break the oracle WIRING rather than the code under test: hand the corpus
-# generator its arguments in the order that shipped, where the reference path
-# landed in the seed slot. This is the defect that actually got past — and until
-# now nothing in this file could see it, because every arm below either ran a
-# rig directly against a pre-built corpus, or ran verify.sh --quick, which skips
-# the entire fuzz block. The harness's coverage boundary WAS the --quick
-# boundary.
+# Breaks the oracle WIRING rather than the code under test: the argument order
+# that shipped, with the reference path in the seed slot.
 plant_broken_oracle_wiring() {
   perl -0pi -e 's/"\$CORPUS_DIR\/decoder\.json" "\$SNAPSHOT" "\$DECODER_CASES" "\$SEED"/"\$CORPUS_DIR\/decoder.json" "\$DECODER_CASES" "\$SNAPSHOT"/' \
     tool/verify.sh
 }
-# Makes the codec reject payloads the reference decodes, with a message no
-# RejectCause class matches — so the rejection lands in RejectCause.other and
-# the unclassified gate must fire. Regression arm for the dead
-# `rejectCauses['OTHER']` lookup: with the old string key that count was
-# structurally always zero and the gate printed GATE PASSED over 646 of these.
+# Rejects payloads the reference decodes, with a message no RejectCause class
+# matches — so it lands in RejectCause.other and the unclassified gate must fire.
 plant_unclassifiable_rejection() {
   perl -0pi -e "s/\Q(String, Object) parse(String payload) {\E/(String, Object) parse(String payload) {\n  if (payload.contains('q')) {\n    throw FormatException('selftest probe: no class for this', payload, 0);\n  }/" \
     lib/src/codec/s_expression.dart
@@ -215,20 +192,14 @@ arm "verify.sh propagates one failure to its exit"    plant_failing_test        
 for spike in spike/*/; do
   # shellcheck disable=SC2317
   eval "plant_$(basename "$spike" | tr -c 'a-zA-Z0-9' '_')() { plant_failing_spike_test_in '${spike%/}'; }"
-  # Asserts the gate failed ON THAT PACKAGE'S SUITE. The command is --quick, and
-  # spike tests currently sit before the --quick branch, so this passes today —
-  # but the arm's NAME claims coverage the command alone does not guarantee.
-  # Move spike tests behind --quick later and this contract fails loudly instead
-  # of the arm silently going blind where it claims coverage (Carnot's catch).
+  # Asserts the failure names THAT package's suite: spike tests sit before the
+  # --quick branch today, and moving them behind it must fail loudly here.
   arm_expect "the gate catches a failing test in $spike" \
       "plant_$(basename "$spike" | tr -c 'a-zA-Z0-9' '_')" \
       "dart test in $spike" tool/verify.sh --quick
 done
 
-# A gate that reports success over zero work. Not reachable through verify.sh
-# today, because a broken oracle import fails loudly rather than yielding an
-# empty corpus — but "unreachable" is a fact about the environment, not the
-# code, and the environment can change without the code changing.
+# A gate reporting success over zero work.
 printf '[]' > "$WORK/empty.json"
 # A knob that can hollow out the gate is a defect in the gate. Cheap because
 # the validation happens before any work, so --quick reaches it.
@@ -248,13 +219,9 @@ else
     # Same discipline as verify.sh: oracle a snapshot of a pinned ref, never
     # the live checkout.
     ORACLE="$WORK/oracle"; mkdir -p "$ORACLE"
-    # BASELINE FOR THE FULL PATH. The green checked at the top is
-    # `verify.sh --quick`, which says nothing about the oracle snapshot, the
-    # corpus builds or either rig. If the FULL gate were already red — drifted
-    # oracle, a floor already tripping — every arm below would report RED with
-    # the plant doing no work at all. That is the false RED this file's own
-    # comments call the diabolical twin of a false green, and the strongest
-    # arms were the ones without the control.
+    # The baseline at the top is --quick, which says nothing about the oracle
+    # snapshot, the corpus builds or either rig. An already-red full gate would
+    # paint every arm below RED with the plant doing no work.
     printf '\033[1m== full-gate baseline must be green before the full arms run\033[0m\n'
     if ! tool/verify.sh >"$WORK/full-baseline.log" 2>&1; then
       printf '\033[31mFULL GATE IS ALREADY RED — the full arms below would be meaningless.\033[0m\n'
@@ -290,11 +257,9 @@ else
       # that silently disagrees with it. A shrunken generator would otherwise
       # make this arm go red on the floor rather than on the code-point bug —
       # a false RED, which is the diabolical twin of a false green.
-      # REGRESSION ARMS for the two gates this PR repaired. Both run a rig
-      # DIRECTLY against a purpose-built corpus rather than through verify.sh,
-      # so `dart test` cannot supply the red on their behalf. Without them,
-      # reverting the RejectCause key to 'OTHER: $m' — the dead-gate bug the
-      # enum exists to bury — leaves every arm green.
+      # Run a rig DIRECTLY against a purpose-built corpus, so `dart test`
+      # cannot supply the red on their behalf. Reverting the RejectCause key to
+      # a string must make one of these go BLIND.
       python3 - "$WORK/corpus.json" "$WORK/nothing-comparable.json" <<'ERRATA_EOF'
 import json, sys
 cases = json.load(open(sys.argv[1]))
