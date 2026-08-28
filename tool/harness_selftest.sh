@@ -1,45 +1,19 @@
 #!/usr/bin/env bash
 #
-# Can verify.sh go red?
+# Can verify.sh go red? Plants a known defect, runs the real gate, asserts red.
+# Full rationale and the meaning of each verdict: tool/ReadMe.md section 4.
 #
-# WHY THIS EXISTS
-# ---------------
-# verify.sh is the only gate this repo has. A gate that cannot fail is worse
-# than no gate, because its green is read as evidence. Nothing in verify.sh's
-# own output distinguishes "checked everything, found nothing" from "checked
-# nothing" — and on 2026-08-26 two of its instruments turned out to report
-# success over zero work.
-#
-# So this script does not inspect verify.sh. Inspection is what fails: a
-# harness examined for whether it can fail tends to look like it can, because
-# you read its structure and infer capability. Instead each arm PLANTS a known
-# defect, runs the real gate, and asserts it goes red. An arm that stays green
-# names a blind instrument.
-#
-# The ordering matters and is the whole discipline: build the arm that MUST go
-# red before trusting any green.
-#
-# WHAT A RESULT MEANS, AND DOES NOT
-# ---------------------------------
-# All arms red is a FLOOR, not a distribution. It shows the gate detects THESE
-# defects — the ones somebody thought of. It is not evidence that it detects an
-# arbitrary one. Add an arm whenever a real defect gets through.
+# The one thing to know before editing: this script does NOT inspect verify.sh,
+# deliberately. A harness examined for whether it can fail tends to look like it
+# can. Replacing a plant with an assertion about the gate's structure would
+# quietly destroy the only thing this file is for.
 #
 # Runs in a throwaway git worktree; your working tree is never modified.
 #
 # Usage:
 #   tool/harness_selftest.sh            # every arm; exit 0 only if all went red
-#   tool/harness_selftest.sh --quick    # skips the arms needing the Python
-#                                       # reference, and therefore ALWAYS EXITS 1
+#   tool/harness_selftest.sh --quick    # skips the oracle arms, so always exits 1
 #
-# --quick exiting non-zero is deliberate and differs from `verify.sh --quick`,
-# which exits 0. The two are answering different questions. verify.sh --quick
-# says "the cheap checks passed", a claim it can honestly make about the checks
-# it ran. This script's claim is "the gate can go red", and that claim is not
-# separable per-arm: the arms it skips are the ones covering the differential
-# rigs and the oracle wiring, so a partial run cannot support the only sentence
-# this script exists to say. It reports what ran, then refuses to exit 0.
-# A skip is not a pass.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."

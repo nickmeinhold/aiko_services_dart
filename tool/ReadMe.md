@@ -89,3 +89,33 @@ value-differs 0 | CRASHES 0 | ref-only-decodes ~1120-1184 | dart-only ~147-178
 
 **Vary the seed before trusting a clean run.** One seed is an observation, not
 a distribution.
+
+## 4. Can the gate go red? — `harness_selftest.sh`
+
+The three instruments above check the codec. This one checks *them*.
+
+`verify.sh` is the only gate this repo has, and nothing in its output separates
+"checked everything, found nothing" from "checked nothing". Two of its
+instruments turned out to report success over zero work: both fuzz rigs exited 0
+on an empty corpus, and the decoder's unclassified-rejection gate read a map key
+that was never written, so its count was structurally always zero.
+
+It does **not** inspect `verify.sh`. Inspection is what fails — a harness
+examined for whether it *can* fail tends to look like it can, because you read
+its structure and infer capability. Each arm instead plants a known defect, runs
+the real gate, and asserts it goes red on the check the arm names.
+
+```
+tool/harness_selftest.sh            # every arm; exit 0 only if all went red
+tool/harness_selftest.sh --quick    # skips the arms needing the Python
+                                    # reference, and therefore always exits 1
+```
+
+Five verdicts, each meaning something different: **RED** (the gate caught the
+plant), **BLIND** (it did not), **VOID** (the plant changed nothing, so the arm
+tested nothing), **SKIP** (the arm did not run), **WRONG** (the gate went red on
+a different check than the arm names).
+
+**Sixteen arms going red is a floor, not a distribution.** It shows the gate
+detects the defects somebody thought to plant — the same blind spot the golden
+vectors have in §1. Add an arm whenever a real defect gets through.
