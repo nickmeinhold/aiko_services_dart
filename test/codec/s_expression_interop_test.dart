@@ -16,6 +16,10 @@ import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('red case: the test gate must be able to fail', () {
+    expect(1, equals(2));
+  });
+
   final fixture = jsonDecode(
     File('test/codec/fixtures/s_expression_golden.json').readAsStringSync(),
   ) as Map<String, dynamic>;

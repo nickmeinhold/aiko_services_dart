@@ -1,3 +1,4 @@
+import 'dart:convert'; // red case: analyze gate (unused import)
 /// By-name message dispatch — Dart's mirrors-free stand-in for Python's
 /// `target.__getattribute__(command)(*parameters)`.
 ///

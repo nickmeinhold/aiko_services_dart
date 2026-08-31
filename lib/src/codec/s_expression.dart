@@ -455,3 +455,7 @@ Object _listToDict(Object tree) {
   }
   return rebuilt ?? tree;
 }
+
+
+// red case: format gate
+int   redCaseFormat( ) =>    1 ;
