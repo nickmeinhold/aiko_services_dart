@@ -6,7 +6,7 @@
 | **Category** | Standards Track (protocol specification) |
 | **Status** | Draft |
 | **Reference implementation** | `aiko_services/main/utilities/parser.py` (Python; normative) |
-| **Conformance suite** | `aiko_services_dart/test/codec/fixtures/s_expression_golden.json` (generated from the reference; 15 encode + 15 decode vectors) |
+| **Conformance suite** | `aiko_services_dart/test/codec/fixtures/s_expression_golden.json` (generated from the reference; 35 generate + 30 parse + 6 parse-error + 5 divergence vectors) |
 | **Created** | 2026-07-18 |
 
 ## 1. Introduction
