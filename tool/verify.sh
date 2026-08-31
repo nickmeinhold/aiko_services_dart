@@ -97,9 +97,20 @@ bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; FAILED+=("$1"); }
 # the commit.
 step "resolve dependencies (root + spikes)"
 BOOTSTRAP_OK=1
-dart pub get >/dev/null 2>&1 || BOOTSTRAP_OK=0
+# Captured and replayed on failure, not discarded. Swallowing a mutating
+# command's error channel turns "resolve dependencies FAIL" into a red with no
+# cause attached — survivable at a laptop where you re-run it by hand, useless
+# in a CI log, which is the only thing anyone will read.
+bootstrap() {
+  local out
+  if ! out=$(cd "$1" && dart pub get 2>&1); then
+    printf '%s\n' "$out" >&2
+    BOOTSTRAP_OK=0
+  fi
+}
+bootstrap .
 for spike in spike/*/; do
-  (cd "$spike" && dart pub get >/dev/null 2>&1) || BOOTSTRAP_OK=0
+  bootstrap "$spike"
 done
 [ "$BOOTSTRAP_OK" = "1" ] && ok "resolved" || bad "dart pub get (root or a spike package)"
 

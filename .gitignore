@@ -17,3 +17,6 @@ doc/api/
 
 # OS
 .DS_Store
+
+# CI: the nightly checks the CPython oracle out here
+.oracle/

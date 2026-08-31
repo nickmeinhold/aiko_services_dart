@@ -1,0 +1,47 @@
+name: verify
+
+# The gate. Until this file existed, nothing in this repository ran `dart
+# format`, `dart analyze` or `dart test` except a human choosing to run
+# tool/verify.sh — which is why four spike/ files reached PR #6 unformatted.
+#
+# Fires on pull_request AND on push to main. Not belt-and-braces: this repo's
+# history is mostly direct commits to main, and a gate that only guards the
+# route nobody takes has never run, while its silence reads as safety.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          # Not pinned. Everyone in the aiko org upgrades together, so the SDK
+          # floor tracks newest-stable; a release that reformats the repo or
+          # tightens analysis SHOULD turn this red rather than be hidden by a
+          # pin nobody revisits.
+          sdk: stable
+
+      - run: dart --version
+
+      # One door. The steps are NOT re-listed here: a YAML copy of verify.sh
+      # would drift from it silently, and the drift would be invisible exactly
+      # when it mattered (local green, CI green, different checks). --quick
+      # skips the differential fuzz, which needs the CPython reference and runs
+      # in nightly-fuzz.yml.
+      - name: tool/verify.sh --quick
+        run: tool/verify.sh --quick

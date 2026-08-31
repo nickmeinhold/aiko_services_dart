@@ -1,0 +1,77 @@
+name: nightly-fuzz
+
+# The scheduler. The differential fuzz rigs are the only instruments here that
+# can genuinely surprise you — the `\s` divergence was 3604 mismatches that 63
+# green golden vectors ran straight past — and they need a CPython
+# aiko_services checkout, so they cannot live in the per-PR gate.
+#
+# Note: scheduled workflows only run from the DEFAULT BRANCH. This job does not
+# exist until it is merged to main.
+on:
+  schedule:
+    # 02:17 AEST (16:17 UTC). Off the hour: GitHub's scheduler is heavily
+    # oversubscribed at :00 and silently delays.
+    - cron: '17 16 * * *'
+  workflow_dispatch:
+    inputs:
+      reference:
+        description: 'CPython aiko_services repo to use as the oracle'
+        default: 'geekscape/aiko_services'
+      seed:
+        description: 'Decoder fuzz seed (default explores the pinned slice)'
+        default: '20260825'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The oracle tracks the reference's moving HEAD ON PURPOSE, which is the
+      # opposite of what verify.sh does internally (it `git archive`s a SHA so
+      # one run cannot straddle two versions). Both are right: pin WITHIN a run
+      # so a result names a state, follow upstream BETWEEN runs so the rig can
+      # tell you the day parser.py changes under us. That day is the whole
+      # reason this is scheduled rather than gated.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.reference || 'geekscape/aiko_services' }}
+          path: .oracle
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # Not just a checkout: the ENCODER generator imports
+      # `aiko_services.main.utilities.parser`, which runs the package __init__
+      # chain and needs the full dependency set (paho, avro, transitions,
+      # asciimatics, ...). The decoder generator loads parser.py directly and
+      # would not need this.
+      - name: install the reference package
+        run: pip install ./.oracle
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - run: dart --version
+
+      - name: report the oracle
+        working-directory: .oracle
+        run: |
+          echo "oracle: ${{ github.event.inputs.reference || 'geekscape/aiko_services' }} @ $(git rev-parse HEAD)"
+          git log -1 --format='%ci %s'
+
+      # Absolute path: verify.sh cd's to its own repo root first, so a relative
+      # AIKO_SERVICES would resolve against the wrong directory and the run
+      # would report "reference not found" — which verify.sh correctly treats
+      # as a FAILURE, not a skip.
+      - name: tool/verify.sh (full, including both fuzz rigs)
+        env:
+          AIKO_SERVICES: ${{ github.workspace }}/.oracle
+          AIKO_FUZZ_SEED: ${{ github.event.inputs.seed || '20260825' }}
+        run: tool/verify.sh
