@@ -8,8 +8,11 @@ name: verify
 # history is mostly direct commits to main, and a gate that only guards the
 # route nobody takes has never run, while its silence reads as safety.
 on:
+  # No `branches:` filter on pull_request. That filter matches the BASE branch,
+  # so a stacked PR (a branch targeting another feature branch) would sail past
+  # ungated — the same never-fires-for-the-route-actually-taken shape this file
+  # exists to close.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
