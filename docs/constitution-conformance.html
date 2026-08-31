@@ -198,8 +198,8 @@
     <p><code>constitution/</code> is 33 files, ~430&nbsp;KB, under a naming scheme (<code>G_II_ClearName.md</code>) where the group letter carries the document's authority: <b>p</b> principles, <b>s</b> specifications, <b>e</b> plans, <b>g</b> guides, <b>a</b> analyses, <b>t</b> templates. Status is a closed vocabulary &mdash; <code>normative</code> binds, <code>draft-for-verification</code> does not yet, <code>execution-plan</code> is committed roadmap.</p>
     <p>Two documents are the load-bearing ones for us: <b>p_00_DesignPrinciples</b> (normative; P1&ndash;P10, P12) and <b>s_00_Specifications</b> (draft-for-verification; RFC&nbsp;2119 voice, decomposing into the AS-RFC series). When a specification is silent, decisions appeal to the principles &mdash; that is stated, not implied.</p>
     <div class="note">
-      <div class="eyebrow">Worth noting given yesterday</div>
-      <p>Enforcement is <code>.constitution-guard</code> at the repository root &mdash; a staged-path denylist read by a <b>pre-commit hook</b>. Andy's gate is local too. Amending the guard file is itself a constitutional change.</p>
+      <div class="eyebrow">Correction, 2026-09-01</div>
+      <p>An earlier version of this section said &ldquo;Andy's gate is local too&rdquo;, on the strength of <code>.constitution-guard</code> being a staged-path denylist read by a <b>pre-commit hook</b>. That was one mechanism read as a stance, and it happened to flatter a decision made here the day before. <b>Upstream also runs CI:</b> <code>.github/workflows/constitution.yml</code> fires on <code>push</code> and <code>pull_request</code> for <code>constitution/**</code>, <code>documentation/**</code>, <code>Agents.md</code> and <code>.constitution-guard</code>, running a self-containment check and an STE lint that fails any file declaring <code>ste: full</code> or <code>ste: adapted</code> without a zero reading. Enforcement is both, and the CI half is the one with authority over a contributor.</p>
     </div>
   </section>
 
