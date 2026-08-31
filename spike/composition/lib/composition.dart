@@ -124,8 +124,30 @@ mixin DependencyMixin on CallInit {
         this.serviceFilter = serviceFilter;
       });
 
-  String getType() => service == null ? 'absent' : 'present';
-  bool isType(String type) => getType() == type;
+  /// The entry KIND, mirroring `DependencyImpl.get_type()`. This answers
+  /// "what am I?", never "have I been discovered?" — the two questions were
+  /// previously conflated here, and this mixin returned 'absent'/'present'
+  /// for a method Python uses to return 'dependency'. Both sides were String,
+  /// so nothing could catch it: `entry.isType('Category')` was quietly false
+  /// on a real Category.
+  String getType() => 'dependency';
+
+  /// Mirrors `DependencyImpl.is_type()`, which lower-cases its argument.
+  bool isType(String type) => type.toLowerCase() == 'dependency';
+
+  /// The question 'absent'/'present' was actually asking. Named, and a bool,
+  /// so it cannot be confused with the kind.
+  bool get isDiscovered => service != null;
+}
+
+/// A plain Dependency entry — the other arm of "an Entry is a Category or a
+/// Dependency". The spike previously had no way to construct one, which is
+/// part of why the getType() defect stayed invisible: every Dependency in the
+/// tests was really a Category.
+class Dependency with CallInit, DependencyMixin {
+  Dependency(Context ctx, {Object? service, Object? serviceFilter}) {
+    initDependency(ctx, service: service, serviceFilter: serviceFilter);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -138,7 +160,21 @@ mixin DependencyMixin on CallInit {
 /// exactly as `class HyperSpace(Category, Actor)` does in Python.
 mixin CategoryMixin
     on CallInit, HooksMixin, ServiceMixin, ActorMixin, DependencyMixin {
-  final Map<String, Object?> entries = {};
+  /// Typed store. Previously `Map<String, Object?>`, which accepted anything —
+  /// `HyperSpace.create()` put a bare `{}` in here and a test called it a
+  /// Category. The type is where the guarantee comes from, not the comment.
+  final Map<String, DependencyMixin> entries = {};
+
+  /// `Category` refines `Dependency` (Python: `class Category(Actor,
+  /// Dependency)`, and `issubclass(Category, Dependency)` is True), so a
+  /// Category answers to BOTH kinds — exactly as `CategoryImpl.is_type()`
+  /// does by falling through to the Dependency slice.
+  @override
+  String getType() => 'category';
+
+  @override
+  bool isType(String type) =>
+      type.toLowerCase() == 'category' || super.isType(type);
 
   void initCategory(Context ctx, {Object? serviceFilter}) =>
       callInit(ctx, 'Category', () {
@@ -147,7 +183,7 @@ mixin CategoryMixin
         share['source'] = 'category'; // Category adds to Actor's share
       });
 
-  void add(String name, Object? entry) => entries[name] = entry;
+  void add(String name, DependencyMixin entry) => entries[name] = entry;
   void remove(String name) => entries.remove(name);
 }
 
@@ -192,7 +228,9 @@ class HyperSpace
         share = {'lifecycle': 'ready', 'running': false};
       });
 
-  void create(String path) => add(path, {});
+  /// Creates a child Category. It used to store a bare `{}`, which the store's
+  /// `Object?` value type happily accepted.
+  void create(String path) => add(path, Category(Context(path)));
 }
 
 /// Diamond acid test: two branches (Actor + Registrar) both cascade to Service.
