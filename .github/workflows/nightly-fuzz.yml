@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The oracle tracks the reference's moving HEAD ON PURPOSE, which is the
       # opposite of what verify.sh does internally (it `git archive`s a SHA so
@@ -37,7 +37,7 @@ jobs:
       # so a result names a state, follow upstream BETWEEN runs so the rig can
       # tell you the day parser.py changes under us. That day is the whole
       # reason this is scheduled rather than gated.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: ${{ github.event.inputs.reference || 'geekscape/aiko_services' }}
           path: .oracle
