@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Constitution, read against the Dart port</title>
+<style>
+  :root{
+    --paper:#eceef2; --card:#ffffff; --ink:#161a23; --muted:#586072;
+    --hair:#d5dae2; --hair-2:#e6e9ef;
+    --bus:#33408f; --bus-soft:#e7e9f5;
+    --local:#0e7c70; --local-soft:#e0f1ee;
+    --remote:#b06a1c; --remote-soft:#f6ebdb;
+    --code-bg:#12151d; --code-ink:#e6e9f0; --code-dim:#8b93a7;
+    --good:#0e7c70; --warn:#b06a1c;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --col: 44rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:17px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--col); margin:0 auto; padding:0 1.4rem 6rem}
+
+  section{margin-top:3.4rem}
+  p{margin:0 0 1rem}
+  a{color:var(--bus); text-decoration:none; border-bottom:1px solid var(--bus-soft)}
+  a:hover{border-bottom-color:var(--bus)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--bus); outline-offset:3px; border-radius:2px}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:.72rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--bus); font-weight:600;
+    display:flex; align-items:center; gap:.6rem;
+  }
+  .eyebrow::before{content:""; width:1.6rem; height:2px; background:var(--bus); display:inline-block}
+  h1{
+    font-size:clamp(2rem,6vw,2.7rem); line-height:1.08; letter-spacing:-.02em;
+    margin:.8rem 0 .5rem; text-wrap:balance; font-weight:760;
+  }
+  .sub{font-size:1.16rem; color:var(--muted); max-width:37rem; text-wrap:balance; margin:0}
+  h2{font-size:1.42rem; letter-spacing:-.01em; margin:0 0 .3rem; text-wrap:balance; font-weight:720}
+  h2 .num{font-family:var(--mono); font-size:.9rem; color:var(--bus); font-weight:600; margin-right:.55rem; vertical-align:.12em}
+  h3{font-size:1.02rem; margin:1.8rem 0 .4rem; font-weight:680}
+  .lede{font-size:1.06rem; color:var(--muted); margin-top:.2rem}
+  strong{font-weight:660}
+  code{
+    font-family:var(--mono); font-size:.86em;
+    background:var(--hair-2); padding:.08em .38em; border-radius:4px;
+    color:#2a3350; white-space:nowrap;
+  }
+
+  header.mast{padding:4.2rem 0 0}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; margin-top:1.7rem;
+    font-family:var(--mono); font-size:.76rem; color:var(--muted);
+    padding-top:1.1rem; border-top:1px solid var(--hair);
+  }
+  .meta b{color:var(--ink); font-weight:600}
+
+  .tldr{
+    background:var(--card); border:1px solid var(--hair); border-radius:14px;
+    padding:1.5rem 1.6rem; margin-top:2.4rem;
+    box-shadow:0 1px 0 rgba(20,26,40,.03), 0 12px 30px -22px rgba(51,64,143,.4);
+  }
+  .tldr .eyebrow{margin-bottom:1rem}
+  .tldr ol{margin:0; padding-left:0; list-style:none; counter-reset:t; display:grid; gap:.9rem}
+  .tldr li{counter-increment:t; padding-left:2.6rem; position:relative}
+  .tldr li::before{
+    content:counter(t); position:absolute; left:0; top:-.05rem;
+    font-family:var(--mono); font-size:.82rem; font-weight:600;
+    width:1.7rem; height:1.7rem; display:grid; place-items:center;
+    background:var(--bus-soft); color:var(--bus); border-radius:7px;
+  }
+
+  .scroll{overflow-x:auto; margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card)}
+  table{border-collapse:collapse; width:100%; min-width:34rem; font-size:.94rem}
+  th,td{text-align:left; padding:.72rem .95rem; border-bottom:1px solid var(--hair-2); vertical-align:top}
+  thead th{
+    font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; background:#f7f8fa;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.k{font-family:var(--mono); font-size:.83rem; color:#2a3350; white-space:nowrap}
+  .tag{font-family:var(--mono); font-size:.72rem; padding:.12em .5em; border-radius:5px; font-weight:600; white-space:nowrap}
+  .tag.local{background:var(--local-soft); color:var(--local)}
+  .tag.remote{background:var(--remote-soft); color:var(--remote)}
+  .tag.bus{background:var(--bus-soft); color:var(--bus)}
+  .tag.good{background:var(--local-soft); color:var(--good)}
+
+  .note{
+    background:var(--card); border:1px solid var(--hair); border-left:3px solid var(--bus);
+    border-radius:0 12px 12px 0; padding:1.1rem 1.3rem; margin:1.4rem 0;
+  }
+  .note .eyebrow{color:var(--bus); margin-bottom:.5rem}
+  .note.ask{border-left-color:var(--remote)}
+  .note.ask .eyebrow{color:var(--remote)}
+  .note.ask .eyebrow::before{background:var(--remote)}
+  .note.good{border-left-color:var(--good)}
+  .note.good .eyebrow{color:var(--good)}
+  .note.good .eyebrow::before{background:var(--good)}
+  .note p:last-child{margin-bottom:0}
+
+  pre{
+    background:var(--code-bg); color:var(--code-ink); border-radius:12px;
+    padding:1.15rem 1.25rem; overflow-x:auto; margin:1.1rem 0;
+    font-family:var(--mono); font-size:.82rem; line-height:1.6; tab-size:2;
+  }
+  pre .c{color:var(--code-dim)}
+  pre .s{color:#8fd6c8}
+  pre .b{color:#c9b6f2}
+  details{margin:1.2rem 0; border:1px solid var(--hair); border-radius:12px; background:var(--card); overflow:hidden}
+  details[open]{box-shadow:0 12px 30px -24px rgba(51,64,143,.5)}
+  summary{
+    cursor:pointer; padding:.9rem 1.2rem; font-family:var(--mono); font-size:.8rem;
+    letter-spacing:.04em; color:var(--ink); font-weight:600; list-style:none;
+    display:flex; align-items:center; gap:.7rem;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"\25B6"; color:var(--bus); font-size:.7rem; transition:transform .18s ease}
+  details[open] summary::before{transform:rotate(90deg)}
+  details .body{padding:0 1.2rem 1rem}
+  details pre{margin:.4rem 0 0}
+
+  /* ---- flow schematic ---- */
+  .flow{
+    background:linear-gradient(180deg,#fbfbfd,#f4f5f8); border:1px solid var(--hair);
+    border-radius:16px; padding:1.6rem 1.4rem; margin:1.4rem 0; overflow-x:auto;
+  }
+  .flow-inner{min-width:31rem; display:grid; gap:.55rem}
+  .lane{
+    display:grid; grid-template-columns:8.5rem 1fr; gap:1rem; align-items:center;
+  }
+  .lane .who{font-family:var(--mono); font-size:.72rem; font-weight:600; text-align:right}
+  .lane .who.a{color:var(--local)} .lane .who.b{color:var(--remote)}
+  .lane .box{
+    background:var(--card); border:1px solid var(--hair); border-radius:9px;
+    padding:.55rem .8rem; font-family:var(--mono); font-size:.76rem; color:#2a3350;
+  }
+  .lane .box.wire{border-style:dashed; border-color:var(--bus); color:var(--bus); text-align:center}
+  .arrow{text-align:center; font-family:var(--mono); font-size:.66rem; color:var(--muted); letter-spacing:.04em}
+
+  footer{margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--hair); font-size:.86rem; color:var(--muted)}
+  footer a{border-bottom-color:var(--hair)}
+  footer ul{padding-left:1.1rem; margin:.5rem 0 0}
+  footer li{margin:.25rem 0}
+
+  .next{display:grid; gap:.7rem; margin-top:1.4rem}
+  .next a{
+    display:block; background:var(--card); border:1px solid var(--hair); border-radius:11px;
+    padding:.85rem 1.05rem; border-bottom:1px solid var(--hair);
+  }
+  .next a:hover{border-color:var(--bus)}
+  .next .t{font-weight:660; color:var(--ink)}
+  .next .d{font-size:.86rem; color:var(--muted)}
+
+  .hr{height:1px; background:var(--hair); border:0; margin:3.4rem 0 0}
+  @media (prefers-reduced-motion:no-preference){
+    header.mast,section{animation:rise .5s ease both}
+    @keyframes rise{from{opacity:0; transform:translateY(8px)}to{opacity:1; transform:none}}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Aiko Services &middot; Dart port &middot; conformance audit</div>
+    <h1>The Constitution, read against the Dart&nbsp;port</h1>
+    <p class="sub">Andy published the constitution on 2026-08-30. It is normative, it is 33 documents, and a good part of it turns out to be about code we have already written. This is the reading, with the evidence attached.</p>
+    <div class="meta">
+      <span><b>Upstream</b> geekscape/aiko_services @ 702b896</span>
+      <span><b>Constitution landed</b> c04baf8 &mdash; &ldquo;E1: the constitution goes public&rdquo;</span>
+      <span><b>Read</b> 2026-09-01</span>
+    </div>
+  </header>
+
+  <div class="tldr">
+    <div class="eyebrow">What changed for us</div>
+    <ol>
+      <li><b>A spec bug that would silently break any second implementation.</b> The concept document says the length prefix is a <i>byte</i> count. <code>parser.py</code> counts <i>code points</i>. Measured both.</li>
+      <li><b>The port holds evidence for open <code>[VERIFY]</code> items in Andy's own specification</b> &mdash; §1.1's grammar extraction is an unfilled MUST, and RFC-0001 is that document.</li>
+      <li><b>One design tension in the port is now settled by someone else.</b> P1 is a Tier-1 identity principle and it forbids exactly the Dart idiom we kept reaching for.</li>
+      <li><b>Our dispatcher is already compliant with a principle adopted after we wrote it</b> &mdash; for a reason the code comment currently apologises for.</li>
+      <li><b>One thing we recorded as a constraint to port is a violation Andy is scheduled to remove.</b></li>
+    </ol>
+  </div>
+
+  <hr class="hr">
+
+  <section>
+    <h2><span class="num">1</span>What the constitution actually is</h2>
+    <p class="lede">Not documentation. A governing tree with an enforcement mechanism.</p>
+    <p><code>constitution/</code> is 33 files, ~430&nbsp;KB, under a naming scheme (<code>G_II_ClearName.md</code>) where the group letter carries the document's authority: <b>p</b> principles, <b>s</b> specifications, <b>e</b> plans, <b>g</b> guides, <b>a</b> analyses, <b>t</b> templates. Status is a closed vocabulary &mdash; <code>normative</code> binds, <code>draft-for-verification</code> does not yet, <code>execution-plan</code> is committed roadmap.</p>
+    <p>Two documents are the load-bearing ones for us: <b>p_00_DesignPrinciples</b> (normative; P1&ndash;P10, P12) and <b>s_00_Specifications</b> (draft-for-verification; RFC&nbsp;2119 voice, decomposing into the AS-RFC series). When a specification is silent, decisions appeal to the principles &mdash; that is stated, not implied.</p>
+    <div class="note">
+      <div class="eyebrow">Correction, 2026-09-01</div>
+      <p>An earlier version of this section said &ldquo;Andy's gate is local too&rdquo;, on the strength of <code>.constitution-guard</code> being a staged-path denylist read by a <b>pre-commit hook</b>. That was one mechanism read as a stance, and it happened to flatter a decision made here the day before. <b>Upstream also runs CI:</b> <code>.github/workflows/constitution.yml</code> fires on <code>push</code> and <code>pull_request</code> for <code>constitution/**</code>, <code>documentation/**</code>, <code>Agents.md</code> and <code>.constitution-guard</code>, running a self-containment check and an STE lint that fails any file declaring <code>ste: full</code> or <code>ste: adapted</code> without a zero reading. Enforcement is both, and the CI half is the one with authority over a contributor.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span>The finding: the length prefix is documented wrong</h2>
+    <p class="lede">One word, in the one document a second implementer would build from.</p>
+    <p><code>documentation/concepts/utilities/parser.md</code> &mdash; the file <code>s_00</code> §1.1 names as the verification aid for the wire grammar &mdash; describes canonical symbols like this:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;The <b>byte length</b> prefixes the symbol, so <code>has space</code> becomes <code>9:has space</code> (see <a href="https://en.wikipedia.org/wiki/Canonical_S-expressions">Canonical S-expressions</a>).&rdquo;
+    </blockquote>
+    <p>The implementation counts something else. <code>parser.py:109</code> is <code>element = f"{len(element)}:{element}"</code>, and <code>len()</code> on a Python <code>str</code> is <b>Unicode code points</b>. For ASCII the two agree, which is why this has never bitten. For anything else they do not:</p>
+    <pre><span class="c"># CPython reference, geekscape/aiko_services @ 702b896</span>
+generate('cmd', ['héllo wörld'])  <span class="c">→</span> <span class="s">(cmd 11:héllo wörld)</span>
+   code points <span class="b">11</span>   ·   UTF-8 bytes <span class="b">13</span>
+
+generate('cmd', ['a 😀 b'])       <span class="c">→</span> <span class="s">(cmd 5:a 😀 b)</span>
+   code points <span class="b">5</span>    ·   UTF-8 bytes <span class="b">8</span>   ·   UTF-16 units <span class="b">6</span></pre>
+    <p>So there are three defensible answers and the ecosystem currently contains all three: the <b>doc</b> says bytes, the <b>reference implementation</b> does code points, and the <b>standard the doc cites</b> defines canonical S-expressions in bytes. A Rust, C or TypeScript implementer reading <code>parser.md</code> and following its link would emit <code>13:héllo wörld</code>. Python's parser would then consume 13 <i>characters</i>, run off the end of the symbol, and mis-frame the rest of the message &mdash; silently, and only for non-ASCII payloads.</p>
+    <div class="note good">
+      <div class="eyebrow">The Dart port gets this right, deliberately</div>
+      <p>Our codec emits <code>5:a 😀 b</code>, matching Python. That is not luck: Dart's <code>String.length</code> is UTF-16 code units and would have said <b>6</b>. The codec counts runes. RFC-0001 §3 already pins it in normative voice &mdash; &ldquo;<code>&lt;length&gt;</code> MUST equal the number of Unicode <b>code points</b>&hellip; not UTF-16 code units, not UTF-8 bytes, and not grapheme clusters&rdquo; &mdash; and even rules on lone surrogates.</p>
+    </div>
+    <p>Our conformance fixture already pins this, which is why no new test accompanies this finding &mdash; <code>(emoji 3:a 😀)</code>, <code>(emoji 4:😀🎉 x)</code> and a ZWJ family at <code>(family 9:👨‍👩‍👧‍👦 x)</code> are all present in both directions. Nine code points, one grapheme, seven glyph-forming characters: exactly the case where &ldquo;byte&rdquo;, &ldquo;code point&rdquo; and &ldquo;character&rdquo; give three different answers.</p>
+    <p>This is the highest-value thing in this document and the cheapest to act on: it is a one-word correction to <code>parser.md</code>, plus a sentence naming the divergence from the cited standard so the next reader does not re-derive it.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span>§1.1 is an unfilled MUST, and we wrote the document that fills it</h2>
+    <p><code>s_00_Specifications</code> §1.1, verbatim:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;The canonical parser/generator in the reference implementation defines the tokenization, quoting and escaping rules. You <b>MUST extract those rules here as a grammar (EBNF)</b> rather than left implicit in <code>utilities/parser.py</code>. <b>[VERIFY: exact quoting/escape rules, treatment of binary payloads, maximum practical message size over MQTT.]</b>&rdquo;
+    </blockquote>
+    <p><code>docs/rfc/0001-s-expression-wire-format.md</code> in this repository is 373 lines of exactly that, pinned by 71 conformance vectors generated from the reference and cross-checked by two differential fuzz rigs. ADR-002 makes the same request from the other side: &ldquo;the exact quoting and escape rules must still be extracted as normative grammar (s_00 §1.1 [VERIFY])&rdquo;.</p>
+    <p>The template document <code>t_01_OkfRfcTemplate</code> defines the form such a document takes &mdash; the <b>AS-RFC series</b>, OKF front-matter plus an <code>rfc:</code> block, numbered requirements that conformance traces bind to, a mandatory Security Considerations section. Its worked example is numbered AS-RFC-2 for the Registrar protocol, which implies AS-RFC-1 is the wire grammar. Our file is already <code>rfc/0001</code>.</p>
+    <div class="note ask">
+      <div class="eyebrow">Deliberately not done</div>
+      <p>RFC-0001 has <b>not</b> been renamed or renumbered to AS-RFC-1. The template says RFC numbers are &ldquo;immutable once assigned&rdquo;, and the registry owns the numbers &mdash; which means Andy assigns them, not us. Claiming the number would be the kind of thing that is hard to walk back politely.</p>
+    </div>
+    <p>What the gap costs, concretely: our fuzz rigs found a <code>\s</code> divergence between Dart and Python worth <b>3604 mismatches in 40k atoms</b> (recorded at <code>tool/generate_codec_fixtures.py:77</code>) that the entire golden-vector fixture ran straight past. The root cause was RFC-0001's own first draft deferring a normative character class to whatever the host language calls whitespace. An EBNF that does the same thing has the same hole, so §1.1's <code>[VERIFY]</code> is not clerical &mdash; it is the item most likely to break a second implementation, and it already broke ours once.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span>P1 settles a design tension the port kept re-opening</h2>
+    <p class="lede">Asynchrony is a property of the wire. It is not allowed to be a property of the language.</p>
+    <p>P1 is Tier&nbsp;1 &mdash; identity, &ldquo;trading any of these away produces a different framework&rdquo;, and &ldquo;the most expensive to reverse&rdquo;. It reads:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;The framework therefore does not need, and deliberately does not use, Python <code>async</code>/<code>await</code>. Concurrency lives in the architecture rather than in the language.&rdquo; <br><i>Forbidden:</i> &ldquo;introducing <code>async def</code> into framework interfaces&hellip; wrapping message sends in futures/promises as a core API.&rdquo;
+    </blockquote>
+    <p>And <code>s_02_InterfaceComposition</code> states the rule that governs the whole composition design: <b>&ldquo;every interface method is asynchronous and returns nothing. A method is a message, and a message is fire-and-forget.&rdquo;</b></p>
+    <p>Read carefully, the constraint is not &ldquo;no concurrency&rdquo; &mdash; it is that the <i>asynchrony must live where a second implementation can see it</i>, which is the wire. A Dart <code>Future</code> is invisible to a C firmware peer. This is the authoritative answer to something the port has circled repeatedly: three separate Dart mechanisms were tried to keep <code>await</code> ergonomics across the actor boundary, and each one moved the unsoundness somewhere less visible.</p>
+    <h3>Where the port stands against it today</h3>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Surface</th><th>Shape</th><th>Reading</th></tr></thead>
+      <tbody>
+        <tr><td class="k">AikoClient.connect()</td><td class="k">Future&lt;void&gt;</td><td><span class="tag good">ok</span> Local I/O, not a wire method and not an Interface. <code>s_00</code> §2.2 lists connect/disconnect as transport-interface surface, so this becomes a question the day it is promoted to a <code>Transport</code> Interface &mdash; not today.</td></tr>
+        <tr><td class="k">CommandHandler</td><td class="k">String? Function(&hellip;)</td><td><span class="tag remote">tension</span> Returns the reply payload. See §5.</td></tr>
+        <tr><td class="k">MessageDispatcher</td><td class="k">sync dispatch</td><td><span class="tag good">ok</span> No futures anywhere on the receive path.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>The honest summary is that the port has <b>not</b> violated P1, and that the pressure to do so is structural rather than accidental &mdash; Dart's ambient idiom is precisely the forbidden one, so this needs a written rule in our own ADRs rather than vigilance.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span>Our reply type cannot express the sanctioned reply pattern</h2>
+    <p>The dispatcher's contract is:</p>
+    <pre>typedef CommandHandler = String? Function(List&lt;Object?&gt; arguments);</pre>
+    <p>A handler computes a reply payload and <i>returns</i> it. <code>s_02</code> §2 specifies replies differently:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;The response is itself a one-way message to an interface method the <i>caller</i> implements. Both halves are declared: a request/response pair is two Interfaces&hellip; making the protocol symmetric and traceable.&rdquo; The request carries &ldquo;the caller's reply topic (and a correlation token when the caller multiplexes)&rdquo;.
+    </blockquote>
+    <p>This is a representation problem before it is a correctness problem. Our signature can express exactly one reply, computed immediately, sent to whatever topic the caller of <code>dispatch()</code> chooses. It cannot express: replying later, replying more than once, replying to a topic named <i>in the request</i>, or carrying a correlation token. Those are not exotic &mdash; they are the specified pattern.</p>
+    <div class="note">
+      <div class="eyebrow">It also connects to a defect we already recorded</div>
+      <p>A prior session recorded that <code>do_request()</code> in the Python reference has no correlation identity &mdash; two requests producing four handler firings, safe only because all four call sites pass <code>terminate=True</code>. <b>That conclusion outlived its evidence:</b> the measurement is not in this repository, so it is marked unbacked in §9 and needs re-running before anyone acts on it. <code>s_02</code> names the correlation token that would fix it, and the 2026-07-06 update to <code>s_00</code> §5 says the <code>do_request</code> reply surface &ldquo;is the reply-interface surface that this specification must define normatively&rdquo;. Our measurement is evidence for an item Andy has already opened.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span>The dispatcher is compliant with P12, by accident of Dart</h2>
+    <p>P12 was adopted 2026-07-13, after our dispatcher was written. Its exposure rule:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;Every public API is <b>deny-all by default, per method</b>&hellip; Message dispatch never reaches a method that is not declared on a composed Interface.&rdquo;
+    </blockquote>
+    <p>Python's dispatch is <code>target.__getattribute__(command)(*parameters)</code> &mdash; reflective lookup over the whole object, which is the shape P12 has to retrofit a guard onto. Dart has no runtime <code>getattr</code> without <code>dart:mirrors</code>, which is unavailable under AOT, so the port uses an explicit <code>Map&lt;String, CommandHandler&gt;</code>. That map <b>is</b> an allowlist, and there is no reachable path around it.</p>
+    <p>The code comment currently frames this as a workaround &mdash; &ldquo;Dart's mirrors-free <i>stand-in</i>&rdquo;. It is not a stand-in. It is the compliant shape, and Python is the one with the retrofit ahead of it.</p>
+    <div class="note ask">
+      <div class="eyebrow">The caveat, stated precisely</div>
+      <p>We are allowlist-<i>shaped</i> but the allowlist is not <i>bound</i> to an Interface declaration &mdash; handlers are registered by hand, so nothing stops registering a command that appears on no interface. P12's wording is &ldquo;declared on a composed Interface&rdquo;. Compliant in mechanism, unbound in provenance.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">7</span>Two things we recorded as constraints are actually defects being removed</h2>
+    <h3>ECProducer / ECConsumer as plain classes</h3>
+    <p>Our notes record the boundary as &ldquo;IS-A interface slices become Dart mixins; HAS-A plain classes (ECProducer/ECConsumer) become fields&rdquo;. That reads the Python shape as a design to mirror. The constitution reads it as a violation:</p>
+    <blockquote style="margin:1.1rem 0;padding-left:1.1rem;border-left:3px solid var(--hair);color:var(--muted)">
+      &ldquo;The June review verified two standing violations: <code>ECProducer</code>/<code>ECConsumer</code> are plain classes (making the framework's defining state primitive the only non-substitutable capability)&hellip; Both are to be normalized.&rdquo; &mdash; P7 amendment, 2026-07-07
+    </blockquote>
+    <p>ADR-022 then rules that legacy non-compliance is &ldquo;fixed retrospectively, not grandfathered&rdquo;, with the remediation scheduled. So the Dart port should model these as Interface + Implementation and would be <i>ahead</i> of the reference rather than divergent from it. ADR-022 also hands us a decidable exemption taxonomy we can adopt directly &mdash; value/data types, presentation and CLI shells, pre-composition bootstrap &mdash; each exempt file carrying a header note naming its category.</p>
+    <h3>The ECProducer incremental encoding</h3>
+    <p>ADR-002 is blunt: values &ldquo;must always round-trip through <code>generate()</code>, and never through f-string assembly. The known ECProducer incremental-update deviation is <b>a bug against this decision, and not a competing convention</b>.&rdquo; The concrete symptom, from <code>g_03</code>: &ldquo;values that contain spaces or nesting do not round-trip. Snapshot and incremental encodings can disagree for the same value.&rdquo;</p>
+    <p>Our <code>lib/src/service/share.dart</code> imports <code>dart:async</code> and nothing else &mdash; it is the in-memory tree, with no wire encoding written yet. So we have not ported the bug, and we now have a ruling in hand before we build the publication path.</p>
+    <div class="note">
+      <div class="eyebrow">This inverts our standing verification stance, on exactly one surface</div>
+      <p>Every confidence claim in this repository is scoped as &ldquo;parity with this reference, not correctness&rdquo;. Here the constitution says parity <i>is</i> the bug. The rule is not &ldquo;match Python&rdquo;; it is &ldquo;match Python except where a normative document says Python is wrong&rdquo; &mdash; and until yesterday there was no document that could say so.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">8</span>Where the port has evidence Andy's testing strategy asks for</h2>
+    <p><code>e_06_TestingStrategy</code> is an execution plan establishing ADR-012 through ADR-016. Two of them point straight at us.</p>
+    <p><b>ADR-015</b> &mdash; &ldquo;foundational primitives are tested directly and adversarially&hellip; <i>because the trustworthiness of every golden trace depends on their correctness</i>&rdquo;. The named primitive is the S-expression parser/generator. Verified against current <code>origin/master</code>, not the July audit it is based on: <code>src/aiko_services/tests/unit/</code> contains <code>test_component</code>, <code>test_context</code>, <code>test_hook</code>, <code>test_pipeline_graph</code>, <code>test_registrar</code>, <code>test_share</code>, <code>test_stream_event</code>, <code>test_stream_lock</code> &mdash; and <b>no parser test</b>. The module's only in-repo exercise is its own <code>main()</code> round-trip self-test.</p>
+    <p><b>ADR-016</b> &mdash; &ldquo;the wire protocol is a cross-language contract. Conformance is mandatory&hellip; <i>&lsquo;The Python framework runs&rsquo; is never accepted as evidence that another implementation conforms.</i>&rdquo; M4 is defined as the golden traces pointed at a foreign binary over a real broker, with <code>aiko_engine_mp</code> first and &ldquo;a future Rust/TS client next&rdquo;. Dart is not on that list. <code>aiko_engine_mp</code> is, and it exists &mdash; <code>g_02</code> calls it &ldquo;your <i>existing</i> second protocol implementation&rdquo;. The narrower true claim is that Dart is the implementation that currently holds differential evidence against the reference, which is the material M4 needs and does not yet have.</p>
+    <div class="note good">
+      <div class="eyebrow">One place where our evidence is stronger than the strategy that asks for it</div>
+      <p>M3 specifies the parser test as <b>round-trip</b>: <code>parse(generate(x)) == x</code> over a generated corpus. We learned the hard way that a self-round-trip proves self-<i>consistency</i>, not correctness &mdash; a codec can be self-consistently wrong, and ours was &mdash; the oracle-pinned vectors were green while a differential run against CPython produced 3604 mismatches in 40k atoms. Differential-against-a-second-implementation strictly dominates round-trip, and the Dart port is what makes it available. This is worth offering as an amendment to M3, not as a criticism &mdash; e_06 was written when only one implementation existed.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">9</span>The <code>[VERIFY]</code> ledger</h2>
+    <p class="lede">Open questions in <code>s_00</code> §1, against what this port has already measured. Empty rows are honest, and one row is marked <span class="tag bus">unbacked</span> because the claim outlived its evidence.</p>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>s_00 item</th><th>What we hold</th><th>Strength</th></tr></thead>
+      <tbody>
+        <tr><td class="k">§1.1 quoting / escape rules</td><td>RFC-0001, 373 lines, 71 vectors, 2 differential fuzz rigs. Code-point length prefix pinned; <code>\s</code> class enumerated explicitly after it burned us.</td><td><span class="tag good">strong</span></td></tr>
+        <tr><td class="k">§1.1 binary payloads</td><td>Nothing. RFC-0001 treats payloads as UTF-8 text and does not specify a binary side-channel.</td><td><span class="tag remote">gap</span></td></tr>
+        <tr><td class="k">§1.1 max message size</td><td>Nothing measured.</td><td><span class="tag remote">gap</span></td></tr>
+        <tr><td class="k">§1.6 nested-key encoding</td><td>Measured: <code>share.py::_ec_parse_item_path()</code> splits on <code>.</code> and raises at depth&nbsp;&gt;&nbsp;2. It is a depth-2 tree, not a flat map &mdash; four design reviewers had assumed flat.</td><td><span class="tag good">strong</span></td></tr>
+        <tr><td class="k">§3.2 unknown-method behaviour</td><td><b>Wire-observable divergence, verified in source.</b> <code>actor.py:177-182</code> builds the diagnostic and calls <code>_LOGGER.error(diagnostic)</code> &mdash; it publishes nothing. Our dispatcher returns <code>generate('error', &hellip;)</code>, which puts a message on the wire that the reference never emits. Under ADR-016 a golden trace would catch this as non-conformance.</td><td><span class="tag remote">divergence</span></td></tr>
+        <tr><td class="k">§2.6 do_request reply surface</td><td>Recorded in a prior session: no correlation identity (2 requests &rarr; 4 firings), and an LWT that is per-process rather than per-Actor. <b>The measurement artifact is not in this repository</b> &mdash; only the conclusion, in session notes. Re-measure before this is cited to anyone.</td><td><span class="tag bus">unbacked</span></td></tr>
+        <tr><td class="k">§1.2 topic components, LWT</td><td>Partial &mdash; the LWT measurement above. Topic path order unverified against master.</td><td><span class="tag bus">partial</span></td></tr>
+        <tr><td class="k">§1.4 / §1.7 / §1.8 registrar, lease, lifecycle</td><td>Nothing. No Actor, no Registrar client, no lease implementation in the port yet.</td><td><span class="tag remote">gap</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">10</span>Bookkeeping the reading turned up</h2>
+    <ul>
+      <li><b>Task #2269 is answered.</b> Not OpenSpec &mdash; the convention is the AS-RFC series with OKF front-matter, numbered requirements bound to conformance traces, and updates/obsoletes discipline. <code>t_02_OkfTaxonomy</code> holds the closed vocabularies our documents should adopt.</li>
+      <li><b>RFC-0001's own header is stale.</b> It claims &ldquo;15 encode + 15 decode vectors&rdquo;. The fixture actually holds 35 generate, 30 parse, 6 parse-error and 5 divergence entries. Counted, not remembered.</li>
+      <li><b>P9 has a rule our mailbox design must meet.</b> &ldquo;No new queue, cache or buffer enters the runtime without a bound and a stated overflow policy.&rdquo; We measured that a Dart <code>SendPort</code> applies no backpressure whatsoever &mdash; 400k messages accepted in 478&nbsp;ms for +345&nbsp;MB RSS &mdash; so the bound has to be built above it, and named.</li>
+      <li><b>We can run Andy's own documentation gate.</b> <code>documentation/tools/asd_ste100_lint.py</code> is public and works on our files. Against RFC-0001 it reads <code>L=24 S=22 B=8 W=7 X=0 C=0 F=0</code> &mdash; 24 over-long sentences, 22 semicolons, 8 British spellings, 7 swap-list words. <code>t_02</code> requires the <code>ste:</code> declaration be <i>earned</i> by a zero reading rather than asserted, so RFC-0001 is correctly declared <code>ste: false</code>. Clearing <code>B</code> and <code>W</code> is mechanical; clearing <code>L</code> and <code>S</code> means rewriting normative sentences, which is not a 3&nbsp;a.m. activity and is a house-style decision for Nick, not a defect.</li>
+      <li><b>P2's amendment is generous to Dart.</b> It concedes that Python mailboxes give messaging isolation but not scheduling isolation, so &ldquo;the unit of scheduling isolation is the OS process&rdquo;. Dart isolates give real scheduling isolation in-process, which is a capability the reference cannot offer. Worth raising as a genuine question rather than assuming it is welcome.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">11</span>What this reading did not check</h2>
+    <p class="lede">Stated so the green above is readable.</p>
+    <ul>
+      <li><b>Read end to end:</b> ADR-002, s_00, s_02, ADR-021, ADR-022, constitution/ReadMe, t_01 (partial), parser.md, p_00 (P1&ndash;P12 and precedence), e_06 (§1&ndash;§3, §8&ndash;§9).</li>
+      <li><b>Not read:</b> e_00_TransitionPlan, e_03_FirstClassAgents, s_01_RepositoryLayout, s_03_SelfAwarenessTelemetry, s_04_GoalAcceptanceImprovementLoop, s_05_GatekeeperProtocol, g_01/g_02/g_04, a_00_ArchitectureReview, p_01, p_02, t_00, t_02, t_03, ADR-023, the three diagram files. Any of them could contain something that changes a claim here.</li>
+      <li><b>Not verified:</b> that RFC-0001's grammar is complete or correct against <code>parser.py</code> as a whole &mdash; only the length-prefix clause was checked this session, and it was checked by running both implementations.</li>
+      <li><b>Measured, not reasoned:</b> the length-prefix divergence (§2), the absence of a parser test upstream (§8), and the fixture counts (§10). Everything else in this document is a reading of text.</li>
+      <li><b>Nothing was sent to Andy.</b> No issue, no PR, no message. Every proposal here is a draft for Nick to decide on.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p><b>Sources.</b> All quotations are from <code>geekscape/aiko_services</code> at <code>702b896</code>, tree <code>constitution/</code>, plus <code>documentation/concepts/utilities/parser.md</code> and <code>src/aiko_services/main/utilities/parser.py</code>.</p>
+    <div class="next">
+      <a href="./rfc/0001-s-expression-wire-format.md"><div class="t">RFC-0001 — the S-expression wire format</div><div class="d">The document that fills s_00 §1.1. Not yet in AS-RFC form.</div></a>
+      <a href="./distributed-seam.html"><div class="t">Crossing the distributed seam</div><div class="d">Why nothing but an S-expression string crosses an actor boundary.</div></a>
+      <a href="./index.html"><div class="t">← All docs</div><div class="d">Back to the index.</div></a>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

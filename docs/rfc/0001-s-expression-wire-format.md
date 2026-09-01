@@ -1,13 +1,89 @@
-# RFC-0001: The Aiko S-expression Wire Format
+---
+title: "Aiko Services S-expression wire format"
+description: The tokenization, quoting, escaping and dictionary rules of the
+  S-expression control-message encoding, extracted as normative grammar from
+  the reference parser/generator
+type: rfc
+audience: [implementers, architects, ai-coding-agents]
+status: draft-for-verification
+ste: false
+related: [../constitution/s_00_Specifications,
+  ../constitution/adr/ADR-002_SExpressionWireEncoding,
+  ../concepts/utilities/parser]
+last_updated: 2026-09-01
+rfc:
+  number: TBD                    # NOT self-assigned — the registry owns the numbers
+  category: standards-track
+  updates: []
+  obsoletes: []
+---
+
+# Aiko Services S-expression wire format
+
+## Abstract
+
+Every control message in Aiko Services is a single S-expression string:
+`(command argument ...)` encoded as UTF-8 text (ADR-002). This document
+extracts the tokenization, quoting, escaping and dictionary rules of that
+format from the reference parser/generator into normative grammar, so that an
+implementation in any language can be written from this document alone and
+certified against a conformance suite. It discharges the extraction that
+`s_00_Specifications` §1.1 requires. Any implementation claiming Aiko Services
+wire compatibility MUST conform.
+
+## Status of This Memo
+
+Standards-track, maturity `draft-for-verification`. It updates nothing and
+obsoletes nothing.
+
+**This document does not carry an AS-RFC number.** `t_01_OkfRfcTemplate` states
+that AS-RFC numbers are immutable once assigned and that the registry owns
+them, so a number is the project lead's to assign, not the author's to claim.
+Until one is assigned this file keeps its local name.
+
+Three further deviations from `t_01_OkfRfcTemplate`, stated rather than
+hidden:
+
+1. **Body sections are not renumbered.** The template's structure numbers
+   Abstract, Status and Terminology as §1–§3, which would shift every body
+   section here by three. Thirty-three references cite these sections — some
+   from test code and source comments (`§7`, `§8.1`, `§8.2`, `§8.6`) — so the
+   Abstract, Status and Terminology sections above are deliberately unnumbered
+   and the body numbering is unchanged. Renumbering is a one-time deliberate
+   act for whoever moves this document into the specification tree.
+2. **The file is not yet named `AS-RFC-NNN_short_name.md`,** and does not yet
+   live in `documentation/specifications/`. Both follow the number. The
+   `related:` paths above are written for that destination tree and do not
+   resolve from this document's current location.
+3. **`ste: false`.** The template defaults AS-RFCs to `ste: adapted`, but
+   `t_02_OkfTaxonomy` requires that the declaration be earned by the lint
+   reading zero, not asserted. This document has not been through
+   `asd_ste100_lint.py`.
+
+## Terminology
+
+The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT,
+RECOMMENDED, MAY and OPTIONAL are to be interpreted as described in
+[RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and
+[RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) when, and only when, they
+appear in all capitals.
+
+Every normative statement carries a stable identifier `[REQ-n]`, unique within
+this document and never reused or renumbered. Conformance vectors and test
+names cite these identifiers.
+
+- **payload** — one complete S-expression string as published to an MQTT topic.
+- **symbol** — a Unicode string leaf of the decoded tree.
+- **element** — one member of a list: a symbol, null, nested list, or dictionary.
+- **reference implementation** — `src/aiko_services/main/utilities/parser.py`
+  in `geekscape/aiko_services`.
 
 | | |
 |---|---|
-| **RFC** | 0001 |
-| **Category** | Standards Track (protocol specification) |
-| **Status** | Draft |
-| **Reference implementation** | `aiko_services/main/utilities/parser.py` (Python; normative) |
-| **Conformance suite** | `aiko_services_dart/test/codec/fixtures/s_expression_golden.json` (generated from the reference; 15 encode + 15 decode vectors) |
+| **Reference implementation** | `utilities/parser.py` (Python) |
+| **Conformance suite** | `aiko_services_dart/test/codec/fixtures/s_expression_golden.json` (generated from the reference; 35 generate + 30 parse + 6 parse-error + 5 divergence vectors) |
 | **Created** | 2026-07-18 |
+| **Requirements** | REQ-1 … REQ-23 |
 
 ## 1. Introduction
 
@@ -21,9 +97,6 @@ The format is a restricted dialect of canonical S-expressions
 [[Rivest97]](https://datatracker.ietf.org/doc/html/draft-rivest-sexp-00): a
 parenthesized list of elements, where an element is an atom, a quoted string,
 a length-prefixed symbol, a null, a nested list, or a keyword dictionary.
-
-The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
-interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ### 1.1. Relationship to the reference implementation
 
@@ -45,9 +118,9 @@ A payload encodes a tree whose nodes are:
 | list | an ordered sequence of nodes |
 | dictionary | an ordered map from string keywords to nodes |
 
-There are no other types. Numbers, booleans, and any richer types MUST be
+There are no other types. **[REQ-1]** Numbers, booleans, and any richer types MUST be
 rendered as symbols by the sender and re-interpreted by the receiver
-(§6.3). A complete payload is always a list; a bare symbol outside
+(§6.3). **[REQ-2]** A complete payload is always a list; a bare symbol outside
 parentheses is not a valid payload.
 
 ### 2.1. Command form
@@ -55,7 +128,7 @@ parentheses is not a valid payload.
 The framework's calling convention layers one rule on the data model: a
 payload's first element is the *command* (a symbol), and the remaining
 elements are its *parameters* — either all positional (a list) or all
-keyword (a dictionary). Mixing positional and keyword parameters in one
+keyword (a dictionary). **[REQ-3]** Mixing positional and keyword parameters in one
 payload is invalid (§5.4).
 
 ```
@@ -66,7 +139,7 @@ payload is invalid (§5.4).
 
 ## 3. Lexical elements
 
-A payload is a sequence of Unicode characters. Implementations exchanging
+A payload is a sequence of Unicode characters. **[REQ-4]** Implementations exchanging
 payloads as bytes MUST encode them as UTF-8.
 
 ### 3.1. Delimiters
@@ -84,21 +157,21 @@ Atoms are the common case: `increment`, `5`, `log_level`, `😀🎉`.
 A symbol whose content could be misread as structure is written
 `<length>:<content>`, where `<length>` is a run of ASCII digits.
 
-- `<length>` MUST equal the number of Unicode **code points** in
+- **[REQ-5]** `<length>` MUST equal the number of Unicode **code points** in
   `<content>`. It is not a count of UTF-16 code units, not a count of UTF-8
   bytes, and not a count of grapheme clusters (a ZWJ emoji family is one
   glyph and seven code points). `a 😀` is three code points: `3:a 😀`.
-- In implementations whose strings can contain unpaired surrogates
+- **[REQ-6]** In implementations whose strings can contain unpaired surrogates
   (UTF-16-based languages), a lone surrogate is **one** code point. A
   decoder MUST treat two units as one code point only when a high surrogate
   (U+D800–U+DBFF) is immediately followed by a low surrogate
   (U+DC00–U+DFFF); pairing a high surrogate with an arbitrary next unit
   over-consumes and can swallow structural delimiters.
-- A decoder encountering `<digits>:` at the start of an element MUST consume
+- **[REQ-7]** A decoder encountering `<digits>:` at the start of an element MUST consume
   exactly `<length>` code points following the `:` as the symbol's content,
   including any delimiter characters within them.
-- `0:` does not introduce a symbol; it encodes null (§3.5).
-- A length prefix is recognized only when **at least one character follows
+- **[REQ-8]** `0:` does not introduce a symbol; it encodes null (§3.5).
+- **[REQ-9]** A length prefix is recognized only when **at least one character follows
   the colon**. The reference pattern is `^(\d+):(.+)`, and that `.+` is
   load-bearing: a trailing `0:` or `12:` at end of input is not a prefix at
   all, but the ordinary atom `0:` / `12:`. Inside a payload the closing `)`
@@ -113,16 +186,16 @@ atom (for example the dictionary keyword `b:`) has no length-prefix meaning.
 
 ### 3.4. Quoted strings
 
-A decoder MUST accept `"content"` and `'content'` at the start of an element
+**[REQ-10]** A decoder MUST accept `"content"` and `'content'` at the start of an element
 as a symbol whose value is `content` (without the quotes). There is no escape
 mechanism: `content` extends to the next occurrence of the opening quote
-character and therefore cannot contain it. An encoder MUST NOT emit quoted
+character and therefore cannot contain it. **[REQ-11]** An encoder MUST NOT emit quoted
 strings (§4 produces length-prefixed symbols instead); the quoted form is an
 input convenience only, and a decode→encode round trip does not preserve it.
 
 ### 3.5. Null
 
-The two-character sequence `0:` encodes null. A decoder MUST yield its
+The two-character sequence `0:` encodes null. **[REQ-12]** A decoder MUST yield its
 language's distinguished absent value (`None`, `null`, `nil`), not an empty
 string.
 
@@ -134,7 +207,7 @@ The empty symbol is encoded as `""` (two QUOTATION MARK characters). See
 ## 4. Encoding
 
 Encoding takes a command and its parameters and produces the payload string.
-An encoder MUST apply the following rules to each element, in order:
+**[REQ-13]** An encoder MUST apply the following rules to each element, in order:
 
 1. If the element is a string that begins with `<digits>:` or contains any
    character of the **prefix-trigger set** (§4.1), replace it with
@@ -151,7 +224,7 @@ An encoder MUST apply the following rules to each element, in order:
 
 Elements are joined with a single space and wrapped in `(` `)`.
 
-An encoder MUST NOT emit quoted strings, and MUST NOT length-prefix a symbol
+**[REQ-14]** An encoder MUST NOT emit quoted strings, and MUST NOT length-prefix a symbol
 that rule 1 does not require it to (the conformance suite enforces canonical
 output: `(add topic protocol owner)`, never `(add 5:topic …)`).
 
@@ -160,7 +233,7 @@ output: `(add topic protocol owner)`, never `(add 5:topic …)`).
 The reference implementation spells rule 1 as the pattern `^\d+:|[\s()]`.
 That pattern is **not portable**: `\s` denotes a different set of characters
 in different languages, so two conformant-looking encoders can emit different
-bytes for the same input. This specification therefore enumerates the set,
+bytes for the same input. **[REQ-15]** This specification therefore enumerates the set,
 and implementations MUST NOT substitute their host language's `\s`.
 
 An element is length-prefixed if it contains any of:
@@ -179,7 +252,7 @@ An element is length-prefixed if it contains any of:
 | U+202F, U+205F | narrow no-break, medium mathematical space |
 | U+3000 | ideographic space |
 
-U+FEFF (zero-width no-break space / BOM) is **NOT** in the set, though some
+**[REQ-16]** U+FEFF (zero-width no-break space / BOM) is **NOT** in the set, though some
 languages include it in `\s`. Note this set is deliberately **wider** than the
 delimiter set of §3.1: a decoder separates elements on only space, tab and
 newline, so most of these characters never actually needed prefixing. The
@@ -197,12 +270,12 @@ compares payload bytes. Conformance vectors covering both directions are in
 
 ### 5.1. Detection
 
-After structural decoding, a list whose first element is a non-empty string
+**[REQ-17]** After structural decoding, a list whose first element is a non-empty string
 ending in `:` MUST be re-interpreted as a dictionary.
 
 ### 5.2. Well-formedness
 
-Such a list MUST have even length, and every even-indexed element MUST be a
+**[REQ-18]** Such a list MUST have even length, and every even-indexed element MUST be a
 string ending in `:`. The keyword is the string with its trailing `:`
 removed. Values are recursively re-interpreted (a value list may itself be a
 dictionary). A violation MUST be rejected with an error (§7).
@@ -215,14 +288,14 @@ dictionary). A violation MUST be rejected with an error (§7).
 ### 5.4. No mixing
 
 `(a b: 1 c)` (keyword then positional) and `(a: 1 (b c) 2)` are invalid.
-Decoders MUST reject them via §5.2.
+**[REQ-19]** Decoders MUST reject them via §5.2.
 
 ### 5.5. Keyword collision
 
 The character sequence `<word>:` is structurally ambiguous: as a dictionary
 keyword it is `<word>`, as data it is a symbol ending in `:`. Encoding
 resolves the ambiguity: symbol *data* ending in `:`… is length-prefixed only
-if it matches rule §4.1, which `b:` does not. Senders MUST NOT use symbols
+if it matches rule §4.1, which `b:` does not. **[REQ-20]** Senders MUST NOT use symbols
 ending in `:` as the first positional parameter of a list; the decoded result
 will be misinterpreted as a dictionary. (Inherited from the reference
 implementation; see §8.4.)
@@ -246,12 +319,12 @@ on unterminated input.
 All leaf values decode as strings (or null). `(increment 5)` yields the
 string `"5"`; the receiver applies its own numeric conversion. Encoding does
 not round-trip host types — `5` (integer) encodes to what `"5"` (string)
-encodes to — and implementations MUST NOT rely on type information surviving
+encodes to — and **[REQ-21]** implementations MUST NOT rely on type information surviving
 the wire.
 
 ## 7. Errors
 
-A conforming decoder MUST reject, with a decode error distinguishable from
+**[REQ-22]** A conforming decoder MUST reject, with a decode error distinguishable from
 success:
 
 | Condition | Reference behaviour |
@@ -260,7 +333,7 @@ success:
 | Even-indexed dictionary element not a string ending in `:` | `ValueError` |
 | Length prefix exceeding remaining input: `(c 99:ab)` | crash (§8.2) |
 
-Encoders have one defined error: parameters that are neither a list nor a
+**[REQ-23]** Encoders have one defined error: parameters that are neither a list nor a
 dictionary MUST be rejected.
 
 ## 8. Known defects and divergences (errata)
@@ -363,11 +436,75 @@ produces the vector's `(command, cdr)` tree. The suite is regenerated from
 the reference implementation and MUST NOT be hand-edited; proposed changes
 to the format are proposed changes to `parser.py`.
 
-## 11. References
+## 11. Registry considerations
 
+This document defines a message *encoding*, not a protocol. It adds nothing to
+the protocol-identifier registry, the version registry or the command
+registry, and it reserves no names.
+
+One registry consequence is worth recording for whoever maintains the command
+registries: the encoding is **byte-reproducible for a given tree, not for a
+given value.** Dictionary keyword order is the sender's insertion order
+(§4 rule 2), which this document does not constrain, so two senders holding
+equal maps MAY emit different payload bytes. Nothing in the current framework
+depends on payload bytes, but message signing, deduplication and content
+addressing all would. A future canonical-ordering requirement belongs in a
+successor document that `updates:` this one.
+
+## 12. References
+
+### 12.1. Normative
+
+- R. Rivest, [*S-Expressions* (draft-rivest-sexp-00)](https://datatracker.ietf.org/doc/html/draft-rivest-sexp-00), 1997 — the canonical (length-prefixed) encoding this dialect restricts. **Note:** Rivest's canonical encoding counts prefix lengths in **octets**; this dialect counts **code points** (§3.3, REQ-5), because the reference implementation does. An implementation that follows Rivest here will mis-frame every non-ASCII symbol.
+- [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119), [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) — key-word interpretation
 - Reference implementation: [`aiko_services/main/utilities/parser.py`](https://github.com/geekscape/aiko_services/blob/main/src/aiko_services/main/utilities/parser.py)
+- ADR-002 — S-expressions as the wire encoding (the founding decision this document extracts)
+- `s_00_Specifications` §1.1 — the extraction requirement this document discharges
+
+### 12.2. Informative
+
 - Conformance suite + generator: [`aiko_services_dart`](https://github.com/nickmeinhold/aiko_services_dart) `test/codec/fixtures/s_expression_golden.json`, `tool/generate_codec_fixtures.py`
 - Dart implementation: `aiko_services_dart/lib/src/codec/s_expression.dart`
-- R. Rivest, [*S-Expressions* (draft-rivest-sexp-00)](https://datatracker.ietf.org/doc/html/draft-rivest-sexp-00), 1997 — the canonical (length-prefixed) encoding this dialect restricts
-- [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) — key-word interpretation
+- `documentation/concepts/utilities/parser.md` — the concept document. **Its description of the length prefix as a byte count does not match the implementation** (§3.3).
 - Why only these strings cross actor boundaries: `aiko_services_dart/docs/distributed-seam.html`
+
+## Appendix A. Conformance traces
+
+The fixtures certifying this document live in
+`aiko_services_dart/test/codec/fixtures/s_expression_golden.json`, generated
+from the reference implementation by `tool/generate_codec_fixtures.py` and
+exercised by `test/codec/s_expression_interop_test.dart`.
+
+| Group | Count | Certifies |
+|---|---|---|
+| `generate` | 35 | REQ-1 (integer params `(increment 5)`), REQ-5 and REQ-6 (three lone-surrogate vectors, U+D800 and U+DC00), REQ-11, REQ-13, REQ-14, REQ-15 and REQ-16 (the `ws` cases), plus dictionary flattening for REQ-17 |
+| `parse` | 30 | REQ-7, REQ-8, REQ-9, REQ-10, REQ-12, REQ-17, REQ-18, and three lone-surrogate decode vectors for REQ-6 |
+| `parse_errors` | 6 | REQ-18 and REQ-19 (three dictionary well-formedness cases), REQ-22 (overlong prefix, unterminated input, bare `12:`) |
+| `divergences` | 5 | §8 errata — recorded, not endorsed |
+
+**Coverage gap, verified against the fixture rather than assumed:**
+
+- **REQ-2** (a bare symbol outside parentheses is not a valid payload) — no vector.
+- **REQ-4** (UTF-8 on the wire) — not exercisable by an in-process fixture; it needs a
+  real broker, so it belongs to a conformance trace (ADR-016 / M4), not here.
+- **REQ-20** (senders MUST NOT use a `:`-terminated symbol as the first positional
+  parameter) — no vector. It is a prohibition on senders, so the fixture would have to
+  assert the *misinterpretation* rather than a rejection.
+- **REQ-23** (an encoder MUST reject parameters that are neither list nor dictionary) —
+  no vector, because the generator only emits valid input. Probed by hand on
+  2026-09-01: both implementations do reject, but not equivalently. Dart raises
+  `ArgumentError` from an explicit type check; the reference raises `TypeError:
+  can only concatenate list (not "str") to list` — the requirement holds there as a
+  side effect of list concatenation, not as a check. An accidental guarantee is one
+  refactor away from disappearing without a test to notice, so this is the vector
+  most worth adding.
+
+REQ-3 and REQ-21 are covered indirectly rather than by a named vector: the mixed
+positional/keyword rejections in `parse_errors` exercise REQ-3, and the integer
+parameters in `generate` demonstrate REQ-21's loss of type fidelity.
+
+Two differential fuzz rigs supplement the fixtures by comparing this document's Dart
+implementation against the reference across generated corpora
+(`tool/fuzz_generate_parity.dart`, `tool/fuzz_parse_parity.dart`). They are the
+instrument that found the `\s` portability defect REQ-15 exists to close: the fixture
+vectors were green while a 40,000-atom differential run produced 3604 mismatches.
