@@ -4,10 +4,9 @@
 #
 # WHY THIS IS A SCRIPT AND NOT A CI WORKFLOW
 # ------------------------------------------
-# The cheap checks (analyze, format, test) run in ~2s and are run constantly, so
-# a CI *gate* would report what is already known, minutes later, to the only
-# person who could have broken it. A gate needs a second party; this repo has
-# none yet.
+# This script is not an argument against CI. It predates the decision to open the
+# repo to contributors, and a gate does become worth its latency once a second
+# party can push -- see the CI restoration task.
 #
 # The gap CI would actually have filled is a *scheduler*: the differential-fuzz
 # rigs are the instruments that can genuinely surprise you — the `\s` divergence

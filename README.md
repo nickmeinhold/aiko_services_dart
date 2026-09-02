@@ -4,8 +4,10 @@ A Dart port of [Aiko Services](https://github.com/geekscape/aiko_services), Andy
 distributed actor framework for IoT, machine learning, and video, built on asynchronous
 MQTT messages.
 
-> **Status:** early / design phase. No implementation yet. The Python repo is the
-> reference implementation and correctness sounding-board for the port.
+> **Status:** early. The S-expression wire codec (differentially fuzzed against Python), the
+> share tree, an MQTT transport and a message dispatcher exist; the actor runtime of ADR-0002
+> does not. The Python repo is the reference implementation and correctness sounding-board
+> for the port.
 
 ## Docs & experiments
 
@@ -36,3 +38,13 @@ Following Andy's proposed sequence:
 The aim is the minimal implementation that gets someone underway and grows over time,
 not a throwaway hack. Inspired by the [Make-A-LISP](https://github.com/kanaka/mal) model
 of a well-specified core ported across many languages.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licence
+
+Licensed under the [Apache License, Version 2.0](LICENSE), the same licence as upstream
+`geekscape/aiko_services`. This port is a translation of that work and therefore a derivative
+of it; see [NOTICE](NOTICE) for attribution.
