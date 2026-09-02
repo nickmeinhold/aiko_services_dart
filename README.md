@@ -38,13 +38,3 @@ Following Andy's proposed sequence:
 The aim is the minimal implementation that gets someone underway and grows over time,
 not a throwaway hack. Inspired by the [Make-A-LISP](https://github.com/kanaka/mal) model
 of a well-specified core ported across many languages.
-
-## Contributing
-
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Licence
-
-Licensed under the [Apache License, Version 2.0](LICENSE), the same licence as upstream
-`geekscape/aiko_services`. This port is a translation of that work and therefore a derivative
-of it; see [NOTICE](NOTICE) for attribution.
