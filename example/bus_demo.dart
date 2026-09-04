@@ -19,8 +19,8 @@ Future<void> main(List<String> args) async {
     // Exhaustive: the switch has no default arm, so a new CallArguments case
     // would be a compile error here rather than a silently unhandled shape.
     final shape = switch (m.arguments) {
-      PositionalArguments(:final values) => 'positional ${values}',
-      KeywordArguments(:final values) => 'keyword ${values}',
+      PositionalArguments(:final values) => 'positional $values',
+      KeywordArguments(:final values) => 'keyword $values',
     };
     print('recv <- ${m.topic}: ${m.command} $shape');
   });

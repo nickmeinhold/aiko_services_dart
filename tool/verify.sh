@@ -35,7 +35,11 @@ ok()   { printf '   \033[32mok\033[0m  %s\n' "$1"; }
 bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; FAILED+=("$1"); }
 
 step "analyze (strict-casts / strict-inference / strict-raw-types)"
-dart analyze && ok "no issues" || bad "dart analyze"
+# --fatal-infos: bare `dart analyze` exits 0 on info-level issues, so every
+# lint in analysis_options.yaml was configured and unenforceable. Proven by
+# this gate reporting ALL CHECKS PASSED over two live lints (PR #13). The
+# repo is clean at info level, so this costs nothing today.
+dart analyze --fatal-infos && ok "no issues" || bad "dart analyze"
 
 step "format"
 if dart format --output=none --set-exit-if-changed lib/ test/ tool/ benchmark/; then
