@@ -5,14 +5,54 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 
 import '../codec/s_expression.dart';
 
+/// The arguments of a decoded call: positional or keyword, never both.
+///
+/// [parse] returns its `cdr` as exactly one of these two shapes — a
+/// `List<Object?>` of positional arguments, or a `Map<String, Object?>` built
+/// by `_listToDict` from `k: v` pairs. That set used to be written in a
+/// comment on an `Object?` field, which gave the compiler nothing and left
+/// every future reader to rediscover it with an `is` check.
+///
+/// Discriminating here rather than at the use site puts the decision at the
+/// wire boundary, where the untrusted input actually arrives.
+sealed class const CallArguments();
+
+final class const PositionalArguments(final List<Object?> values)
+    extends CallArguments {
+  @override
+  String toString() => values.toString();
+}
+
+final class const KeywordArguments(final Map<String, Object?> values)
+    extends CallArguments {
+  @override
+  String toString() => values.toString();
+}
+
+/// Classify the `cdr` half of a [parse] result.
+///
+/// Throws [FormatException] on any other shape. `parse` cannot currently
+/// produce one — `cdr` is only ever the empty list or `head.sublist(1)`, both
+/// `List<Object?>`, passed through `_listToDict` which returns that list or a
+/// `Map<String, Object?>`. The throw is the arm that would fire if that
+/// invariant ever moved, rather than a silent widening.
+CallArguments classifyArguments(Object? cdr) => switch (cdr) {
+  final Map<String, Object?> map => KeywordArguments(map),
+  final List<Object?> list => PositionalArguments(list),
+  _ => throw FormatException(
+    'call arguments must be a list or a keyword map, got '
+    '${cdr == null ? 'null' : cdr.runtimeType}',
+  ),
+};
+
 /// A decoded Aiko message: a function call received on an MQTT [topic].
 class const AikoMessage(
   final String topic,
   final String command,
-  final Object? params, // List or Map, per the S-expression
+  final CallArguments arguments,
 ) {
   @override
-  String toString() => 'AikoMessage($topic: $command $params)';
+  String toString() => 'AikoMessage($topic: $command $arguments)';
 }
 
 /// A minimal Dart client for the Aiko bus: connect to MQTT, publish function
@@ -52,8 +92,10 @@ class AikoClient {
         message.payload.message,
       );
       try {
-        final (command, params) = parse(text);
-        _controller.add(AikoMessage(event.topic, command, params));
+        final (command, cdr) = parse(text);
+        _controller.add(
+          AikoMessage(event.topic, command, classifyArguments(cdr)),
+        );
       } catch (_) {
         // Not a well-formed S-expression; ignore on this layer.
       }

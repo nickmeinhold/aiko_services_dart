@@ -45,7 +45,14 @@ final class const ShareMissingPathError(super.path) extends ShareError {
       'ShareMissingPathError: "$path" has no intermediate node';
 }
 
-/// A `/control` mutation, in the three forms the wire carries.
+/// A mutation arriving on `/control` — the three forms of that direction.
+///
+/// NOT the whole share vocabulary. The producer -> consumer direction carries
+/// five (`share.py:465-502`): these three plus `item_count`, which is a frame
+/// boundary that resets `items_received` rather than a field, and `sync`,
+/// which carries no item at all. That direction needs its own sealed type
+/// (task #3874); widening this one would conflate two directions that share
+/// three case names and mean different things by them.
 sealed class const ShareCommand(final String path);
 
 final class const ShareUpdate(super.path, final Object? value)
