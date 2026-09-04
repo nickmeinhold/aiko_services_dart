@@ -1,7 +1,14 @@
 # ADR-0003 — The reply shape: a sealed `Reply`, not a `Future`
 
-- **Status:** **proposed.** Not struck. No `lib/` code implementing this until it survives a
-  design-temper round.
+- **Status:** **DISSOLVED 2026-09-04 — do not build this.** Struck by /design-temper; two of
+  three seated families returned DISSOLVE, which is decisive. The verdict, the seven fatal
+  flaws and the replacement shape the strike converged on are in
+  [`0003-TEMPER.md`](0003-TEMPER.md). **Read that first.** This document is kept unedited below
+  the line as the record of what was proposed and why it failed — three of its flaws are
+  misreadings made *after* it had already self-corrected three times, which is the point.
+- **What survived:** the rejection of `Future` (P1, and it models the wrong thing), the
+  diagnosis that `String?` is impoverished, and Corrections 1 and 2. What did not: the entire
+  `Reply` type.
 - **Supersedes nothing.** Opens the question `docs/notes/bus-observer-scope.md` deliberately
   deferred: the observer is read-only, so it never sends, so nothing it does is evidence here.
 - **Source of authority:** `constitution/s_02_InterfaceComposition.md` §2, read in full on
