@@ -183,8 +183,11 @@ about commands that *did* declare a reply topic.
 Read: `s_02` §2 in full, `t_01` numbering and style rules, `p_00` P1, `actor.py:177-182`,
 `discovery.py:182-198`, `message_dispatcher.dart`.
 
-**Not verified:** the claim that `do_request` fires 2 requests as 4 handler invocations is
-still `unbacked` — quoted from session notes with no artifact in this repo. It appears in this
-document only as an open question, and no decision above rests on it.
+**Correction, 2026-09-05:** this document originally called the `do_request` 2-requests-4-firings
+measurement `unbacked`. It is not. The transcript is published in **`geekscape/aiko_services`
+Discussion #84** (2026-08-26), with a follow-up comment carrying control and interference arms
+against a byte-identical copy of `discovery.py`. "The artifact is not in *this repository*" was a
+fact about our own coverage, written down as a fact about the evidence — the same
+negative-probe-is-not-a-negative-fact error this strike caught twice more.
 
 **Not struck:** no adversarial round has been run on this design.

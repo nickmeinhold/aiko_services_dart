@@ -108,7 +108,9 @@ catch, and it is recorded rather than quietly reconciled.
 - Corrections 1 and 2 (the token is normative; there is no synchronous reply) hold under all
   three strikes against the full primary source.
 - Surfacing the unknown-command divergence without tie-breaking it, refusing to self-assign an
-  AS-RFC number, and marking the `do_request` measurement `unbacked` all hold.
+  AS-RFC number all hold. **The `unbacked` marking does not** — see the correction in the ADR:
+  the measurement is published in upstream Discussion #84, and "not in this repository" had been
+  written down as "not backed".
 
 ## The replacement the strike converged on
 
