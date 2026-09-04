@@ -1,7 +1,9 @@
 # ADR-0003 — The reply shape: a sealed `Reply`, not a `Future`
 
-- **Status:** **DISSOLVED 2026-09-04 — do not build this.** Struck by /design-temper; two of
-  three seated families returned DISSOLVE, which is decisive. The verdict, the seven fatal
+- **Status:** **DISSOLVED 2026-09-04 — do not build this.** Struck by /design-temper on a full
+  4-way panel; two of four families returned DISSOLVE, which is decisive, and the two RECASTs
+  converge on the same deletions. Chief among the findings: this document violates `s_02` §4's
+  *"If it is a request, it MUST name its reply interface"* -- a MUST it never quoted. The verdict, the seven fatal
   flaws and the replacement shape the strike converged on are in
   [`0003-TEMPER.md`](0003-TEMPER.md). **Read that first.** This document is kept unedited below
   the line as the record of what was proposed and why it failed — three of its flaws are
