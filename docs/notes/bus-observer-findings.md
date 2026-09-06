@@ -145,6 +145,53 @@ whose outcome does not depend on the thing it checks"*:
    as a failure — the benign direction of the same defect, and the only reason it
    was caught quickly.
 
+## 5. Round 3, and the reason the cage match stops here
+
+Round 3 was **not clean**. Seven findings survived verification as real, and
+that number is the honest headline — but its composition is the finding:
+
+| round | real findings | where they lived |
+|---|---|---|
+| 1 | 11 | the original code |
+| 2 | 7 | 4 in the original code, 3 vacuous checks in the harness |
+| 3 | 7 | **6 of 7 in code the previous rounds ADDED** |
+
+Three separate times, a fix generated the next round's defect. Round 1's
+ladder-both-ways fix keyed `ServicesCache` to a ladder transition, which round 2
+found could not carry a new registrar identity. Round 2's staging fix silently
+dropped every live `add` after a snapshot, which round 3 found. Round 2's
+serialisation chain was then bypassed by the shutdown path — by the same commit
+that added it.
+
+That is the cage match's own stop signal: **the loop is reviewing its own
+repairs.** Combined with a production diff that grew 1030 → 1113 → 1244 lines
+across the rounds rather than shrinking, the round cap is not an arbitrary
+number here — it is the point past which another round's expected yield is
+another self-inflicted regression.
+
+**What that does and does not license.** Every finding named across three rounds
+is closed, each with a test RED-proven by reverting its fix. The acceptance suite
+covers a strictly larger band than it did at round 1 (a broker outage under a
+live observer was added because round 2's findings all rang in exactly that band,
+and it caught two things immediately). What it does **not** license is a claim
+that a fourth round would find nothing. Every round so far has found something,
+and honesty about that is the whole point of recording the table.
+
+**One finding was rejected rather than fixed**, with reasoning: Tesla's
+lease-timer/`terminate()` race. `terminate()` cancels the timer synchronously
+before its first `await`, and Dart timers have no queued-but-uncancellable state
+within an isolate — an epoch guard would be machinery defending against a race
+the execution model does not permit.
+
+**On the reviewers themselves.** Kelvin (Gemini 2.5-pro) returned APPROVE with
+zero real findings in every round, including the one where two other families
+independently found the same high-severity defect. A live seat returning zero is
+a coverage gap, not agreement, and it counts toward the merge gate while doing
+it — worth stating plainly because the gate cannot tell the difference. Tesla's
+seat was the most valuable and the least reliable: dark on first read both times,
+arriving late, and delivering the deepest finding of the whole exercise on both
+occasions.
+
 ## Where the six verbs stand
 
 `tool/observer_acceptance.sh`, 12 assertions, all green against a live island. Two
