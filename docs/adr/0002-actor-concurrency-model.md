@@ -443,7 +443,8 @@ in two**, and neither half is optional:
   LWT fires.**
 - **C5b** *(dead IS dead)* — the actor isolate is killed outright → **red if the LWT does NOT
   fire within the liveness-proof deadline.** The deadline now has a **measured** benchmark to beat:
-  the reference takes **86 seconds** to notice a frozen-but-socket-alive process (D8). A liveness
+  the reference takes **60–90 seconds** to notice a frozen-but-socket-alive process (D8; two
+  measurements, 86 s and 71 s, bracketing a 1.5 × keepalive ceiling). A liveness
   proof whose deadline is not far below that buys nothing, so C5b's threshold is a real number and
   not a placeholder.
 
@@ -553,7 +554,7 @@ reports. **The actor isolate must periodically prove it is serving; if that proo
 transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
 observable, not to the nearest green thing one hop before it.
 
-#### D8's hole, measured: **86 seconds** — and the LWT is per-PROCESS, not per-Actor
+#### D8's hole, measured: **60–90 seconds** — and the LWT is per-PROCESS, not per-Actor
 
 *Added 2026-08-26. Measured by the peer Claude session in `aiko_services` against a live broker,
 Registrar, victim and peer, with `mosquitto_sub` capturing the raw wire as an independent
@@ -582,13 +583,38 @@ socket `ESTABLISHED` — D8's scenario exactly:
 20:57:57  aiko/…/20050/0/state (absent)    ← +86 seconds
 ```
 
-Consistent with MQTT's 1.5 × `keepalive`, and `keepalive=60` (`mqtt.py:130`). **For 86 seconds the
-Actor stayed registered, discoverable, returned by `do_discovery`, and accepting pings into a
-frozen process. No peer could tell.**
+**Reproduced independently, 2026-09-06, and the number is a BAND rather than a
+constant.** Against the local island rig (`tool/island-rig/`), freezing the
+ChatServer's container with `docker pause` — the cgroup freezer, so the app stops
+while the kernel keeps the socket `ESTABLISHED`, D8's scenario — and watching
+`aiko/+/+/0/state`:
 
-> **So D8's liveness proof is not belt-and-braces. It is the only thing that closes an 86-second
-> hole.** Any fleet that must fail over faster than ~90s for anything short of outright process
-> death gets nothing from the reference, and an application-level heartbeat is mandatory.
+```
+14:07:50  docker pause aiko-chat-1
+14:09:01  aiko/4b4281a12660/8/0/state (absent)   ← +71 seconds
+          mosquitto: "Client … disconnected: exceeded timeout."
+```
+
+**86 s and 71 s are the same finding at two phases, not a disagreement.** The
+window is set by MQTT's 1.5 × `keepalive` with `keepalive=60` (`mqtt.py:130`),
+so the ceiling is 90 s and the observed value depends on where in the keepalive
+cycle the freeze lands. One run is an observation; two bracket a band. **Quote
+the band and the mechanism, never the single number** — an earlier revision of
+this section said "86 seconds, measured" and the figure had no artifact in any
+repository, only a session note.
+
+**And the per-PROCESS claim above was confirmed the hard way.** The reproduction
+first watched the ChatServer's own `…/8/1/state` and saw *nothing* for 203
+seconds, because there is no per-Actor liveness signal — exactly what this
+section says, and a reminder that the instrument has to be pointed at `/0/`.
+
+**For a minute or more the Actor stays registered, discoverable, returned by
+`do_discovery`, and accepting pings into a frozen process. No peer can tell.**
+
+> **So D8's liveness proof is not belt-and-braces. It is the only thing that
+> closes a minute-plus hole.** Any fleet that must fail over faster than ~90 s
+> for anything short of outright process death gets nothing from the reference,
+> and an application-level heartbeat is mandatory.
 
 By contrast, **process death is fast and for an uninteresting reason**: on both clean `terminate()`
 and `SIGKILL` the LWT fires in under a second — because the OS closes the socket, not because
@@ -633,7 +659,7 @@ D8's liveness specification.
 **Scope of the measurement, honestly.** Single host, localhost, one broker, one Registrar.
 `SIGSTOP` models a *frozen application with a live socket*. A true network partition also stops
 kernel ACKs, so TCP retransmission timers could interact and that case is **not measured**. The
-86s figure is "frozen app, socket alive" and must not be quoted as a partition-detection time.
+60–90 s band is "frozen app, socket alive" and must not be quoted as a partition-detection time.
 
 
 **(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** **Measured: §1, F4** —
