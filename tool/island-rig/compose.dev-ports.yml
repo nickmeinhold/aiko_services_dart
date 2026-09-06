@@ -1,0 +1,19 @@
+# Dev-only overlay for a LOCAL island, used as the Dart observer's oracle.
+#
+# The island's own compose publishes NO host port for mosquitto — the broker is
+# internal to that project's network, which is what makes the anonymous
+# mosquitto.conf safe in production. A Dart process running on the host cannot
+# reach it. This overlay publishes it on the loopback only, for local
+# development against a real Python island:
+#
+#   docker compose -f ~/git/orgs/aiko/aiko-chat-island/docker-compose.yml \
+#                  -f tool/island-rig/compose.dev-ports.yml \
+#                  up -d mosquitto registrar chat
+#
+# Never deploy this overlay to a host.
+name: aiko
+
+services:
+  mosquitto:
+    ports:
+      - "127.0.0.1:1883:1883"
