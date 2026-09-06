@@ -111,7 +111,14 @@ bootstrap() {
   fi
 }
 bootstrap .
+# A spike directory is a PACKAGE only if it carries a pubspec. Position under
+# spike/ is not the discriminator: spike/unsubscribe/ and spike/reconnect/ are
+# probe PROGRAMS inside the root package — each one the evidence for a live
+# defect it measured — with no pubspec and no test/ of their own. Iterating by
+# directory ran `dart pub get` and `dart test` in both and failed the gate on
+# two things that are not packages.
 for spike in spike/*/; do
+  [ -f "$spike/pubspec.yaml" ] || continue
   bootstrap "$spike"
 done
 [ "$BOOTSTRAP_OK" = "1" ] && ok "resolved" || bad "dart pub get (root or a spike package)"
@@ -147,6 +154,7 @@ dart test && ok "suite green" || bad "dart test"
 # mixin-composition and isolate deep-copy premise corrections — were passing
 # unobservedly, and nobody would have learned if they broke.
 for spike in spike/*/; do
+  [ -f "$spike/pubspec.yaml" ] || continue
   step "tests: $spike"
   if (cd "$spike" && dart test); then
     ok "$spike green"

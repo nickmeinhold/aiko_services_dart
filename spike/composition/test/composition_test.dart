@@ -107,7 +107,8 @@ void main() {
       expect(dependency.isType('Category'), false);
     });
 
-    test('the typed discriminator replaces is_type(String) at nine Python '
+    test(
+        'the typed discriminator replaces is_type(String) at nine Python '
         'call sites', () {
       final entries = <String, DependencyMixin>{
         'a-category': Category(Context('cat-6')),
@@ -116,8 +117,9 @@ void main() {
       };
       // `entry.is_type("Category")` becomes `entry is CategoryMixin`:
       // compile-checked, and it cannot silently answer the wrong question.
-      final categories =
-          entries.entries.where((e) => e.value is CategoryMixin).map((e) => e.key);
+      final categories = entries.entries
+          .where((e) => e.value is CategoryMixin)
+          .map((e) => e.key);
       expect(categories, containsAll(['a-category', 'a-hyperspace']));
       expect(categories, isNot(contains('a-dependency')));
     });
