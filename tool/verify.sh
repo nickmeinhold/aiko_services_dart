@@ -14,13 +14,16 @@
 # only run when somebody remembers. This script is the cheapest thing that makes
 # "run everything" one command instead of a memory.
 #
-# When there is a running Dart service to point a real Python ECConsumer at
-# (ADR-0002's Actor), the interop check becomes worth real infrastructure. Not
-# before: building the trigger before the thing it fires on is how a workflow
-# ends up never having run while its silence reads as safety.
+# Interop is now HALF covered, and the halves are not symmetric. A Dart consumer
+# reading a live Python producer is exercised by tool/observer_acceptance.sh
+# below, against a real island. The other direction — a real Python ECConsumer
+# reading a live Dart share snapshot (ADR-0001 §3 test 12) — still needs a Dart
+# service to point it at, which is ADR-0002's Actor. Building the trigger before
+# the thing it fires on is how a workflow ends up never having run while its
+# silence reads as safety.
 #
 # Usage:
-#   tool/verify.sh              # cheap checks + fuzz, if the reference is found
+#   tool/verify.sh              # cheap checks + fuzz + the island run, if available
 #   tool/verify.sh --quick      # cheap checks only
 #   AIKO_SERVICES=/path tool/verify.sh
 set -uo pipefail
@@ -42,10 +45,17 @@ step "analyze (strict-casts / strict-inference / strict-raw-types)"
 dart analyze --fatal-infos && ok "no issues" || bad "dart analyze"
 
 step "format"
-if dart format --output=none --set-exit-if-changed lib/ test/ tool/ benchmark/; then
+# example/ and spike/unsubscribe/ are in this package and in this gate. `example/`
+# holds a real program (the bus observer) and `spike/unsubscribe/` holds the probe
+# that measured a live defect — both are source, not scratch. The other spike/
+# directories are separate packages with their own resolution and are excluded for
+# that reason, not because they read untidily.
+FORMAT_DIRS="lib/ test/ tool/ benchmark/ example/ spike/unsubscribe/ spike/reconnect/"
+# shellcheck disable=SC2086
+if dart format --output=none --set-exit-if-changed $FORMAT_DIRS; then
   ok "formatted"
 else
-  bad "dart format (run: dart format lib/ test/ tool/ benchmark/)"
+  bad "dart format (run: dart format $FORMAT_DIRS)"
 fi
 
 step "tests"
@@ -79,11 +89,37 @@ else
   fi
 fi
 
+ISLAND_RAN=0
+if [ "$QUICK" = "1" ]; then
+  :
+elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q true; then
+  step "six-verb acceptance against a live Python island"
+  if tool/observer_acceptance.sh; then
+    ISLAND_RAN=1
+    ok "connect / discover / subscribe / receive / leave / recover"
+  else
+    bad "observer acceptance against a live island"
+  fi
+else
+  printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
+  printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'
+  # A skip is NOT a pass, and until this line it was one: the message said so
+  # while the script went on to print ALL CHECKS PASSED and exit 0 — the same
+  # silence-reads-as-success shape the six verbs exist to hunt, committed by the
+  # thing doing the hunting. Now it fails, exactly as the fuzz rigs already do
+  # when the reference checkout is missing. `--quick` remains the escape hatch
+  # for a machine that legitimately cannot run either.
+  bad "island acceptance did not run (no aiko-chat-1 container)"
+fi
+
 printf '\n'
 if [ ${#FAILED[@]} -eq 0 ]; then
   printf '\033[32mALL CHECKS PASSED\033[0m\n'
   printf 'Scope: parity with this reference, not correctness. Not covered — a real\n'
   printf 'Python ECConsumer reading a live Dart share snapshot (ADR-0001 §3 test 12).\n'
+  if [ "$ISLAND_RAN" = "0" ]; then
+    printf '\033[33mAlso not covered this run: the six-verb island acceptance did not run.\033[0m\n'
+  fi
   exit 0
 fi
 printf '\033[31m%d CHECK(S) FAILED:\033[0m\n' "${#FAILED[@]}"
