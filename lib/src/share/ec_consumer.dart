@@ -96,6 +96,7 @@ class ECConsumer {
   Timer? _leaseTimer;
   int _itemCount = 0;
   int _itemsReceived = 0;
+  final Map<String, Object?> _frame = {};
   CacheState _cacheState = CacheState.empty;
   bool _attached = false;
   bool _terminated = false;
@@ -135,6 +136,16 @@ class ECConsumer {
     _leaseTimer = Timer.periodic(extendAfter, (_) => _requestShare(leaseTime));
   }
 
+  /// Replaces the replica with the frame just received, and marks it ready.
+  void _commitFrame() {
+    replica.clear();
+    for (final entry in _frame.entries) {
+      replica.applyInbound(ShareAdd(entry.key, entry.value));
+    }
+    _frame.clear();
+    _cacheState = CacheState.ready;
+  }
+
   void _requestShare(Duration lease) => _bus.send(
     producerControlTopic,
     'share',
@@ -152,6 +163,17 @@ class ECConsumer {
     if (event == null) return;
 
     switch (event) {
+      // A snapshot is the producer's FULL state for this filter, so it has to
+      // REPLACE the replica rather than merge into it. Merging is not
+      // hypothetical here: this port measured one `(share …)` request drawing
+      // three complete snapshots from a HyperSpace service, and every lease
+      // renewal draws another. A key that vanished between bursts — or a
+      // `(remove …)` lost to QoS 0 — would otherwise survive as fact forever.
+      //
+      // Staged rather than cleared-in-place: clearing on frame OPEN would make
+      // the replica flap empty and full on every renewal, so a reader could
+      // catch it mid-frame holding nothing. The old state stays readable until
+      // the new one is complete, then swaps.
       case ShareItemCount(:final count):
         // A frame boundary, and the reason a repeated snapshot is idempotent
         // rather than cumulative: the counter resets, so the second burst
@@ -160,17 +182,22 @@ class ECConsumer {
         // request once per producer (measured; see docs/notes/).
         _itemCount = count;
         _itemsReceived = 0;
+        _frame.clear();
         // Zero equals zero immediately. The reference checks completion only
         // inside its `add` arm (`share.py:479-480`), so an empty filtered share
         // never becomes ready there either — but `cacheState` is a LOCAL
         // accessor, not a wire behaviour, and reproducing a gap no peer can
         // observe is copying, not parity. A filter that legitimately matches
         // nothing must be distinguishable from a producer that never answered.
-        _cacheState = count == 0 ? CacheState.ready : CacheState.empty;
+        if (count == 0) {
+          _commitFrame();
+        } else {
+          _cacheState = CacheState.empty;
+        }
       case ShareItemAdded(:final path, :final value):
-        replica.applyInbound(ShareAdd(path, value));
+        _frame[path] = value;
         _itemsReceived++;
-        if (_itemsReceived == _itemCount) _cacheState = CacheState.ready;
+        if (_itemsReceived == _itemCount) _commitFrame();
       case ShareItemUpdated(:final path, :final value):
         replica.applyInbound(ShareUpdate(path, value));
       case ShareItemRemoved(:final path):
@@ -201,6 +228,7 @@ class ECConsumer {
     // holding the consumer after termination could read a full replica through
     // an `empty` cache state.
     replica.clear();
+    _frame.clear();
     _cacheState = CacheState.empty;
     _itemCount = 0;
     _itemsReceived = 0;

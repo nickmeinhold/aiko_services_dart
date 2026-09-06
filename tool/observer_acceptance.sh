@@ -216,5 +216,40 @@ else
   bad "recover — saw '${RECOVERED:-<nothing>}' after the restart"
 fi
 
+step "broker outage under a live observer"
+# Tesla's band, added round 2: the acceptance suite never dropped the BROKER, and
+# that is exactly where the ladder/roster/lease findings ring. `autoReconnect`
+# repairs the socket in silence, so before the fix every layer above kept
+# reporting REGISTRAR over a dead wire — a frozen roster and a lease renewing
+# into nothing, with no outward sign at all.
+run_observer "$WORK/broker.log"
+sleep 12
+docker restart "$BROKER_CONTAINER" >/dev/null
+sleep 35
+stop_observer
+
+# Assert the ladder came DOWN from registrar, not that it hit a SPECIFIC rung.
+# An earlier version grepped for `none` and failed a working recovery: the drop
+# lands on `transport` when the island registrar's own LWT `(primary absent)`
+# arrives first, which is a legitimate way down. Pinning the rung was asserting
+# the mechanism instead of the property.
+sed -n '/connection state: registrar/,$p' "$WORK/broker.log" \
+  | grep -qE 'connection state: (none|transport)' \
+  && ok "broker outage — the ladder came DOWN with the wire" \
+  || bad "broker outage — the ladder stayed up over a dead socket"
+
+# Only a channel list printed AFTER the outage counts.
+# NOTE: -E on the inner sed. BSD sed (macOS) has no `\|` alternation in BRE, so
+# the GNU-style pattern silently matched NOTHING and this arm failed a working
+# recovery — an instrument bug reported as a code defect.
+REJOINED=$(sed -n '/connection state: registrar/,$p' "$WORK/broker.log" \
+  | sed -nE '/connection state: (none|transport)/,$p' \
+  | observed_channels /dev/stdin)
+if [ -n "$REJOINED" ] && [ "$REJOINED" = "$EXPECTED" ]; then
+  ok "broker outage — rejoined and re-received the channel list"
+else
+  bad "broker outage — saw '${REJOINED:-<nothing>}' after the broker returned"
+fi
+
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

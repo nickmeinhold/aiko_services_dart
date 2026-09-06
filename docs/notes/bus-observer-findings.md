@@ -85,6 +85,66 @@ code rather than after. It is recorded because the *shape* of the mistake is the
 interesting part — two protocols that rhyme at the wire will read as one to anyone who
 greps for `(share` and stops.
 
+## 4. The ladder, the roster and the lease shared no common clock
+
+Round 2 of the cage match. Tesla's framing, and it is the right one: three
+mechanisms that all describe "is the island still there" were each keyed to a
+different signal, and none of them to the wire.
+
+- **`autoReconnect` repairs the socket in silence.** Nothing dropped the connection
+  ladder when the broker died, so every layer above went on reporting REGISTRAR
+  over a dead wire — a frozen roster, a lease renewing into nothing, and no
+  outward sign at all. Exactly the shape of §1, one layer up.
+- **The ladder cannot carry a new identity at the same potential.** `ServicesCache`
+  re-asked on a ladder *transition*. A registrar that restarts and re-announces
+  without an intervening `(primary absent)` — a retained overwrite, a
+  replacement, the PID reuse measured below — leaves the ladder exactly where it
+  was, so the cache stayed subscribed to a dead `/out` and never asked the living
+  `/in`. It is now keyed on the registrar's **identity**. The reference drives
+  this object from the announcement; keying it off the ladder was our invention.
+- **The lease outlived its producer.** A registrar loss clears the roster and
+  emits no `ServiceRemoved` (parity — a registrar blinking says nothing about its
+  members), but `ServiceRemoved` was the observer's only teardown trigger. So a
+  consumer kept renewing a 300-second lease into a topic whose owner might be
+  gone — and if that producer came back at the same path, the renewal would bind
+  a live producer to a generation already in the grave. A `RosterReleased` event
+  now says the roster has stopped speaking for anything.
+
+**And the down-signal was wired to an event that is never delivered.** The first
+fix hung on `onDisconnected`. Measured across a real broker restart
+(`spike/reconnect/probe_reconnect.dart`): with `autoReconnect` set, mqtt_client
+never calls it — the observed sequence is `true, true` with no `false` between.
+`onAutoReconnect` is the one that fires. The mechanism existed, compiled, read
+correctly, and could not be triggered; only running the probe showed it.
+
+Two more from the same round: a snapshot now **replaces** the replica rather than
+merging into it (a key that vanishes between the multiple bursts of §2, or a
+`(remove …)` lost to QoS 0, would otherwise survive as fact forever), and the
+observer's consumer slot is **serialised**, because `detach()` yields twice and a
+remove-then-add ran two futures over one mutable field.
+
+## Three vacuous checks, all mine
+
+Worth recording together, because they are one class and the class is *"a check
+whose outcome does not depend on the thing it checks"*:
+
+1. **The absence report fired on the happy path.** The observer announced
+   `chat_server not present` at roster-*loaded*, which is emitted before the
+   snapshot's `ServiceAdded`s — so the consumer slot was necessarily still empty
+   and the line printed every single run, one line before attaching. The
+   acceptance suite's negative control greps for that string. It was passing
+   unconditionally. Moved to the registrar's own sync barrier, where an empty
+   answer is a real answer.
+2. **A test that was never added.** The `terminate` empties-the-replica test
+   silently failed to apply — its anchor had been reflowed by `dart format` — and
+   the must-fail arm reported `0 tests red`, which is how it was found. A test
+   that does not exist and a test that cannot fail are indistinguishable from
+   outside.
+3. **A GNU-ism in the harness.** The broker-outage arm used `\|` alternation in a
+   BSD `sed` BRE, which matches nothing on macOS. It reported a working recovery
+   as a failure — the benign direction of the same defect, and the only reason it
+   was caught quickly.
+
 ## Where the six verbs stand
 
 `tool/observer_acceptance.sh`, 12 assertions, all green against a live island. Two

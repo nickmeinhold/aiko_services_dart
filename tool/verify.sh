@@ -103,7 +103,13 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'
-  printf 'A skip is NOT a pass: nothing below has touched a real bus.\n'
+  # A skip is NOT a pass, and until this line it was one: the message said so
+  # while the script went on to print ALL CHECKS PASSED and exit 0 — the same
+  # silence-reads-as-success shape the six verbs exist to hunt, committed by the
+  # thing doing the hunting. Now it fails, exactly as the fuzz rigs already do
+  # when the reference checkout is missing. `--quick` remains the escape hatch
+  # for a machine that legitimately cannot run either.
+  bad "island acceptance did not run (no aiko-chat-1 container)"
 fi
 
 printf '\n'

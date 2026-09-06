@@ -22,7 +22,7 @@ import 'dart:async';
 
 import '../transport/mqtt_transport.dart';
 import 'bus_process.dart';
-import 'connection_state.dart';
+import 'service_topic_path.dart';
 import 'service_details.dart';
 
 /// How much of the registrar's snapshot has landed.
@@ -51,6 +51,20 @@ final class const ServiceRemoved(final ServiceDetails service)
 /// name that lies is worse than no type.
 final class const ServicesLoaded() extends ServiceChange;
 
+/// The roster has been dropped because the registrar that produced it is gone.
+///
+/// Emitted on a registrar loss or replacement. NOT a statement that the services
+/// died — no [ServiceRemoved] accompanies it, matching `share.py:747
+/// _cache_reset()`, because a registrar blinking says nothing about its members.
+///
+/// The reference emits nothing here at all, which leaves any consumer attached
+/// to a producer this roster can no longer vouch for: the only teardown trigger
+/// is a [ServiceRemoved] that will never come, so a lease goes on renewing into
+/// a topic whose owner may already be dead. Emitting it is a deliberate,
+/// additive divergence — a subscriber that holds resources on behalf of the
+/// roster needs to be told the roster is no longer speaking for anything.
+final class const RosterReleased() extends ServiceChange;
+
 /// The registrar has confirmed on its own `/out` topic that nothing raced the
 /// snapshot — [ServicesCacheState.ready].
 ///
@@ -76,7 +90,7 @@ class ServicesCache {
   int? _itemCount;
   String? _registrarOut;
   bool _attached = false;
-  StreamSubscription<ConnectionState>? _ladder;
+  StreamSubscription<ServiceTopicPath?>? _ladder;
 
   ServicesCacheState get state => _state;
 
@@ -106,19 +120,26 @@ class ServicesCache {
       );
     }
     _attached = true;
-    _ladder = _process.states.listen(_onConnectionState);
+    // Keyed on the registrar's IDENTITY, not on a ladder transition. A restarted
+    // registrar announces a new `{host}/{pid}` and may do so with no intervening
+    // `(primary absent)`, in which case the ladder never moves — it is already at
+    // REGISTRAR. Listening for a transition would leave this cache subscribed to
+    // a dead `/out` while never sending `(share …)` to the living `/in`, with
+    // every outward sign of health intact. The reference drives this object from
+    // the announcement; keying it off the ladder's equality was our error.
+    _ladder = _process.registrarChanges.listen(_onRegistrarChanged);
     _requestRoster();
   }
 
-  void _onConnectionState(ConnectionState state) {
-    if (state.isConnected(ConnectionState.registrar)) {
-      // Re-request against whatever the registrar's path is NOW. A restarted
-      // registrar has a new process id, so the topics are not the old ones —
-      // re-subscribing to the remembered pair would listen to a dead address.
-      if (_registrarOut == null) _requestRoster();
-    } else {
-      _releaseRegistrar();
-    }
+  /// A registrar appeared, vanished, or was replaced by a different one.
+  ///
+  /// All three are the same move: let go of everything that was true only while
+  /// the previous registrar was reachable, then ask the current one afresh. The
+  /// release runs even when a new registrar is arriving, because the topics are
+  /// derived from the path and the old pair is now a dead address.
+  void _onRegistrarChanged(ServiceTopicPath? registrar) {
+    _releaseRegistrar();
+    if (registrar != null) _requestRoster();
   }
 
   /// Subscribes to the two reply topics and asks for everything.
@@ -159,6 +180,7 @@ class ServicesCache {
     _services.clear();
     _itemCount = null;
     _state = ServicesCacheState.empty;
+    _emit(const RosterReleased());
   }
 
   static List<Object?> _positional(AikoMessage message) =>

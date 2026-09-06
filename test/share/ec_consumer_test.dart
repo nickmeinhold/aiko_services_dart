@@ -148,6 +148,71 @@ void main() {
     }
   });
 
+  // A snapshot is the producer's FULL state for this filter, so it must REPLACE
+  // the replica. Not hypothetical: one `(share …)` request draws three complete
+  // snapshots from a HyperSpace service (measured), and every lease renewal
+  // draws another — so a key that vanished between bursts, or a `(remove …)`
+  // lost to QoS 0, would otherwise survive as fact forever.
+  test(
+    'a re-snapshot replaces the replica rather than merging into it',
+    () async {
+      consumer.attach();
+      await bus.deliver(consumer.topicShareIn, 'item_count', ['2']);
+      await bus.deliver(consumer.topicShareIn, 'add', [
+        'channel_list.general',
+        'g',
+      ]);
+      await bus.deliver(consumer.topicShareIn, 'add', [
+        'channel_list.gone',
+        'x',
+      ]);
+      expect(consumer.replica.read('channel_list'), {
+        'general': 'g',
+        'gone': 'x',
+      });
+
+      // The producer's next snapshot no longer contains `gone`.
+      await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
+      await bus.deliver(consumer.topicShareIn, 'add', [
+        'channel_list.general',
+        'g',
+      ]);
+      expect(consumer.replica.read('channel_list'), {'general': 'g'});
+    },
+  );
+
+  test(
+    'the replica is readable, not empty, while a frame is in flight',
+    () async {
+      consumer.attach();
+      await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
+      await bus.deliver(consumer.topicShareIn, 'add', [
+        'channel_list.general',
+        'g',
+      ]);
+
+      await bus.deliver(consumer.topicShareIn, 'item_count', ['2']);
+      // Mid-frame: the old state stands until the new one is complete, so a reader
+      // cannot catch the replica flapping empty on every lease renewal.
+      expect(consumer.replica.read('channel_list'), {'general': 'g'});
+      expect(consumer.cacheState, CacheState.empty, reason: 'and is told so');
+    },
+  );
+
+  test('an empty re-snapshot clears what the previous one left', () async {
+    consumer.attach();
+    await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
+    await bus.deliver(consumer.topicShareIn, 'add', [
+      'channel_list.general',
+      'g',
+    ]);
+    expect(consumer.replica.read('channel_list'), isNotEmpty);
+
+    await bus.deliver(consumer.topicShareIn, 'item_count', ['0']);
+    expect(consumer.cacheState, CacheState.ready);
+    expect(consumer.replica.snapshot(), isEmpty);
+  });
+
   test('update and remove move the replica after the snapshot', () async {
     consumer.attach();
     await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
@@ -190,6 +255,22 @@ void main() {
       expect(consumer.cacheState, CacheState.empty);
     },
   );
+
+  // `share.py:534` empties the cache on terminate. Ours claimed to and did not,
+  // so a retained reference could read a full replica through an `empty` state.
+  test('terminate empties the replica, as its own doc promised', () async {
+    consumer.attach();
+    await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
+    await bus.deliver(consumer.topicShareIn, 'add', [
+      'channel_list.general',
+      'g',
+    ]);
+    expect(consumer.replica.read('channel_list'), isNotEmpty);
+
+    await consumer.terminate();
+    expect(consumer.replica.snapshot(), isEmpty);
+    expect(consumer.replica.read('channel_list'), isNull);
+  });
 
   // A terminated consumer has a closed event stream, so re-attaching would
   // subscribe, mirror and emit nothing: correct-looking and silent. One producer

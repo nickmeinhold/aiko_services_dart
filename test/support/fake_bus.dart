@@ -30,8 +30,19 @@ class FakeBus implements MessageBus {
 
   var connected = false;
 
+  final _transport = StreamController<bool>.broadcast();
+
   @override
   Stream<AikoMessage> get messages => _controller.stream;
+
+  @override
+  Stream<bool> get transportUp => _transport.stream;
+
+  /// Drops or restores the link, as a broker outage would.
+  Future<void> setTransport({required bool up}) async {
+    _transport.add(up);
+    await Future<void>.delayed(Duration.zero);
+  }
 
   @override
   Future<void> connect() async => connected = true;

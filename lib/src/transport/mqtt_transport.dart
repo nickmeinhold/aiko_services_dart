@@ -68,6 +68,15 @@ abstract interface class MessageBus {
   /// Decoded messages on subscribed topics.
   Stream<AikoMessage> get messages;
 
+  /// Whether the transport is carrying traffic — `true` on connect, `false`
+  /// when the link drops, `true` again when it comes back.
+  ///
+  /// Without this the layers above cannot tell a quiet island from a dead
+  /// socket. `autoReconnect` heals the connection and says nothing, so a
+  /// connection ladder built only from protocol messages climbs once and then
+  /// describes a wire it can no longer hear.
+  Stream<bool> get transportUp;
+
   Future<void> connect();
 
   void subscribe(String topic);
@@ -97,6 +106,14 @@ class AikoClient implements MessageBus {
 
   late final MqttServerClient _mqtt;
   final _controller = StreamController<AikoMessage>.broadcast();
+  final _transport = StreamController<bool>.broadcast();
+
+  @override
+  Stream<bool> get transportUp => _transport.stream;
+
+  void _reportTransport({required bool up}) {
+    if (!_transport.isClosed) _transport.add(up);
+  }
 
   /// Decoded Aiko messages received on subscribed topics.
   @override
@@ -124,9 +141,30 @@ class AikoClient implements MessageBus {
       // disconnect; without, 0 (spike/unsubscribe/probe_unsubscribe.dart).
       // Nothing on our side reported it — `autoReconnect` reconnected, our own
       // logs stayed clean, and the only witness was the broker's log.
-      ..setProtocolV311();
+      ..setProtocolV311()
+      // The link's own liveness, surfaced rather than swallowed. `autoReconnect`
+      // repairs the socket silently, which is precisely why the layers above
+      // need to be told: a ladder that only ever climbs reports REGISTRAR over a
+      // dead wire, and the resulting quiet is indistinguishable from an island
+      // with nothing to say. Same failure shape as the 3.1 defect above, one
+      // layer up.
+      // `onAutoReconnect`, NOT `onDisconnected`, is the down signal — measured,
+      // not assumed. With `autoReconnect` set, a broker restart never calls
+      // `onDisconnected`: the client goes straight to reconnecting. A probe
+      // across a real broker restart saw `true, true` and no `false` at all
+      // (spike/reconnect/probe_reconnect.dart), so an implementation hung on
+      // `onDisconnected` is a mechanism whose triggering condition never occurs
+      // — working code for an event that is never delivered.
+      //
+      // `onDisconnected` is kept for the case auto-reconnect cannot cover: a
+      // disconnect with no reconnection to follow.
+      ..onAutoReconnect = (() => _reportTransport(up: false))
+      ..onDisconnected = (() => _reportTransport(up: false))
+      ..onAutoReconnected = (() => _reportTransport(up: true))
+      ..onConnected = (() => _reportTransport(up: true));
     await _mqtt.connect();
     _mqtt.updates?.listen(_onData);
+    _reportTransport(up: true);
   }
 
   void _onData(List<MqttReceivedMessage<MqttMessage>> events) {
@@ -171,7 +209,12 @@ class AikoClient implements MessageBus {
 
   @override
   Future<void> disconnect() async {
+    // Stop reporting BEFORE disconnecting: the disconnect callback would
+    // otherwise announce a drop that is our own doing, and the ladder above
+    // would react to its own shutdown as though the island had gone.
+    _mqtt.onDisconnected = null;
     _mqtt.disconnect();
     await _controller.close();
+    await _transport.close();
   }
 }

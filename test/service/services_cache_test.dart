@@ -83,6 +83,23 @@ void main() {
       expect(p.state, ConnectionState.registrar);
     });
 
+    // `autoReconnect` repairs a broken socket in silence. A ladder built only
+    // from protocol messages climbs once and then reports REGISTRAR over a dead
+    // wire — the roster frozen, the lease renewing into nothing, and every
+    // outward sign of health intact.
+    test(
+      'a broker drop moves the ladder DOWN and clears the registrar',
+      () async {
+        expect(process.state, ConnectionState.registrar);
+        await bus.setTransport(up: false);
+        expect(process.state, ConnectionState.none);
+        expect(process.registrar, isNull);
+
+        await bus.setTransport(up: true);
+        expect(process.state, ConnectionState.transport);
+      },
+    );
+
     test('(primary absent) drops one rung, not to none', () async {
       await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
       expect(process.state, ConnectionState.transport);
@@ -271,6 +288,72 @@ void main() {
         expect(cache.state, ServicesCacheState.loaded);
         expect(cache.services.single.name, 'chat_server');
       });
+    });
+
+    // The ladder cannot carry a new identity at the same potential: a registrar
+    // that restarts and re-announces WITHOUT an intervening `(primary absent)`
+    // leaves the connection state exactly where it was. Anything keyed on a
+    // ladder TRANSITION would keep talking to the dead address — subscribed to a
+    // `/out` nobody publishes to, never asking the living `/in`, and healthy in
+    // every observable way.
+    test(
+      'a registrar REPLACED with no intervening absent is still a change',
+      () async {
+        cache.attach();
+        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+        expect(cache.state, ServicesCacheState.loaded);
+        expect(process.state, ConnectionState.registrar);
+        bus.sent.clear();
+
+        const replacement = 'aiko/island/77/1';
+        await bus.deliver('aiko/service/registrar', 'primary', [
+          'found',
+          replacement,
+          '2',
+          '5555.0',
+        ]);
+
+        // The ladder never moved — that is the whole point of the test.
+        expect(process.state, ConnectionState.registrar);
+        expect(bus.sent.single.topic, '$replacement/in');
+        expect(bus.subscribed, contains('$replacement/out'));
+        expect(bus.unsubscribed, contains('$_registrar/out'));
+        expect(cache.services, isEmpty);
+      },
+    );
+
+    test('re-announcing the SAME registrar is not a change', () async {
+      cache.attach();
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      bus.sent.clear();
+
+      await bus.deliver('aiko/service/registrar', 'primary', [
+        'found',
+        _registrar,
+        '2',
+        '9999.0',
+      ]);
+      expect(bus.sent, isEmpty, reason: 'no re-request for an unchanged path');
+      expect(cache.services, isNotEmpty, reason: 'roster survives a repeat');
+    });
+
+    // The reference emits nothing here, leaving any consumer attached to a
+    // producer this roster can no longer vouch for — the only teardown trigger
+    // is a ServiceRemoved that never comes.
+    test('losing the registrar announces that the roster was released', () async {
+      cache.attach();
+      final changes = <ServiceChange>[];
+      cache.changes.listen(changes.add);
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+
+      await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
+      expect(changes.whereType<RosterReleased>(), isNotEmpty);
+      // Not a claim that the services died — a registrar blinking says nothing
+      // about its members.
+      expect(changes.whereType<ServiceRemoved>(), isEmpty);
     });
 
     test('terminate drops both subscriptions and empties the roster', () async {

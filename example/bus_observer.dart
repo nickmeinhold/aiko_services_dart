@@ -72,35 +72,69 @@ class _ChannelListObserver {
   StreamSubscription<ShareEvent>? _events;
   int _generation = 0;
 
+  /// Serialises every mutation of the consumer slot.
+  ///
+  /// `detach()` yields twice — cancelling a subscription and closing a stream —
+  /// so a remove immediately followed by an add runs two futures over one
+  /// mutable field. The stale detach can resume AFTER the new consumer is in
+  /// place and either terminate it or null the slot without terminating it: in
+  /// the first case recovery dies silently with the generation already spent, in
+  /// the second a lease timer and a handler leak while the observer believes it
+  /// is waiting. A single island emitting remove-then-add in one breath is
+  /// enough. Chaining is the fix: the slot has one writer at a time.
+  Future<void> _slot = Future<void>.value();
+
+  Future<void> _serialise(Future<void> Function() op) =>
+      _slot = _slot.then((_) => op()).catchError((Object e) {
+        _log('consumer transition failed: $e');
+      });
+
   void onServiceChange(ServiceChange change) {
     switch (change) {
       case ServicesLoaded():
+        // NOT the place to report absence. This event fires BEFORE the snapshot's
+        // ServiceAdded events, so the consumer slot is necessarily still empty
+        // here — the happy path printed "not present" every single run, one line
+        // before attaching. Worse, the acceptance suite's negative control greps
+        // for that string, so it was passing unconditionally: a check whose
+        // outcome did not depend on the thing it checked.
         _log('roster loaded');
-        // Absence must be stated. A silent observer is indistinguishable from
-        // one that is still starting up, and "no output" is exactly what a
-        // broken discover verb also looks like.
+      case ServicesReady():
+        // The registrar's own `/out` sync barrier: the roster is complete AND
+        // confirmed, so an empty answer here is a real answer. Absence must be
+        // stated — silence reads as success, and "no output" is also exactly
+        // what a broken discover verb looks like.
+        _log('roster confirmed by the registrar');
         if (_consumer == null) {
           _log('$_serviceName not present on this island — waiting for it');
         }
-      case ServicesReady():
-        _log('roster confirmed by the registrar');
+      case RosterReleased():
+        // The registrar that vouched for our producer is gone, and no
+        // ServiceRemoved is coming. Holding the consumer would renew a 300s
+        // lease into a topic whose owner may already be dead — and if the
+        // producer reincarnates at the same path (the PID reuse this port
+        // measured), those renewals would bind a live producer to a generation
+        // already in the grave.
+        _log('registrar gone — releasing the consumer with the roster');
+        unawaited(_serialise(detach));
       case ServiceAdded(:final service) when service.name == _serviceName:
         // A re-add without an intervening remove is not ruled out by the
         // protocol, so attaching is idempotent by detaching first — otherwise
         // the previous consumer's handler and lease leak.
-        unawaited(_attach(service));
+        unawaited(_serialise(() => _attach(service)));
       case ServiceAdded(:final service):
         _log('service: ${service.name} (${service.topicPath})');
       case ServiceRemoved(:final service) when service.name == _serviceName:
         _log('${service.name} left — waiting for it to come back');
         // Deliberately no "channels removed" output: a producer disappearing is
         // a transient absence, not a statement that the channels are gone.
-        unawaited(detach());
+        unawaited(_serialise(detach));
       case ServiceRemoved(:final service):
         _log('service gone: ${service.name}');
     }
   }
 
+  /// Attaches a consumer. Only ever called through [_serialise].
   Future<void> _attach(ServiceDetails service) async {
     await detach();
     if (!service.hasShare) {

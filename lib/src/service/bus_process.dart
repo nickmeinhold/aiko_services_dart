@@ -75,6 +75,8 @@ class BusProcess {
   ConnectionState _state = ConnectionState.none;
   ServiceTopicPath? _registrar;
   final _states = StreamController<ConnectionState>.broadcast();
+  final _registrars = StreamController<ServiceTopicPath?>.broadcast();
+  StreamSubscription<bool>? _transportWatch;
 
   ConnectionState get state => _state;
 
@@ -85,6 +87,17 @@ class BusProcess {
   /// The registrar's address, or `null` while it is absent.
   ServiceTopicPath? get registrar => _registrar;
 
+  /// Every change of registrar IDENTITY, `null` when there is none.
+  ///
+  /// Distinct from [states], and the distinction is load-bearing. A registrar
+  /// that restarts announces a NEW `{host}/{pid}` path; if it does so without an
+  /// intervening `(primary absent)` — a retained overwrite, a replacement, the
+  /// PID reuse this port has already measured on a container restart — then the
+  /// ladder never moves, because it is already at [ConnectionState.registrar].
+  /// Anything keyed on a ladder TRANSITION would go on talking to the dead
+  /// address: the ladder cannot carry a new identity at the same potential.
+  Stream<ServiceTopicPath?> get registrarChanges => _registrars.stream;
+
   /// Connects and waits until the registrar has been found.
   ///
   /// Returns when the ladder reaches [ConnectionState.registrar]. It does not
@@ -93,6 +106,18 @@ class BusProcess {
   /// as an answer.
   Future<void> connect() async {
     await bus.connect();
+    // The wire's own liveness moves the ladder DOWN. Without this, `autoReconnect`
+    // repairs a broken socket in silence while every layer above still reports
+    // REGISTRAR — a roster frozen mid-restart, a lease renewing into a dead
+    // topic, and no signal anywhere that the island stopped answering.
+    _transportWatch = bus.transportUp.listen((up) {
+      if (up) {
+        _transition(ConnectionState.transport);
+      } else {
+        _setRegistrar(null);
+        _transition(ConnectionState.none);
+      }
+    });
     _transition(ConnectionState.transport);
     final found = _awaitRegistrar();
     router.addHandler(registrarBootTopic(namespace), _onRegistrar);
@@ -135,16 +160,26 @@ class BusProcess {
         } on FormatException {
           return;
         }
-        _registrar = registrar;
+        _setRegistrar(registrar);
         _transition(ConnectionState.registrar);
       case ['absent']:
-        _registrar = null;
+        _setRegistrar(null);
         // Drop one rung, not to `none`: the broker is still connected.
         // `process.py:371-373` does exactly this.
         _transition(ConnectionState.transport);
       default:
         return;
     }
+  }
+
+  /// Records the registrar's identity and announces a CHANGE of it.
+  ///
+  /// Re-announcing the same path is not a change and stays quiet; a different
+  /// path is a change even when the ladder does not move.
+  void _setRegistrar(ServiceTopicPath? next) {
+    if (next == _registrar) return;
+    _registrar = next;
+    if (!_registrars.isClosed) _registrars.add(next);
   }
 
   void _transition(ConnectionState next) {
@@ -154,9 +189,12 @@ class BusProcess {
   }
 
   Future<void> disconnect() async {
+    await _transportWatch?.cancel();
+    _transportWatch = null;
     await router.dispose();
     await bus.disconnect();
     _transition(ConnectionState.none);
     await _states.close();
+    await _registrars.close();
   }
 }
