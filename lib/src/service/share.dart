@@ -170,9 +170,27 @@ class Share {
 
     final head = _tree[parts.first];
     if (head is! Map<String, Object?>) {
-      // Conform: `_ec_modify_item(create_path: False)` does not vivify. Diverge
-      // only on observability — the reference drops this silently.
-      _report(ShareMissingPathError(path));
+      // Whether a missing intermediate node is created is a property of the
+      // DIRECTION, not of the tree — and the reference sets it per call site.
+      // A producer applying a `/control` request uses `_ec_modify_item`'s
+      // default `create_path=False` and silently drops the write
+      // (`share.py:121,135-141`). A consumer applying its producer's feed goes
+      // through `_ec_update_item`, which passes `create_path=True`
+      // (`share.py:155-158`), so `(add channel_list.general ...)` builds
+      // `channel_list` on arrival.
+      //
+      // `ShareRole` already names that axis, so it decides this too. Getting it
+      // wrong in the replica direction is not a rejected write with an error on
+      // the stream: it is an entire dotted namespace that never appears, and an
+      // observer that prints an empty channel list as though that were the
+      // answer.
+      if (role == ShareRole.own) {
+        _report(ShareMissingPathError(path));
+        return;
+      }
+      final created = <String, Object?>{};
+      _tree[parts.first] = created;
+      created[parts[1]] = value;
       return;
     }
     head[parts[1]] = value;
