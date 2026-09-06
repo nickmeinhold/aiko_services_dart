@@ -125,6 +125,14 @@ class AikoClient implements MessageBus {
       ..logging(on: false)
       ..keepAlivePeriod = 60
       ..autoReconnect = true
+      // Stated, not inherited. The whole recovery path rests on this: after an
+      // auto-reconnect the retained `(primary found …)` only comes back because
+      // the client re-subscribes, and that is what re-promotes the ladder and
+      // re-drives the roster. It happens to be the package default — which is
+      // precisely the problem, because a default is a property nobody chose. If
+      // it ever flipped, the observer would sit at TRANSPORT forever holding no
+      // subscriptions, raising nothing.
+      ..resubscribeOnAutoReconnect = true
       // MQTT 3.1.1, not the package default of 3.1 — and this is a wire
       // conformance decision, not a preference.
       //

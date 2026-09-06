@@ -97,6 +97,16 @@ class ECConsumer {
   int _itemCount = 0;
   int _itemsReceived = 0;
   final Map<String, Object?> _frame = {};
+
+  /// Whether a snapshot frame is open.
+  ///
+  /// Explicit, because it cannot be INFERRED from the counters. `add` means
+  /// "snapshot or live" on the wire, and a version of this class that inferred
+  /// frame membership from `_itemsReceived == _itemCount` silently dropped every
+  /// live add after the snapshot: the counter went one past the target, the
+  /// equality never held again, and the item never left the staging map. The
+  /// replica went on being reported as current while the island moved on.
+  bool _inFrame = false;
   CacheState _cacheState = CacheState.empty;
   bool _attached = false;
   bool _terminated = false;
@@ -143,6 +153,7 @@ class ECConsumer {
       replica.applyInbound(ShareAdd(entry.key, entry.value));
     }
     _frame.clear();
+    _inFrame = false;
     _cacheState = CacheState.ready;
   }
 
@@ -183,6 +194,7 @@ class ECConsumer {
         _itemCount = count;
         _itemsReceived = 0;
         _frame.clear();
+        _inFrame = true;
         // Zero equals zero immediately. The reference checks completion only
         // inside its `add` arm (`share.py:479-480`), so an empty filtered share
         // never becomes ready there either — but `cacheState` is a LOCAL
@@ -195,9 +207,16 @@ class ECConsumer {
           _cacheState = CacheState.empty;
         }
       case ShareItemAdded(:final path, :final value):
-        _frame[path] = value;
-        _itemsReceived++;
-        if (_itemsReceived == _itemCount) _commitFrame();
+        if (_inFrame) {
+          _frame[path] = value;
+          _itemsReceived++;
+          if (_itemsReceived == _itemCount) _commitFrame();
+        } else {
+          // A live add — an item that appeared on the producer after its
+          // snapshot. It is a delta, not part of any frame, so it goes straight
+          // to the replica and leaves the cache state alone.
+          replica.applyInbound(ShareAdd(path, value));
+        }
       case ShareItemUpdated(:final path, :final value):
         replica.applyInbound(ShareUpdate(path, value));
       case ShareItemRemoved(:final path):
@@ -229,6 +248,7 @@ class ECConsumer {
     // an `empty` cache state.
     replica.clear();
     _frame.clear();
+    _inFrame = false;
     _cacheState = CacheState.empty;
     _itemCount = 0;
     _itemsReceived = 0;

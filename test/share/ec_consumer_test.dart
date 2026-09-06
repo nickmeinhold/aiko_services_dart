@@ -213,6 +213,32 @@ void main() {
     expect(consumer.replica.snapshot(), isEmpty);
   });
 
+  // RED first: this is the regression the staging fix introduced. `add` is
+  // "snapshot or live" on the wire, and after `ready` a live add pushed
+  // `_itemsReceived` past `_itemCount`, so the frame never committed and the
+  // item was silently dropped — the observer would go on reporting a channel
+  // list that no longer matched the island.
+  test('a LIVE add after the snapshot reaches the replica', () async {
+    consumer.attach();
+    await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);
+    await bus.deliver(consumer.topicShareIn, 'add', [
+      'channel_list.general',
+      'g',
+    ]);
+    expect(consumer.cacheState, CacheState.ready);
+
+    // A channel created on the island AFTER the snapshot landed.
+    await bus.deliver(consumer.topicShareIn, 'add', [
+      'channel_list.newbie',
+      'n',
+    ]);
+    expect(consumer.replica.read('channel_list'), {
+      'general': 'g',
+      'newbie': 'n',
+    });
+    expect(consumer.cacheState, CacheState.ready);
+  });
+
   test('update and remove move the replica after the snapshot', () async {
     consumer.attach();
     await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);

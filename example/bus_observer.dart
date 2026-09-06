@@ -54,7 +54,12 @@ Future<void> main(List<String> arguments) async {
   signals = ProcessSignal.sigint.watch().listen((_) async {
     _log('leaving');
     await signals.cancel();
-    await observer.detach();
+    // THROUGH the chain, not around it. This was the one caller that touched the
+    // consumer slot directly, which defeats the serialisation it exists for: an
+    // attach already in flight would resume after the shutdown detach and leave
+    // a live consumer and a lease timer behind as the process exits — the exact
+    // leak the chain was added to prevent, reintroduced by the shutdown path.
+    await observer.detachSerialised();
     await roster.terminate();
     await process.disconnect();
     exit(0);
@@ -189,6 +194,9 @@ class _ChannelListObserver {
       _log('  $name = ${renderWireValue(channels[name])}');
     }
   }
+
+  /// [detach] queued behind whatever the slot is already doing.
+  Future<void> detachSerialised() => _serialise(detach);
 
   Future<void> detach() async {
     await _events?.cancel();
