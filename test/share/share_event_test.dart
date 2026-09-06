@@ -47,14 +47,14 @@ void main() {
     });
   });
 
-  group('renderWireValue', () {
+  group('debugRenderWireValue', () {
     test('prints a decoded value the way the island wrote it', () {
       expect(
-        renderWireValue(['*', 'general', '*', '*', '*', <Object?>[]]),
+        debugRenderWireValue(['*', 'general', '*', '*', '*', <Object?>[]]),
         '(* general * * * ())',
       );
       expect(
-        renderWireValue([
+        debugRenderWireValue([
           ['*', 'general', '*', '*', '*', <Object?>[]],
           'None',
           'None',
@@ -64,7 +64,7 @@ void main() {
     });
 
     test('a null renders as the wire null, not the word', () {
-      expect(renderWireValue(null), '0:');
+      expect(debugRenderWireValue(null), '0:');
     });
   });
 }

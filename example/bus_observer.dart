@@ -191,7 +191,7 @@ class _ChannelListObserver {
     final names = channels.keys.toList()..sort();
     _log('channels (${names.length}): ${names.join(', ')}');
     for (final name in names) {
-      _log('  $name = ${renderWireValue(channels[name])}');
+      _log('  $name = ${debugRenderWireValue(channels[name])}');
     }
   }
 

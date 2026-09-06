@@ -70,8 +70,12 @@ ShareEvent? classifyShareEvent(String command, List<Object?> parameters) {
   };
 }
 
-/// Renders a decoded value back to something that reads like the wire, for
-/// display only.
+/// Renders a decoded value back to something that READS LIKE the wire, for
+/// display only — hence `debug`.
+///
+/// The name carries the warning because the doc alone did not: an earlier
+/// `renderWireValue` claimed to produce a wire value while its own comment said
+/// it must never be published.
 ///
 /// The parser turns `((* general * * * ()) None None)` into nested Dart lists,
 /// and `Object.toString` would print that as `[[*, general, ...], None, None]`
@@ -80,8 +84,8 @@ ShareEvent? classifyShareEvent(String command, List<Object?> parameters) {
 ///
 /// This is NOT `generate`: it omits length prefixes and quoting, so its output
 /// must never be published. Use `generate` for anything that goes back out.
-String renderWireValue(Object? value) => switch (value) {
-  final List<Object?> items => '(${items.map(renderWireValue).join(' ')})',
+String debugRenderWireValue(Object? value) => switch (value) {
+  final List<Object?> items => '(${items.map(debugRenderWireValue).join(' ')})',
   null => '0:',
   final other => '$other',
 };

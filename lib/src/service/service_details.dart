@@ -88,11 +88,16 @@ final class ServiceDetails {
 /// would be inventing protocol.
 final class ServiceFilter {
   const ServiceFilter({
-    this.name = '*',
-    this.protocol = '*',
-    this.transport = '*',
-    this.owner = '*',
+    this.name = anyValue,
+    this.protocol = anyValue,
+    this.transport = anyValue,
+    this.owner = anyValue,
   });
+
+  /// The wire's "any" — `registrar.py:331 services_share()` takes five of these.
+  /// Named because it appears in three places here and in every share request;
+  /// a bare `'*'` is a protocol token wearing a string literal's clothes.
+  static const anyValue = '*';
 
   final String name;
   final String protocol;
@@ -106,5 +111,5 @@ final class ServiceFilter {
       _match(owner, service.owner);
 
   static bool _match(String pattern, String value) =>
-      pattern == '*' || pattern == value;
+      pattern == anyValue || pattern == value;
 }

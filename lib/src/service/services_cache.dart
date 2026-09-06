@@ -154,11 +154,11 @@ class ServicesCache {
     // everything and filtering locally is what `ServiceFilter` is for.
     _process.bus.send(registrar.topicIn, 'share', <Object?>[
       shareTopic,
-      '*',
-      '*',
-      '*',
-      '*',
-      '*',
+      ServiceFilter.anyValue,
+      ServiceFilter.anyValue,
+      ServiceFilter.anyValue,
+      ServiceFilter.anyValue,
+      ServiceFilter.anyValue,
     ]);
     _state = ServicesCacheState.share;
   }
