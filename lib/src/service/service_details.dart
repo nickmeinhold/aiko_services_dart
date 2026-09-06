@@ -41,20 +41,21 @@ final class ServiceDetails {
     } on FormatException {
       return null;
     }
+    // An empty tag list parses as the empty list; a single tag still arrives
+    // inside parentheses, so a bare String here is a malformed record. Partially
+    // accepting one — keeping the strings and dropping the rest — is the wrong
+    // posture for a parser whose every other arm fails closed, and `hasShare` is
+    // read from these tags to decide whether to send a share request.
+    if (tags is! List<Object?> || tags.any((t) => t is! String)) return null;
+    final tagList = List<String>.unmodifiable(tags.cast<String>());
+
     return ServiceDetails(
       topicPath: topicPath,
       name: name,
       protocol: protocol,
       transport: transport,
       owner: owner,
-      // An empty tag list parses as the empty list; a single tag still arrives
-      // inside parentheses, so a bare String here would be a malformed record.
-      tags: switch (tags) {
-        final List<Object?> items => List<String>.unmodifiable(
-          items.whereType<String>(),
-        ),
-        _ => const <String>[],
-      },
+      tags: tagList,
     );
   }
 

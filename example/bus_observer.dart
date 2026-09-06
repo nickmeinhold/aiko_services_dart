@@ -37,10 +37,15 @@ Future<void> main(List<String> arguments) async {
   _log('registrar found at ${process.registrar}');
 
   final roster = ServicesCache(process);
-  roster.attach();
-
   final observer = _ChannelListObserver(process, options.serviceName);
+  // Listen BEFORE attaching. `changes` is a broadcast stream, which drops every
+  // event that arrives with no listener — so subscribing after `attach()` makes
+  // correctness depend on the reply not arriving within the same synchronous
+  // block. That happens to hold over MQTT today and is a property of delivery
+  // latency, not of this code. `_attach()` below already gets this order right
+  // for the consumer's own stream; this is the same hazard six lines up.
   roster.changes.listen(observer.onServiceChange);
+  roster.attach();
 
   // A clean leave is a verb we owe evidence for, so it gets a real path rather
   // than process death: cancel the share lease, drop the subscriptions, then
@@ -69,7 +74,7 @@ class _ChannelListObserver {
 
   void onServiceChange(ServiceChange change) {
     switch (change) {
-      case ServicesSynced():
+      case ServicesLoaded():
         _log('roster loaded');
         // Absence must be stated. A silent observer is indistinguishable from
         // one that is still starting up, and "no output" is exactly what a
@@ -77,6 +82,8 @@ class _ChannelListObserver {
         if (_consumer == null) {
           _log('$_serviceName not present on this island — waiting for it');
         }
+      case ServicesReady():
+        _log('roster confirmed by the registrar');
       case ServiceAdded(:final service) when service.name == _serviceName:
         // A re-add without an intervening remove is not ruled out by the
         // protocol, so attaching is idempotent by detaching first — otherwise

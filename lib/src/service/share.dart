@@ -224,6 +224,13 @@ class Share {
     _ => true,
   };
 
+  /// Drops every item, leaving the tree usable but empty.
+  ///
+  /// End-of-life for a replica: `share.py:534` empties an ECConsumer's cache on
+  /// `terminate()` so a retained reference cannot serve state the consumer is no
+  /// longer maintaining.
+  void clear() => _tree.clear();
+
   /// Seeds a nested node. Only the framework may create intermediate levels.
   void seedNode(String key) => _tree[key] = <String, Object?>{};
 

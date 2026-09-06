@@ -42,8 +42,23 @@ final class const ServiceAdded(final ServiceDetails service)
 final class const ServiceRemoved(final ServiceDetails service)
     extends ServiceChange;
 
-/// The registrar has confirmed the snapshot is coherent.
-final class const ServicesSynced() extends ServiceChange;
+/// The snapshot is complete and readable — [ServicesCacheState.loaded].
+///
+/// NOT the sync barrier, despite the reference calling this moment `sync`
+/// (`share.py:810`, where `_update_handlers("sync")` fires at loaded). The
+/// BEHAVIOUR is parity; the NAME was ours, and a `ServicesSynced` firing one
+/// state before `ready` contradicted this file's own state documentation. A type
+/// name that lies is worse than no type.
+final class const ServicesLoaded() extends ServiceChange;
+
+/// The registrar has confirmed on its own `/out` topic that nothing raced the
+/// snapshot — [ServicesCacheState.ready].
+///
+/// The reference reaches this state and emits nothing (`share.py:816-818` sets
+/// `ready` with no handler call), leaving a subscriber to poll a getter.
+/// Emitting it is a deliberate, additive divergence: the state is public, so the
+/// transition should be observable.
+final class const ServicesReady() extends ServiceChange;
 
 /// Mirrors the registrar's service roster.
 class ServicesCache {
@@ -174,7 +189,7 @@ class ServicesCache {
     if (_itemCount == 0) {
       _itemCount = null;
       _state = ServicesCacheState.loaded;
-      _emit(const ServicesSynced());
+      _emit(const ServicesLoaded());
       for (final service in _services.values.toList()) {
         _emit(ServiceAdded(service));
       }
@@ -192,6 +207,7 @@ class ServicesCache {
         // this cache to ready on somebody else's snapshot.
         if (topic == shareTopic && _state == ServicesCacheState.loaded) {
           _state = ServicesCacheState.ready;
+          _emit(const ServicesReady());
         }
       case ('add', _) when parameters.length == 6:
         final service = ServiceDetails.tryParse(parameters);

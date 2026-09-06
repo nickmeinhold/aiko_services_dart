@@ -34,9 +34,21 @@ class BusProcess {
   }) : // `process.py:100`. A `/` in either segment would silently re-shape the
        // four-segment path into something longer, so a hostname is taken only
        // for its first label — which is also what a container reports.
-       host = _sanitise(host ?? Platform.localHostname),
+       // `Platform.localHostname` throws on a platform that cannot answer, and
+       // it is the one line here that touches the OS. A host segment only has to
+       // be stable and slash-free, so a failure degrades to something legible in
+       // a topic rather than failing construction with an opaque trace.
+       host = _sanitise(host ?? _localHostnameOr('unknown-host')),
        processId = processId ?? pid,
        bus = bus ?? AikoClient(host: brokerHost, port: brokerPort);
+
+  static String _localHostnameOr(String fallback) {
+    try {
+      return Platform.localHostname;
+    } on Object {
+      return fallback;
+    }
+  }
 
   static String _sanitise(String host) =>
       host.split('.').first.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
@@ -89,8 +101,17 @@ class BusProcess {
 
   Future<void> _awaitRegistrar() {
     if (_state.isConnected(ConnectionState.registrar)) return Future.value();
+    // `orElse` is load-bearing, not defensive padding: `firstWhere` on a stream
+    // that CLOSES without a match throws StateError, and `disconnect()` closes
+    // this stream unconditionally. So giving up on an island whose registrar is
+    // down — the exact state the doc above says it is legitimate to wait in —
+    // would complete this future with an exception the caller has no reason to
+    // be catching. Waiting ends quietly when we stop waiting.
     return states
-        .firstWhere((s) => s.isConnected(ConnectionState.registrar))
+        .firstWhere(
+          (s) => s.isConnected(ConnectionState.registrar),
+          orElse: () => ConnectionState.none,
+        )
         .then((_) {});
   }
 

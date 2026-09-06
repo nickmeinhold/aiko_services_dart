@@ -129,11 +129,14 @@ void main() {
 
       expect(cache.state, ServicesCacheState.loaded);
       expect(cache.services.map((s) => s.name), ['registrar', 'chat_server']);
-      expect(changes.first, isA<ServicesSynced>());
+      expect(changes.first, isA<ServicesLoaded>());
       expect(changes.whereType<ServiceAdded>().length, 2);
 
       await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
       expect(cache.state, ServicesCacheState.ready);
+      // The reference reaches ready and emits nothing, leaving a subscriber to
+      // poll. The state is public, so the transition is observable here.
+      expect(changes.last, isA<ServicesReady>());
     });
 
     // The registrar answers EVERY consumer on one `/out` topic. An unfiltered
@@ -146,10 +149,13 @@ void main() {
       await bus.deliver(cache.shareTopic, 'add', _chatRecord);
       expect(cache.state, ServicesCacheState.loaded);
 
+      final changes = <ServiceChange>[];
+      cache.changes.listen(changes.add);
       await bus.deliver('$_registrar/out', 'sync', [
         'aiko/somebody/else/0/registrar_share',
       ]);
       expect(cache.state, ServicesCacheState.loaded);
+      expect(changes.whereType<ServicesReady>(), isEmpty);
 
       await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
       expect(cache.state, ServicesCacheState.ready);

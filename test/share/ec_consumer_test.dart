@@ -114,6 +114,40 @@ void main() {
     },
   );
 
+  // Zero equals zero immediately. The reference checks completion only inside
+  // its `add` arm, so an empty share never becomes ready there — but a filter
+  // that legitimately matches nothing must be distinguishable from a producer
+  // that never answered, and `cacheState` is a local accessor rather than a wire
+  // behaviour, so reproducing that gap would be copying, not parity.
+  test(
+    'an empty snapshot is ready, not indistinguishable from silence',
+    () async {
+      consumer.attach();
+      await bus.deliver(consumer.topicShareIn, 'item_count', ['0']);
+      expect(consumer.cacheState, CacheState.ready);
+      expect(consumer.replica.snapshot(), isEmpty);
+    },
+  );
+
+  test('a non-positive lease is refused at construction', () {
+    for (final bad in [Duration.zero, const Duration(seconds: -1)]) {
+      expect(
+        () => ECConsumer(
+          router,
+          bus,
+          consumerPath: _consumerPath,
+          consumerId: 1,
+          producerControlTopic: _producerControl,
+          leaseTime: bad,
+        ),
+        throwsArgumentError,
+        reason:
+            '$bad would make the renewal timer spin against a remote '
+            'service, and zero is the cancellation form',
+      );
+    }
+  });
+
   test('update and remove move the replica after the snapshot', () async {
     consumer.attach();
     await bus.deliver(consumer.topicShareIn, 'item_count', ['1']);

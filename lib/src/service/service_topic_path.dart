@@ -33,6 +33,19 @@ final class ServiceTopicPath {
         'got "$wire"',
       );
     }
+    // `+` and `#` are MQTT subscription wildcards, not name characters. A path
+    // carrying one is not merely odd — it changes what a derived topic MEANS:
+    // `aiko/+/1/1` composes to a subscription matching every host's `/out`. This
+    // value arrives from the registrar's retained announcement and from service
+    // records, both world-writable on ADR-023's unauthenticated bus. The comment
+    // above already promised a malformed path fails before it can compose into a
+    // subscription to something unintended; without this it only promised it.
+    if (parts.any((p) => p.contains('+') || p.contains('#'))) {
+      throw FormatException(
+        'a service topic path may not contain the MQTT wildcards + or #, '
+        'got "$wire"',
+      );
+    }
     return ServiceTopicPath(parts[0], parts[1], parts[2], parts[3]);
   }
 

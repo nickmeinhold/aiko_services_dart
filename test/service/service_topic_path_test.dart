@@ -34,6 +34,26 @@ void main() {
       }
     });
 
+    // `+` and `#` are MQTT subscription wildcards, not name characters — a path
+    // carrying one changes what a DERIVED topic means. `aiko/+/1/1` composes to
+    // a subscription matching every host's `/out`, and this value arrives from
+    // world-writable topics on an unauthenticated bus.
+    test('rejects MQTT wildcards, which change what a derived topic means', () {
+      for (final wire in [
+        'aiko/+/1/1',
+        'aiko/h/#/1',
+        'aiko/h/1/+',
+        '+/h/1/1',
+        'aiko/ho+st/1/1',
+      ]) {
+        expect(
+          () => ServiceTopicPath.parse(wire),
+          throwsFormatException,
+          reason: '"$wire" would compose into a wildcard subscription',
+        );
+      }
+    });
+
     test('equality is by path, so it can key a roster', () {
       expect(
         ServiceTopicPath.parse('aiko/h/1/2'),

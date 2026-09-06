@@ -54,7 +54,21 @@ class ECConsumer {
        // topics without needing a broker-side allocator.
        topicShareIn =
            '${consumerPath.path}/$producerControlTopic/$consumerId/in',
-       replica = Share.replicaOf(producerControlTopic);
+       replica = Share.replicaOf(producerControlTopic) {
+    // A non-positive lease would make `Timer.periodic` fire every event-loop
+    // turn, republishing to a REMOTE service's control topic without pause — an
+    // accidental flood from a class whose whole premise is being pointed at
+    // somebody else's island. It is also self-contradictory: zero is the CANCEL
+    // form (`terminate()` sends exactly that), so a zero lease would construct a
+    // consumer that continuously cancels a subscription it never took.
+    if (leaseTime <= Duration.zero) {
+      throw ArgumentError.value(
+        leaseTime,
+        'leaseTime',
+        'must be positive; zero is the lease-cancellation form, not a lease',
+      );
+    }
+  }
 
   final TopicRouter _router;
   final MessageBus _bus;
@@ -146,7 +160,13 @@ class ECConsumer {
         // request once per producer (measured; see docs/notes/).
         _itemCount = count;
         _itemsReceived = 0;
-        _cacheState = CacheState.empty;
+        // Zero equals zero immediately. The reference checks completion only
+        // inside its `add` arm (`share.py:479-480`), so an empty filtered share
+        // never becomes ready there either — but `cacheState` is a LOCAL
+        // accessor, not a wire behaviour, and reproducing a gap no peer can
+        // observe is copying, not parity. A filter that legitimately matches
+        // nothing must be distinguishable from a producer that never answered.
+        _cacheState = count == 0 ? CacheState.ready : CacheState.empty;
       case ShareItemAdded(:final path, :final value):
         replica.applyInbound(ShareAdd(path, value));
         _itemsReceived++;
@@ -176,6 +196,11 @@ class ECConsumer {
     _leaseTimer = null;
     _requestShare(Duration.zero);
     _router.removeHandler(topicShareIn, _onMessage);
+    // `share.py:534`, `self.cache = {}`. This was a straight divergence: the doc
+    // comment above already promised it and the code did not do it, so a caller
+    // holding the consumer after termination could read a full replica through
+    // an `empty` cache state.
+    replica.clear();
     _cacheState = CacheState.empty;
     _itemCount = 0;
     _itemsReceived = 0;

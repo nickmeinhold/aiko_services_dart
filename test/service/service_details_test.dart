@@ -63,6 +63,43 @@ void main() {
     });
   });
 
+  group('malformed tag lists fail closed', () {
+    // `hasShare` is read from these tags to decide whether to send a share
+    // request, and every other arm of this parser fails closed. Partially
+    // accepting a record — keeping the strings and dropping the rest — was the
+    // one place it did not.
+    test('a non-list tags field is a malformed record, not "no tags"', () {
+      expect(
+        ServiceDetails.tryParse([
+          'aiko/h/1/1',
+          'n',
+          'p',
+          'mqtt',
+          'root',
+          'ec=true',
+        ]),
+        isNull,
+      );
+    });
+
+    test('a tag list with a non-string element is rejected whole', () {
+      expect(
+        ServiceDetails.tryParse([
+          'aiko/h/1/1',
+          'n',
+          'p',
+          'mqtt',
+          'root',
+          [
+            'ec=true',
+            <Object?>['nested'],
+          ],
+        ]),
+        isNull,
+      );
+    });
+  });
+
   group('ServiceFilter', () {
     final chat = ServiceDetails.tryParse(_chatServer)!;
 
