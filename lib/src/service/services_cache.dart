@@ -22,6 +22,7 @@ import 'dart:async';
 
 import '../transport/mqtt_transport.dart';
 import 'bus_process.dart';
+import 'connection_state.dart';
 import 'service_details.dart';
 
 /// How much of the registrar's snapshot has landed.
@@ -60,6 +61,7 @@ class ServicesCache {
   int? _itemCount;
   String? _registrarOut;
   bool _attached = false;
+  StreamSubscription<ConnectionState>? _ladder;
 
   ServicesCacheState get state => _state;
 
@@ -71,18 +73,43 @@ class ServicesCache {
   /// Add/remove/sync as they happen.
   Stream<ServiceChange> get changes => _changes.stream;
 
-  /// Subscribes and requests the roster. Requires the registrar to have been
-  /// found; [BusProcess.connect] does not return until it has.
+  /// Starts mirroring, and keeps mirroring across a registrar restart.
+  ///
+  /// Requires the registrar to have been found once; [BusProcess.connect] does
+  /// not return until it has. From then on this follows the connection ladder in
+  /// BOTH directions, as `share.py:719-747` does — the reverse direction being
+  /// the one that is easy to leave out and impossible to see. Without it, a
+  /// registrar restart leaves the roster frozen at whatever it last held: no new
+  /// share request goes out, no error is raised, and every outward sign of
+  /// health persists over a view that stopped tracking the island.
   void attach() {
     if (_attached) return;
-    final registrar = _process.registrar;
-    if (registrar == null) {
+    if (_process.registrar == null) {
       throw StateError(
         'ServicesCache.attach() before the registrar was found; await '
         'BusProcess.connect() first',
       );
     }
     _attached = true;
+    _ladder = _process.states.listen(_onConnectionState);
+    _requestRoster();
+  }
+
+  void _onConnectionState(ConnectionState state) {
+    if (state.isConnected(ConnectionState.registrar)) {
+      // Re-request against whatever the registrar's path is NOW. A restarted
+      // registrar has a new process id, so the topics are not the old ones —
+      // re-subscribing to the remembered pair would listen to a dead address.
+      if (_registrarOut == null) _requestRoster();
+    } else {
+      _releaseRegistrar();
+    }
+  }
+
+  /// Subscribes to the two reply topics and asks for everything.
+  void _requestRoster() {
+    final registrar = _process.registrar;
+    if (registrar == null) return;
     _registrarOut = registrar.topicOut;
     _process.router.addHandler(shareTopic, _onShare);
     _process.router.addHandler(registrar.topicOut, _onRegistrarOut);
@@ -98,6 +125,25 @@ class ServicesCache {
       '*',
     ]);
     _state = ServicesCacheState.share;
+  }
+
+  /// Drops everything that was true only while that registrar was alive.
+  ///
+  /// The roster is cleared rather than kept: it describes an island as one
+  /// registrar saw it, and a registrar we can no longer reach is not a source
+  /// we can still cite. No [ServiceRemoved] is emitted, matching
+  /// `share.py:747 _cache_reset()` — a registrar blinking is not a statement
+  /// that its services died, and the fresh snapshot on reconnection re-emits
+  /// every [ServiceAdded] anyway.
+  void _releaseRegistrar() {
+    final out = _registrarOut;
+    if (out == null) return;
+    _process.router.removeHandler(shareTopic, _onShare);
+    _process.router.removeHandler(out, _onRegistrarOut);
+    _registrarOut = null;
+    _services.clear();
+    _itemCount = null;
+    _state = ServicesCacheState.empty;
   }
 
   static List<Object?> _positional(AikoMessage message) =>
@@ -167,13 +213,9 @@ class ServicesCache {
   Future<void> terminate() async {
     if (!_attached) return;
     _attached = false;
-    _process.router.removeHandler(shareTopic, _onShare);
-    final out = _registrarOut;
-    if (out != null) {
-      _process.router.removeHandler(out, _onRegistrarOut);
-    }
-    _services.clear();
-    _state = ServicesCacheState.empty;
+    await _ladder?.cancel();
+    _ladder = null;
+    _releaseRegistrar();
     await _changes.close();
   }
 }

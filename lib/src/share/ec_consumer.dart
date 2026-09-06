@@ -84,6 +84,7 @@ class ECConsumer {
   int _itemsReceived = 0;
   CacheState _cacheState = CacheState.empty;
   bool _attached = false;
+  bool _terminated = false;
 
   /// Every classified event, in arrival order. A caller that only wants the
   /// settled state should read [replica] once [cacheState] is ready instead.
@@ -101,6 +102,16 @@ class ECConsumer {
   /// which makes the reset total instead of partial.
   void attach() {
     if (_attached) return;
+    if (_terminated) {
+      // A terminated consumer has closed its event stream, so re-attaching
+      // would subscribe, mirror, and emit nothing — working perfectly and
+      // reporting silence. One producer instance, one consumer: build a new
+      // one, which is what a rebind means anyway.
+      throw StateError(
+        'ECConsumer.attach() after terminate(); construct a new consumer for '
+        'the new producer instance',
+      );
+    }
     _attached = true;
     _router.addHandler(topicShareIn, _onMessage);
     _requestShare(leaseTime);
@@ -160,6 +171,7 @@ class ECConsumer {
   Future<void> terminate() async {
     if (!_attached) return;
     _attached = false;
+    _terminated = true;
     _leaseTimer?.cancel();
     _leaseTimer = null;
     _requestShare(Duration.zero);

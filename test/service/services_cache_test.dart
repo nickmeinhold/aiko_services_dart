@@ -206,6 +206,67 @@ void main() {
       expect(cache.findFirst(const ServiceFilter(name: 'nope')), isNull);
     });
 
+    // `share.py:719-747` drives this cache from the connection ladder in BOTH
+    // directions. The reverse direction is the one that is easy to leave out and
+    // impossible to see: without it a registrar restart leaves the roster frozen
+    // at whatever it last held, no new share request goes out, and every outward
+    // sign of health persists over a view that stopped tracking the island.
+    group('across a registrar restart', () {
+      setUp(() async {
+        cache.attach();
+        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+        expect(cache.state, ServicesCacheState.loaded);
+      });
+
+      test(
+        'losing the registrar clears the roster rather than freezing it',
+        () async {
+          await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
+          expect(cache.services, isEmpty);
+          expect(cache.state, ServicesCacheState.empty);
+          expect(
+            bus.unsubscribed,
+            containsAll([cache.shareTopic, '$_registrar/out']),
+          );
+        },
+      );
+
+      test(
+        'a stale message from the old registrar is no longer ours',
+        () async {
+          await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
+          await bus.deliver('$_registrar/out', 'add', _chatRecord);
+          expect(cache.services, isEmpty);
+        },
+      );
+
+      test('the registrar returning at a NEW path re-asks the new one', () async {
+        await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
+        bus.sent.clear();
+
+        const reborn = 'aiko/island/44/1';
+        await bus.deliver('aiko/service/registrar', 'primary', [
+          'found',
+          reborn,
+          '2',
+          '9999.0',
+        ]);
+
+        // Addressed to the NEW registrar. A cache that re-used the remembered
+        // topics would be talking to a dead process id and would look, from the
+        // outside, exactly like one that was simply not being told anything.
+        expect(bus.sent.single.topic, '$reborn/in');
+        expect(bus.subscribed, contains('$reborn/out'));
+        expect(cache.state, ServicesCacheState.share);
+
+        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+        expect(cache.state, ServicesCacheState.loaded);
+        expect(cache.services.single.name, 'chat_server');
+      });
+    });
+
     test('terminate drops both subscriptions and empties the roster', () async {
       cache.attach();
       await bus.deliver(cache.shareTopic, 'item_count', ['1']);

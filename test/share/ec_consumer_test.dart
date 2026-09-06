@@ -157,6 +157,18 @@ void main() {
     },
   );
 
+  // A terminated consumer has a closed event stream, so re-attaching would
+  // subscribe, mirror and emit nothing: correct-looking and silent. One producer
+  // instance, one consumer.
+  test(
+    'attach after terminate is refused rather than silently inert',
+    () async {
+      consumer.attach();
+      await consumer.terminate();
+      expect(consumer.attach, throwsStateError);
+    },
+  );
+
   test('terminate before attach does nothing at all', () async {
     await consumer.terminate();
     expect(bus.sent, isEmpty);
