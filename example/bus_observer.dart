@@ -77,6 +77,16 @@ class _ChannelListObserver {
   StreamSubscription<ShareEvent>? _events;
   int _generation = 0;
 
+  /// The target service as the ROSTER reported it, set synchronously.
+  ///
+  /// The absence check cannot read the consumer slot: attaching goes through
+  /// `_serialise`, so the slot is still empty for a turn or two after the roster
+  /// has plainly told us the service is there. That is how "not present" got
+  /// printed on the happy path once already, at `ServicesLoaded`; reading the
+  /// slot at `ServicesReady` would have moved the same bug up one rung rather
+  /// than fixing it.
+  ServiceDetails? _target;
+
   /// Serialises every mutation of the consumer slot.
   ///
   /// `detach()` yields twice — cancelling a subscription and closing a stream —
@@ -110,7 +120,7 @@ class _ChannelListObserver {
         // stated — silence reads as success, and "no output" is also exactly
         // what a broken discover verb looks like.
         _log('roster confirmed by the registrar');
-        if (_consumer == null) {
+        if (_target == null) {
           _log('$_serviceName not present on this island — waiting for it');
         }
       case RosterReleased():
@@ -121,8 +131,10 @@ class _ChannelListObserver {
         // measured), those renewals would bind a live producer to a generation
         // already in the grave.
         _log('registrar gone — releasing the consumer with the roster');
+        _target = null;
         unawaited(_serialise(detach));
       case ServiceAdded(:final service) when service.name == _serviceName:
+        _target = service;
         // A re-add without an intervening remove is not ruled out by the
         // protocol, so attaching is idempotent by detaching first — otherwise
         // the previous consumer's handler and lease leak.
@@ -131,6 +143,7 @@ class _ChannelListObserver {
         _log('service: ${service.name} (${service.topicPath})');
       case ServiceRemoved(:final service) when service.name == _serviceName:
         _log('${service.name} left — waiting for it to come back');
+        _target = null;
         // Deliberately no "channels removed" output: a producer disappearing is
         // a transient absence, not a statement that the channels are gone.
         unawaited(_serialise(detach));

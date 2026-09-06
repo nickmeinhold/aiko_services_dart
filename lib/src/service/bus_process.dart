@@ -112,7 +112,15 @@ class BusProcess {
     // topic, and no signal anywhere that the island stopped answering.
     _transportWatch = bus.transportUp.listen((up) {
       if (up) {
-        _transition(ConnectionState.transport);
+        // CLIMB only. `onConnected` and `onAutoReconnected` both report `up`, and
+        // the retained `(primary found …)` can land between them — so an
+        // unguarded transition writes TRANSPORT over a REGISTRAR that is alive
+        // and, worse, does it WITHOUT clearing `_registrar`. That leaves
+        // `registrar != null` while `isConnected(registrar)` says false: not a
+        // missing rung but a lying one, and the next increment would drink it.
+        if (_state.index < ConnectionState.transport.index) {
+          _transition(ConnectionState.transport);
+        }
       } else {
         _setRegistrar(null);
         _transition(ConnectionState.none);

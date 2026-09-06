@@ -50,7 +50,7 @@ step "format"
 # that measured a live defect — both are source, not scratch. The other spike/
 # directories are separate packages with their own resolution and are excluded for
 # that reason, not because they read untidily.
-FORMAT_DIRS="lib/ test/ tool/ benchmark/ example/ spike/unsubscribe/"
+FORMAT_DIRS="lib/ test/ tool/ benchmark/ example/ spike/unsubscribe/ spike/reconnect/"
 # shellcheck disable=SC2086
 if dart format --output=none --set-exit-if-changed $FORMAT_DIRS; then
   ok "formatted"

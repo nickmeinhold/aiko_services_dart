@@ -130,7 +130,14 @@ void main() {
   );
 
   test('a non-positive lease is refused at construction', () {
-    for (final bad in [Duration.zero, const Duration(seconds: -1)]) {
+    // Sub-second included: the wire carries lease time in SECONDS, so
+    // `Duration(milliseconds: 500)` passes a greater-than-zero check and then
+    // goes out as `0` — the cancel form, on a repeating timer.
+    for (final bad in [
+      Duration.zero,
+      const Duration(seconds: -1),
+      const Duration(milliseconds: 500),
+    ]) {
       expect(
         () => ECConsumer(
           router,

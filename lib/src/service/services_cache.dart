@@ -87,6 +87,7 @@ class ServicesCache {
   final _changes = StreamController<ServiceChange>.broadcast();
 
   ServicesCacheState _state = ServicesCacheState.empty;
+  bool _synced = false;
   int? _itemCount;
   String? _registrarOut;
   bool _attached = false;
@@ -147,6 +148,7 @@ class ServicesCache {
     final registrar = _process.registrar;
     if (registrar == null) return;
     _registrarOut = registrar.topicOut;
+    _synced = false;
     _process.router.addHandler(shareTopic, _onShare);
     _process.router.addHandler(registrar.topicOut, _onRegistrarOut);
     // Five wildcards: name, protocol, transport, owner, tags. The registrar
@@ -179,6 +181,7 @@ class ServicesCache {
     _registrarOut = null;
     _services.clear();
     _itemCount = null;
+    _synced = false;
     _state = ServicesCacheState.empty;
     _emit(const RosterReleased());
   }
@@ -215,6 +218,7 @@ class ServicesCache {
       for (final service in _services.values.toList()) {
         _emit(ServiceAdded(service));
       }
+      _promoteIfReady();
     }
   }
 
@@ -227,9 +231,17 @@ class ServicesCache {
         // Only OUR snapshot's completion counts. The registrar answers every
         // consumer on the same `/out`, so an unfiltered `sync` would promote
         // this cache to ready on somebody else's snapshot.
-        if (topic == shareTopic && _state == ServicesCacheState.loaded) {
-          _state = ServicesCacheState.ready;
-          _emit(const ServicesReady());
+        // LATCHED, because the two halves arrive on two different topics and
+        // MQTT orders per topic, not across them. The registrar publishes the
+        // snapshot to our private share topic and the barrier to its own `/out`;
+        // a `sync` that overtakes the last `(add …)` would, under a
+        // both-conditions-now test, be dropped — leaving the cache at `loaded`
+        // for the rest of its life, `ServicesReady` never firing, and (since the
+        // observer reports absence there) the absent-ChatServer line never
+        // printing. The barrier is a fact about a snapshot, not about an instant.
+        if (topic == shareTopic) {
+          _synced = true;
+          _promoteIfReady();
         }
       case ('add', _) when parameters.length == 6:
         final service = ServiceDetails.tryParse(parameters);
@@ -242,6 +254,14 @@ class ServicesCache {
       default:
         return;
     }
+  }
+
+  /// Ready needs BOTH halves: the snapshot complete, and the registrar's barrier
+  /// seen. Either may arrive first.
+  void _promoteIfReady() {
+    if (_state != ServicesCacheState.loaded || !_synced) return;
+    _state = ServicesCacheState.ready;
+    _emit(const ServicesReady());
   }
 
   void _emit(ServiceChange change) {

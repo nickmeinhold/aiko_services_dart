@@ -100,6 +100,18 @@ void main() {
       },
     );
 
+    // `onConnected` and `onAutoReconnected` both report `up`, and the retained
+    // `(primary found …)` can land between them. An unguarded transition writes
+    // TRANSPORT over a LIVING registrar without clearing it — leaving
+    // `registrar != null` while `isConnected(registrar)` says false. Not a
+    // missing rung: a lying one.
+    test('an up-beat never demotes a living registrar', () async {
+      expect(process.state, ConnectionState.registrar);
+      await bus.setTransport(up: true);
+      expect(process.state, ConnectionState.registrar);
+      expect(process.registrar, isNotNull);
+    });
+
     test('(primary absent) drops one rung, not to none', () async {
       await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
       expect(process.state, ConnectionState.transport);
@@ -154,6 +166,47 @@ void main() {
       // The reference reaches ready and emits nothing, leaving a subscriber to
       // poll. The state is public, so the transition is observable here.
       expect(changes.last, isA<ServicesReady>());
+    });
+
+    // The two halves arrive on two different topics, and MQTT orders per topic,
+    // not across them. A `sync` that overtakes the last `(add …)` must still
+    // count — a both-conditions-now test would drop it and leave the cache at
+    // `loaded` for the rest of its life, with ServicesReady never firing.
+    test('a sync that ARRIVES FIRST still promotes the cache', () async {
+      cache.attach();
+      final changes = <ServiceChange>[];
+      cache.changes.listen(changes.add);
+
+      await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+      expect(
+        cache.state,
+        ServicesCacheState.share,
+        reason: 'nothing loaded yet',
+      );
+
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(cache.state, ServicesCacheState.ready);
+      expect(changes.whereType<ServicesReady>(), isNotEmpty);
+    });
+
+    test('a stale sync does not survive a registrar replacement', () async {
+      cache.attach();
+      await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+      await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
+      await bus.deliver('aiko/service/registrar', 'primary', [
+        'found',
+        _registrar,
+        '2',
+        '1',
+      ]);
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(
+        cache.state,
+        ServicesCacheState.loaded,
+        reason: 'the new registrar has not sent its own barrier yet',
+      );
     });
 
     // The registrar answers EVERY consumer on one `/out` topic. An unfiltered

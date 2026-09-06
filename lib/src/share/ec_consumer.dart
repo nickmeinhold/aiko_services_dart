@@ -61,11 +61,16 @@ class ECConsumer {
     // somebody else's island. It is also self-contradictory: zero is the CANCEL
     // form (`terminate()` sends exactly that), so a zero lease would construct a
     // consumer that continuously cancels a subscription it never took.
-    if (leaseTime <= Duration.zero) {
+    // Whole SECONDS, because that is the unit the wire carries: `_requestShare`
+    // publishes `lease.inSeconds`, so any sub-second duration passes a
+    // greater-than-zero check and then goes out as `0` — the CANCEL form, on a
+    // repeating timer. The 300s default hides it; the type does not.
+    if (leaseTime.inSeconds < 1) {
       throw ArgumentError.value(
         leaseTime,
         'leaseTime',
-        'must be positive; zero is the lease-cancellation form, not a lease',
+        'must be at least one whole second; the wire carries lease time in '
+            'seconds, and zero is the cancellation form, not a lease',
       );
     }
   }
