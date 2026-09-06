@@ -3,6 +3,7 @@
 /// to exactly what the test crosses (the composition spike's one miss was
 /// over-generalizing a local proof — not repeated here).
 library;
+
 import 'dart:isolate';
 
 import 'package:isolate_boundary_spike/boundary.dart';
@@ -46,17 +47,20 @@ void main() {
 
       // increment(5) — a CounterMixin method, reached by name over the wire.
       expect(await call('(increment 5)'), '(count 5)');
-      expect(await call('(increment 3)'), '(count 8)'); // state persists in host
+      expect(
+          await call('(increment 3)'), '(count 8)'); // state persists in host
 
       // greet("world") — a GreeterMixin method on the SAME composed object.
       expect(await call('(greet world)'), '(greeting 11:hello world)');
 
       // describe() — proves the composed object is genuinely one flattened
       // actor (count from CounterMixin, reachable alongside GreeterMixin).
-      expect(await call('(describe)'), '(description 21:CounterActor(count=8))');
+      expect(
+          await call('(describe)'), '(description 21:CounterActor(count=8))');
     });
 
-    test('unknown command yields a diagnostic, not a crash '
+    test(
+        'unknown command yields a diagnostic, not a crash '
         '(mirrors actor.py Message.invoke "Function not found")', () async {
       final call = await spawnActor();
       final result = await call('(nonexistent_method 1)');
@@ -86,7 +90,8 @@ void main() {
   // shared program on the far side. This test DOCUMENTS the real behavior so
   // the finding rests on a run, not a guess. Aiko never relies on this — but
   // knowing it corrects the frame. ────────────────────────────────────────
-  group('P4 Dart CAN deep-copy a composed mixin object across a spawned '
+  group(
+      'P4 Dart CAN deep-copy a composed mixin object across a spawned '
       'isolate (premise correction)', () {
     test('sent object is a copy, and its mixin method runs on the far side',
         () async {

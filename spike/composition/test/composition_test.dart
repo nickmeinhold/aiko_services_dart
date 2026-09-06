@@ -4,7 +4,8 @@ import 'package:test/test.dart';
 void main() {
   group('P1 — multi-interface flatten onto one object (the Category acid test)',
       () {
-    test('Category exposes Actor, Service, Hooks AND Dependency behaviour on '
+    test(
+        'Category exposes Actor, Service, Hooks AND Dependency behaviour on '
         'one shared self', () {
       final c = Category(Context('cat-0'));
 
@@ -53,7 +54,8 @@ void main() {
   });
 
   group('P4-deep — the HyperSpace two-level diamond', () {
-    test('Actor (and Service) initialize exactly once when reached via '
+    test(
+        'Actor (and Service) initialize exactly once when reached via '
         'Category AND directly', () {
       final h = HyperSpace(Context('hs-0'));
       // Category-init cascades to Actor; the constructor also inits Actor
@@ -105,7 +107,8 @@ void main() {
       expect(dependency.isType('Category'), false);
     });
 
-    test('the typed discriminator replaces is_type(String) at nine Python '
+    test(
+        'the typed discriminator replaces is_type(String) at nine Python '
         'call sites', () {
       final entries = <String, DependencyMixin>{
         'a-category': Category(Context('cat-6')),
@@ -114,8 +117,9 @@ void main() {
       };
       // `entry.is_type("Category")` becomes `entry is CategoryMixin`:
       // compile-checked, and it cannot silently answer the wrong question.
-      final categories =
-          entries.entries.where((e) => e.value is CategoryMixin).map((e) => e.key);
+      final categories = entries.entries
+          .where((e) => e.value is CategoryMixin)
+          .map((e) => e.key);
       expect(categories, containsAll(['a-category', 'a-hyperspace']));
       expect(categories, isNot(contains('a-dependency')));
     });

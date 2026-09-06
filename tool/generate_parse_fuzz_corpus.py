@@ -8,7 +8,10 @@ delimiters), plus raw character soup. For each one it records what the
 reference does -- decode to a value, or raise -- so the Dart side can be held
 to the same outcome on inputs nobody curated.
 
-Usage: python3 tool/generate_parse_fuzz_corpus.py OUT.json [COUNT] [SEED]
+Usage: python3 tool/generate_parse_fuzz_corpus.py OUT.json REF_ROOT [COUNT] [SEED]
+
+REF_ROOT is a Python aiko_services checkout, ideally a `git archive` snapshot of
+a pinned ref rather than a live working tree.
 
 Vary SEED before trusting a clean run: a single seed proves one sample, not
 the absence of divergence.
@@ -18,12 +21,25 @@ import os
 import random
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-AIKO = os.path.normpath(os.path.join(HERE, "..", "..", "aiko_services"))
-sys.path.insert(0, os.path.join(AIKO, "src", "aiko_services", "main", "utilities"))
+# Usage: generate_parse_fuzz_corpus.py <out.json> <aiko_services-root> [count] [seed]
+#
+# The reference root is REQUIRED. It used to be derived as ../../aiko_services
+# from this file's own location, a sibling-directory assumption that silently
+# decided which oracle ran. verify.sh meanwhile passed the reference path as
+# argv[3] — the SEED — so every primary invocation died on
+# `int('/Users/.../aiko_services')` and was rescued by a `||` fallback, which
+# means the decoder fuzz only ever ran on the default seed while reporting
+# success.
+if len(sys.argv) < 3:
+    sys.exit("usage: generate_parse_fuzz_corpus.py <out.json> <ref-root> [count] [seed]")
+AIKO = sys.argv[2]
+UTILITIES = os.path.join(AIKO, "src", "aiko_services", "main", "utilities")
+if not os.path.isdir(UTILITIES):
+    sys.exit(f"no src/aiko_services/main/utilities under {AIKO!r} — refusing to guess an oracle")
+sys.path.insert(0, UTILITIES)
 import parser  # noqa: E402
 
-SEED = int(sys.argv[3]) if len(sys.argv) > 3 else 20260825
+SEED = int(sys.argv[4]) if len(sys.argv) > 4 else 20260825
 random.seed(SEED)
 
 ATOMS = ["a", "bc", "5", "0", "log_level", "DEBUG", "x:", "k:", "", "12",
@@ -64,7 +80,9 @@ def payload():
 
 def main():
     out_path = sys.argv[1]
-    count = int(sys.argv[2]) if len(sys.argv) > 2 else 30000
+    count = int(sys.argv[3]) if len(sys.argv) > 3 else 30000
+    if count < 1:
+        sys.exit(f"refusing to build a corpus of {count} cases — a fuzz over nothing is not a fuzz")
     cases, seen = [], set()
     while len(cases) < count:
         p = payload()
@@ -82,13 +100,26 @@ def main():
                 cases.append({"p": p, "errata": "stray_close_paren"})
             else:
                 cases.append({"p": p, "car": car, "cdr": cdr})
-        except Exception as e:  # noqa: BLE001 -- the reference's own outcome
-            cases.append({"p": p, "raises": type(e).__name__})
+        # RecursionError FIRST. It subclasses Exception, so ordered after the
+        # broad handler this arm is unreachable -- and Python does not warn.
+        # The effect was not cosmetic: a recursion case got recorded as
+        # {raises: RecursionError} and the Dart side was then held to an
+        # outcome this generator explicitly means to discard, because how deep
+        # CPython recurses before giving up is an artefact of the interpreter's
+        # stack limit, not a property of the grammar.
         except RecursionError:
             continue
+        except Exception as e:  # noqa: BLE001 -- the reference's own outcome
+            cases.append({"p": p, "raises": type(e).__name__})
     json.dump(cases, open(out_path, "w"))
     ok = sum(1 for c in cases if "raises" not in c)
+    # Cases the rig can actually compare: everything not tagged as reference
+    # errata, which the rig skips before any comparison happens. Declared here
+    # so the floor is a fact from the producer rather than a ratio guessed by
+    # the consumer.
+    comparable = sum(1 for c in cases if "errata" not in c)
     print(f"{len(cases)} cases -> {out_path}  ({ok} decode, {len(cases)-ok} reject)")
+    print(f"COMPARABLE={comparable}")
 
 
 if __name__ == "__main__":
