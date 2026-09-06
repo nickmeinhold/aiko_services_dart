@@ -46,9 +46,16 @@ Three things changed shape in revision 2, and one decision inverted outright:
 
 1. **D2/D5 were seam violations.** `lifecycle` is a live, cross-service, remotely-subscribed wire
    key, and `share` is a depth-2 tree, not a flat map. Both are now inherited contract in §1.
-2. **§2's deadlock has an answer already in the reference**, and it is better than anything the
-   strike proposed. `do_request()` is continuation-style with a caller-nominated response topic
-   handled at *process* level — replies never enter the actor mailbox. We conform (§2.3).
+2. **§2's deadlock has an answer already in the reference**, and its *shape* is better than
+   anything the strike proposed. `do_request()` is continuation-style with a caller-nominated
+   response topic handled at *process* level — replies never enter the actor mailbox. We conform
+   to that shape (ADR-0002 §2.3). **Amended 2026-08-26: we do NOT conform "all the way".**
+   `do_request()` carries **no request identity** — no correlation id, one shared
+   `_RESPONSE_TOPIC`, handlers never removed — and is safe only because all four of its call sites
+   pass `terminate=True`, bounding each process to one in-flight request. It is a one-shot CLI
+   primitive. Our actors are long-lived and will have several requests outstanding, so adding
+   request identity is required, and that is a **wire change belonging to Andy**. See ADR-0002
+   §2.3 for the source reading and the measurement.
 3. **D8 inverted from a pure win to a priced tradeoff.** Deleting paho's network thread also
    deletes the thing that kept MQTT keepalives alive while a handler thought (D8).
 
@@ -80,7 +87,7 @@ this table**. It does not move to accommodate anything here.
 | **share missing path** | **`_ec_modify_item()` with `create_path=False` silently no-ops when an intermediate level is absent. A malformed path is dropped, not reported.** |
 | **framework share keys** | **`lifecycle` (str), `log_level` (str), `running` (bool) at top level. `lifecycle` is read cross-service (`pipeline.py:287` reads *another element's*), branched on (`:949`, `:1032`), and published remotely (`lifecycle.py:265` → `(update lifecycle absent)`).** |
 | subscription | `(share <topic> <lease> *)` or `… (lifecycle x)` on `/control` — **the subscription form names the key, so key names are protocol** |
-| **request/response** | **`discovery.py::do_request()` — caller nominates a `response_topic`, registers a handler at *process* level via `add_message_handler()`, fires `do_command()` and returns immediately. The reply is a multi-part stream: `(item_count N)` then N × `(response …)`.** |
+| **request/response** | **`discovery.py::do_request()` — caller nominates a `response_topic`, registers a handler at *process* level via `add_message_handler()`, fires `do_command()` and returns immediately. The reply is a multi-part stream: `(item_count N)` then N × `(response …)`.** ⚠ **No correlation id**: the reply carries nothing identifying which request it answers, every caller passes the same `aiko.topic_in`, and handlers are never removed. Safe only under `terminate=True` (one request per process). See ADR-0002 §2.3. |
 | **mailbox naming** | **`f"{name}/{service_id}/{topic}"` (`actor.py:248`), bound at registration time in `__init__`** |
 | presence | MQTT **last will** `(absent)`, retained by the broker, published on `{namespace}/{host}/{pid}/0/state` when a process dies ungracefully — a clean `disconnect()` does *not* fire it |
 | broker transport | `tcp` (1883) or **`websockets` (1884, WSS 9884)** — already selectable in the reference via `AIKO_MQTT_TRANSPORT` |
@@ -242,22 +249,26 @@ ATDD: every test below names the condition under which it goes **red**, and the 
 failure rather than observing its absence. Write the ● arms and see them red **before** the
 mechanism exists.
 
+**Namespaced `V…` (value types) as of 2026-08-26.** ADR-0002's concurrency tests are `C…`. The
+split (`1405a56`) left both sets numbered `● 1–5`, and ADR-0002's prose then resolved to *this*
+table — silently, onto real and wrong tests. See ADR-0002 §2.7.
+
 | # | Test | Goes red when |
 |---|---|---|
-| ● 1 | app writes a reserved share key (`lifecycle`/`log_level`/`running`) | accepted, or dropped without report |
-| ● 2 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
-| ● 3 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
-| ● 4 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
-| ● 5 | `share['metrics']` handed out and mutated | the live map escaped |
-| 6 | Python adds an unseen lifecycle string | the sealed view cannot represent it (`unknown`) |
-| 7 | `(update metrics.running 3)` round-trips | dotted-path addressing is not honoured |
-| 8 | `(remove lifecycle)` from a peer on our `/control` | a reserved key is removable |
-| 9 | topic fan-out from one path | any of the five derived topics is wrong |
-| 10 | `ServiceDefinition` exposes `topicPath` or `serviceId` | identity exists before admission (D7) |
-| 11 | two `ServiceDefinition`s named `'counter'` | duplicate names are rejected — `service_id` distinguishes them |
-| ○ 12 | a real Python ECConsumer reads our share snapshot | `lifecycle`/`running` missing or renamed |
+| ● V1 | app writes a reserved share key (`lifecycle`/`log_level`/`running`) | accepted, or dropped without report |
+| ● V2 | inbound `(update log_level junk)` on **our** `/control` | throws, **or** is silently ignored |
+| ● V3 | inbound invalid value on a **peer replica** | we reject it — we must store and warn (D5) |
+| ● V4 | inbound `(update a.b.c 1)` — depth 3 | accepted, or dropped without report |
+| ● V5 | `share['metrics']` handed out and mutated | the live map escaped |
+| V6 | Python adds an unseen lifecycle string | the sealed view cannot represent it (`unknown`) |
+| V7 | `(update metrics.running 3)` round-trips | dotted-path addressing is not honoured |
+| V8 | `(remove lifecycle)` from a peer on our `/control` | a reserved key is removable |
+| V9 | topic fan-out from one path | any of the five derived topics is wrong |
+| V10 | `ServiceDefinition` exposes `topicPath` or `serviceId` | identity exists before admission (D7) |
+| V11 | two `ServiceDefinition`s named `'counter'` | duplicate names are rejected — `service_id` distinguishes them |
+| ○ V12 | a real Python ECConsumer reads our share snapshot | `lifecycle`/`running` missing or renamed |
 
-**○ 12 is blocked on infrastructure** and must not be counted as passing: it needs a live Python
+**○ V12 is blocked on infrastructure** and must not be counted as passing: it needs a live Python
 reference plus a broker, and this repo has **no `.github/workflows/` at all**. It is the only test
 standing between the port and a silent wire regression (`dir-id c0de` — a self-roundtrip proves
 self-consistency, not correctness).

@@ -293,7 +293,7 @@ printf '\n'
 if [ ${#FAILED[@]} -eq 0 ]; then
   printf '\033[32mALL CHECKS PASSED\033[0m\n'
   printf 'Scope: parity with this reference, not correctness. Not covered — a real\n'
-  printf 'Python ECConsumer reading a live Dart share snapshot (ADR-0001 §3 test 12).\n'
+  printf 'Python ECConsumer reading a live Dart share snapshot (ADR-0001 test V12).\n'
   if [ "$ISLAND_RAN" = "0" ]; then
     printf '\033[33mAlso not covered this run: the six-verb island acceptance did not run.\033[0m\n'
   fi

@@ -110,7 +110,7 @@ express the other two reasons, which are the ones that actually require a queue:
 3. **Completion-ordering across `await` points.** Real, necessary, and the cheapest of the three
    to obtain.
 
-### 2.3 Replies: conform to `do_request()`, all the way
+### 2.3 Replies: conform to `do_request()`'s SHAPE — but it has no request identity
 
 All four families found revision 1's reentrancy deadlock: a mailbox that awaits each handler to
 completion, plus replies arriving as messages, wedges any handler that `await`s a reply. Python is
@@ -155,9 +155,114 @@ subtraction removes in one edit: the reply-before-park race, the loopback determ
 and concurrent `ask` semantics, continuation ordering, and the ownership of a parked caller's
 Future. `dir-id 5e1f` — remove the coupling, do not guard the window.
 
-Inherited constraints, not negotiable: reply reassembly is a **process-level** state machine
+Inherited constraints: reply reassembly is a **process-level** state machine
 (`(item_count N)` then N × `(response …)`) with its own timeout, and each `response_topic` is
 **single-use** — a reused topic mixes two requests' replies (`dir-id f7a8`).
+
+#### The single-use constraint is real, and the reference does not satisfy it
+
+*Amended 2026-08-26. Revision 4 recorded the single-use rule as a constraint the reference
+**provides**. It is a constraint the reference **requires and never enforces**, and none of its own
+callers satisfy it.* Read from `discovery.py:217` at `d31ba17`:
+
+- **There is no correlation id anywhere.** The reply payload carries `(item_count N)` and
+  `(response …)` and nothing that identifies *which request* it answers.
+- **`response_topic` is a parameter, and every caller passes the same value** —
+  `_RESPONSE_TOPIC = aiko.topic_in`, the process's own inbound topic. Four call sites:
+  `discovery.py:334`, `process_manager.py:468`, `category.py:178`,
+  `examples/aloha_honua/aloha_honua_3.py:92`.
+- **Handlers are added and never removed.** `do_request` calls `add_message_handler` and never
+  `remove_message_handler` — which exists (`process.py:221`) and is used elsewhere
+  (`share.py:531`, `dashboard.py:712`). A completed request keeps its handler registered.
+- **The accumulator is shared and resettable.** `nonlocal item_count, items_received, response`,
+  and the `item_count` branch sets `items_received = 0; response = []`. A *second* request's
+  `(item_count N)` therefore resets the *first* closure's accumulator mid-flight.
+
+**Measured** against a live broker with two real peer Actors (by the peer Claude session working in
+`aiko_services`; mechanism above verified independently from source here). Two requests issued
+A-then-B, A replying at 4s and B at 0.5s:
+
+```
+t=0.684  HANDLER(to_A_slow) fired  <- [['peer_B:to_B_fast']]     <- B's payload
+t=0.684  HANDLER(to_B_fast) fired  <- [['peer_B:to_B_fast']]
+t=4.783  HANDLER(to_A_slow) fired  <- [['peer_A:to_A_slow']]
+t=4.783  HANDLER(to_B_fast) fired  <- [['peer_A:to_A_slow']]     <- already completed
+```
+
+**Two requests, four firings.** Each handler saw every response; `to_A_slow` fired with B's payload
+before its own peer had replied. Null arm: one request to one peer fires exactly once.
+
+Also measured: a requester torn down with a request in flight exits cleanly, the peer replies into
+a dead topic, and **neither side notices**. A peer that never replies produces no timeout, no
+completion and no cleanup — the handler stays registered for the life of the process.
+
+#### Why this is not a defect report, and what it means for us
+
+**Every one of the four call sites also passes `terminate=True`.** `do_request` fires one request,
+runs the response handler, and terminates the process. Under that usage there is exactly **one
+in-flight request per process lifetime** — so no correlation id is needed, a leaked handler is
+irrelevant, and reusing `aiko.topic_in` is harmless. `do_request` is a **one-shot CLI primitive**,
+and under that usage it is *apparently survivable* — deliberately not "correct". One hypothesis is
+still open and unmeasured: the completion guard is `if items_received == item_count`, and a fresh
+closure has **both at zero**, so a message on `response_topic` matching neither branch and arriving
+before any real reply hits `0 == 0` and fires `response_handler([])` — an empty result, and under
+`terminate=True`, process termination. Since `aiko.topic_in` is where *all* inbound calls arrive,
+any method call on the process while a request is pending may trip it. **CONFIRMED by measurement 2026-08-26**, with the
+null arm, against a copy of `discovery.py` diffed byte-identical to `origin/master`:
+
+```
+NULL ARM   — undisturbed, peer replies at 4s
+  t=4.84  RESPONSE HANDLER FIRED #1 <- [['peer_SLOW:real']]      (one firing, correct)
+INTERFERENCE — one unrelated `(ping 1)` to the response topic at t=2
+  t=2.68  RESPONSE HANDLER FIRED #1 <- []                        (spurious, EMPTY)
+  t=4.83  RESPONSE HANDLER FIRED #2 <- [['peer_SLOW:real']]
+WITH terminate=True (what all four call sites use)
+  t=2.38  RESPONSE HANDLER FIRED #1 <- []
+  --- process exited, code 0 ---                                 (success, empty, before the answer)
+```
+
+**Latent, not live** — and *why* it is latent is the important part. `aiko.topic_in` is
+`<host>/<pid>/`**`0`**`/in`, the **Process** topic. Actor method calls arrive on `/1/in`, `/2/in`,
+… so an Actor in the same process cannot trip it, and the only shipped publisher to `/0/in` is a
+peer replying via `get_service_proxy`, whose payloads are exactly `item_count` and `response`.
+`terminate=True` and a process topic that carries nothing else are **jointly** what keep it
+hidden — the same two properties that make the shared `_RESPONSE_TOPIC` safe.
+
+#### This strengthens the single-use rule into something stronger than revision 4 had it
+
+A `do_request` closure starts at `item_count == items_received == 0`, so it treats **any**
+unrecognised message on its response topic as completion. Therefore:
+
+> **A response topic is not merely single-*use*. It must be private to exactly one request and
+> carry NO other traffic at all, ever.** A per-request topic gives that by construction. **A
+> long-lived actor's inbox never can.**
+
+That is the concrete reason §4.1's upstream question matters, and it cuts both ways: if
+per-request `response_topic` is the intended use, the `0 == 0` guard is harmless-but-undefended;
+if the topic may be shared, it is a live defect. Either way, **a merely *reusable* `do_request` is
+not sufficient for this port** — we need a *private* reply channel per request, which is a
+stronger requirement than "don't overlap two requests".
+
+The error was ours. **"Conform all the way" bound a long-lived actor runtime to the semantics of a
+fire-once-and-exit helper**, and it made §4.1 unanswerable: *"do two replies arrive in request
+order, arrival order or causal order?"* presupposes a correlation the wire does not carry. Three
+temper rounds never caught it because all four families reasoned about ordering for a mechanism
+that has no request identity to order by — the same shared-premise failure as round 1's flat-map
+description of `share` (`dir-id 7c2a`: N rounds from one unverified premise are one premise counted
+N times).
+
+**Amended decision.** We conform to `do_request()`'s **shape** — continuation style, caller-nominated
+response topic, process-level handling, multi-part `(item_count N)` + N × `(response …)`
+reassembly. We do **not** conform to its absence of request identity, because our actors are
+long-lived and will have more than one request in flight.
+
+**Adding request identity is a WIRE change, and the wire is Andy's.** Same class as the
+`lifecycle`/`running` consolidation: a proposal he is likely to welcome, not a pushback. §4.1 is
+therefore **withdrawn, not answered** — it is replaced by an upstream question, and ADR-0002 cannot
+settle continuation ordering until that question has an answer.
+
+**Do not "fix" this locally by picking a per-request topic scheme.** A Dart-side correlation the
+Python side does not read is not interop; it is a second protocol wearing the first one's clothes.
 
 **Handlers should be synchronous wherever possible.** With replies no longer awaited, the remaining
 reasons to `await` inside a handler are local I/O — and each one holds the turn for its duration.
@@ -269,6 +374,114 @@ Priority remains **dequeue ordering, not preemption** — with a stuck handler, 
 recovers the actor, which is why control traffic gets reserved headroom above rather than a
 higher priority.
 
+## 2.7 Acceptance tests — restored, renamespaced, and audited
+
+**These were LOST in the split (`1405a56`), and this document has been citing them ever since.**
+The pre-split ADR-0001 held one table of 18 tests. The split moved §2's *prose* here and kept
+tests 11–18 (the value types) in ADR-0001, renumbered `1–12`. Tests 1–10 — every concurrency
+test, the ones that test *this* document — were **deleted from both**.
+
+Three references here dangled, and two of them dangled **invisibly**:
+
+| this document said | resolved to (ADR-0001) | actually meant |
+|---|---|---|
+| "Test ● 5 goes *green* for that death" (D8) | `share['metrics']` escaped | CPU-bound handler vs keepalive |
+| "Test ● 2 asserts *any byte reaches the broker*" (§2.5) | `(update log_level junk)` | zombie publishes |
+| "whether tests ● 1–5 can be written red-first" (§4.6) | — | **nothing; the table was gone** |
+
+A reviewer following "Test ● 2" landed on a real, plausible, wrong test in a sibling document.
+`dir-id f7a8` — a label reused as a stable key silently collides.
+
+**Fixed by renamespacing, not by care.** This document's tests are **`C1…C10`** (concurrency);
+ADR-0001's are **`V1…V12`** (value types). The two sets can no longer be confused, and no future
+split can make them ambiguous again. `dir-id 5e1f` — remove the coupling, do not guard the window.
+
+### The tests
+
+**● marks a negative control.** A leak/teardown/liveness suite with no arm that *forces* the bad
+state cannot clear it: if a test reports the same thing whether or not the failure is present, it
+is **void**. The ● arms must be written and seen **red** before their mechanisms exist.
+
+| # | Test | Goes red when |
+|---|---|---|
+| ● C1 | timed-out handler resumes and calls `share.update()` | the write **lands** — the epoch fence is absent or not on the mutator |
+| ● C2 | timed-out handler resumes and calls `publish()` | **any byte reaches the broker** — the zombie-publishes case |
+| ● C3 | value read before `await`, unwrapped after | `.at(deadTurn)` returns instead of throwing |
+| ● C4 | `close()`, then the fenced handler resumes | the zombie is not mute |
+| ● C5 | *(void as written — see the audit)* | — |
+| C6 | *(stale — see the audit)* | — |
+| C7 | `Timer` (D4) fires **during a handler's `await`** and touches state | the Timer **executes** instead of enqueuing |
+| C8 | mailbox full; a shutdown message arrives | shutdown is dropped — reserved headroom absent |
+| C9 | mailbox full; a reply continuation arrives | the continuation is dropped, orphaning begun work |
+| C10 | delayed messages with out-of-order deadlines | the reference's drain-everything bug is ported |
+
+### The audit — §4.6 answered
+
+§4.6 asked whether C1–C5 can be written red-first. **Five can, in some form; two cannot as
+written, and one has a precondition that was already documented and is easy to violate.**
+
+**C1, C3, C4, C8, C10 — writable red-first.** C1's failure is not hypothetical: §1 F2 *is* the
+rig. A timed-out handler demonstrably resumes and mutates state 200ms after the caller gave up,
+so removing the fence produces the red arm directly. C3 is the `Reading<T>` epoch check, already
+prototyped on 3.13 with both a compile-time and a runtime control.
+
+**C2 — writable ONLY against a recording loopback.** §4 already warns that
+`AikoRuntime.inMemory()` must not copy the reference's `Castaway` Null Object, because Castaway
+silently drops every publish. A test asserting *"no byte reached the broker"* passes **trivially**
+against a dropper. This is the void-instrument trap and the document already knew it; it is
+restated here as a **precondition of C2**, not a note elsewhere.
+
+**C5 — VOID AS WRITTEN. It goes green for the death it exists to detect.** It was
+*"CPU-bound handler longer than the keepalive interval → red when the broker fires our LWT."*
+D8's round-3 consequence is that once the transport is on its own isolate, a **dead** actor also
+never fires the LWT, because the transport keeps pinging over the corpse (§1 F3: a dead isolate's
+`SendPort` accepts sends silently forever, and the parent is told nothing). So C5 is satisfied by
+a runtime that never fails over **anything** — including a genuinely dead one. It must be **split
+in two**, and neither half is optional:
+
+- **C5a** *(busy is not dead)* — CPU-bound handler exceeds the keepalive interval → **red if the
+  LWT fires.**
+- **C5b** *(dead IS dead)* — the actor isolate is killed outright → **red if the LWT does NOT
+  fire within the liveness-proof deadline.** The deadline now has a **measured** benchmark to beat:
+  the reference takes **60–90 seconds** to notice a frozen-but-socket-alive process (D8; two
+  measurements, 86 s and 71 s, bracketing a 1.5 × keepalive ceiling). A liveness
+  proof whose deadline is not far below that buys nothing, so C5b's threshold is a real number and
+  not a placeholder.
+
+Without C5b, C5a is passed by disconnecting the LWT entirely. **This is the same defect the
+tests exist to catch, sitting in the test.**
+
+Both are **○-class**: they need a real broker and real keepalive timing, so they are blocked on
+the same infrastructure as ADR-0001's `○ V12` and **must not be counted as passing** until it
+exists.
+
+**C6 — STALE. Its red condition names a mechanism that was deleted.** It read *"`ask` during a
+long peer delay, other messages queued behind → red when the mailbox does not drain — **parking is
+absent**."* Parking is dead (§5). The test asserts the presence of a mechanism this document now
+forbids, so as written it must **always** be red. Rewriting it needs the continuation-ordering
+answer, which is **withdrawn and blocked upstream** (§2.3, §4.1) — so C6 stays empty and named,
+rather than quietly deleted.
+
+**C7 — needs an F1 qualification, or it cannot construct its own condition.** It read *"`Timer`
+fires **mid-handler**"*. §1 F1: during a **synchronous** slice **no `Timer` fires at all**. So
+against a synchronous handler the Timer cannot fire mid-handler, the condition never occurs, and
+the test passes for the wrong reason. "Mid-handler" is only constructible **during an `await`**,
+and C7 now says so.
+
+**C9 — partially blocked upstream.** "A reply continuation arrives" presupposes knowing *which*
+request a reply belongs to. Per §2.3 the wire carries no request identity, so C9 is writable for
+a **single** in-flight request and not for the concurrent case it is really about.
+
+### What this says about the document
+
+§4.6 asked *"can these tests be written red-first?"*. The honest answer is that **the question
+could not be executed as asked, because the tests were not there** — and of the eight that
+survive scrutiny, one was void, one was stale, and one could not construct its own precondition.
+
+**No strike should be scheduled against this document until C5a/C5b, C6 and C7 are settled.** An
+adversarial round grades a design against its acceptance criteria; three cross-family rounds
+already read "Test ● 2" and "Test ● 5" and agreed with sentences pointing at nothing.
+
 ## 3. Decisions held here
 
 ### D4 — Delayed messages honour their deadlines
@@ -334,11 +547,120 @@ failure-linked by default** (**measured: §1, F3** — a corpse's `SendPort` acc
 forever and the parent receives neither error nor exit signal unless both ports were requested at
 `spawn`), so if the actor isolate wedges — or *dies* — the transport isolate
 keeps pinging, the broker withholds the last will, and **the fleet never fails over a corpse whose
-heart still beats on the other side of the port.** Test ● 5 goes *green* for that death.
+heart still beats on the other side of the port.** Test **C5** goes *green* for that death — which
+is why §2.7 splits it into C5a/C5b.
 The LWT is our only liveness signal, and D8 has just decoupled it from the organ whose liveness it
 reports. **The actor isolate must periodically prove it is serving; if that proof lapses, the
 transport isolate stops pinging and lets `(absent)` fire.** Health must be pinned to the terminal
 observable, not to the nearest green thing one hop before it.
+
+#### D8's hole, measured: **60–90 seconds** — and the LWT is per-PROCESS, not per-Actor
+
+*Added 2026-08-26. Measured by the peer Claude session in `aiko_services` against a live broker,
+Registrar, victim and peer, with `mosquitto_sub` capturing the raw wire as an independent
+instrument. Every source claim below verified here at `d31ba17`.*
+
+**The structural finding changes the shape of the answer.** `process.py:101-104`:
+
+```python
+topic_path = f"{topic_path_process}/0"      # service id 0 IS the Process
+topic_lwt  = f"{topic_path}/state"
+```
+
+The last will is registered **per-Process, on service id 0**, hardcoded. Actors get other ids via
+`get_topic_path(service_id)`. So:
+
+- **There is no per-Actor liveness signal anywhere.** An observer watching an Actor's
+  `.../1/state` sees nothing, ever — the signal was always on `.../0/state`.
+- **N Actors in one Process die as one indistinguishable unit.** The OS process is the only fault
+  boundary, now with wire evidence rather than source reading.
+
+**The corpse case, measured directly.** `SIGSTOP` freezes the app while the kernel holds the TCP
+socket `ESTABLISHED` — D8's scenario exactly:
+
+```
+20:56:31  SIGSTOP                          process TN, socket ESTABLISHED
+20:57:57  aiko/…/20050/0/state (absent)    ← +86 seconds
+```
+
+**Reproduced independently, 2026-09-06, and the number is a BAND rather than a
+constant.** Against the local island rig (`tool/island-rig/`), freezing the
+ChatServer's container with `docker pause` — the cgroup freezer, so the app stops
+while the kernel keeps the socket `ESTABLISHED`, D8's scenario — and watching
+`aiko/+/+/0/state`:
+
+```
+14:07:50  docker pause aiko-chat-1
+14:09:01  aiko/4b4281a12660/8/0/state (absent)   ← +71 seconds
+          mosquitto: "Client … disconnected: exceeded timeout."
+```
+
+**86 s and 71 s are the same finding at two phases, not a disagreement.** The
+window is set by MQTT's 1.5 × `keepalive` with `keepalive=60` (`mqtt.py:130`),
+so the ceiling is 90 s and the observed value depends on where in the keepalive
+cycle the freeze lands. One run is an observation; two bracket a band. **Quote
+the band and the mechanism, never the single number** — an earlier revision of
+this section said "86 seconds, measured" and the figure had no artifact in any
+repository, only a session note.
+
+**And the per-PROCESS claim above was confirmed the hard way.** The reproduction
+first watched the ChatServer's own `…/8/1/state` and saw *nothing* for 203
+seconds, because there is no per-Actor liveness signal — exactly what this
+section says, and a reminder that the instrument has to be pointed at `/0/`.
+
+**For a minute or more the Actor stays registered, discoverable, returned by
+`do_discovery`, and accepting pings into a frozen process. No peer can tell.**
+
+> **So D8's liveness proof is not belt-and-braces. It is the only thing that
+> closes a minute-plus hole.** Any fleet that must fail over faster than ~90 s
+> for anything short of outright process death gets nothing from the reference,
+> and an application-level heartbeat is mandatory.
+
+By contrast, **process death is fast and for an uninteresting reason**: on both clean `terminate()`
+and `SIGKILL` the LWT fires in under a second — because the OS closes the socket, not because
+anything detected anything. `keepalive` is irrelevant when the socket closes.
+
+**Two consequences we would otherwise have got wrong.**
+
+**(a) A graceful disconnect would DELETE the only death signal.** `terminate()` calls only
+`event.terminate()` — no deregistration, no farewell publish — and the process exits *without*
+sending an MQTT DISCONNECT, which is precisely why the broker fires the will. `mqtt.py:143` is
+explicit: `disconnect()  # Note: Does not cause LWT to be sent`. Adding a "proper" graceful
+shutdown path to the Dart port would **suppress** the death notification. This is a landmine
+labelled as an improvement.
+
+**(b) Liveness routes through the Registrar, not from the dying Actor.** Nothing reaches a peer
+from the corpse. The peer learns because it is subscribed to the Registrar's `/out`, which
+publishes `(remove <topic>)` ~0.3s after the LWT. **No Registrar means no death notification
+regardless of the LWT.** That dependency is inherited and must be stated wherever D8's liveness
+proof is specified.
+
+#### The silent proxy — architectural, not a Dart regression, and it hands us a free win
+
+14+ `proxy.ping(n)` calls after confirmed death, every one returning normally with no error.
+`_make_service_proxy` closes over `aiko.message.publish(...)` with no error path; the publishes
+land on a topic with zero subscribers and the broker discards them.
+
+This is the exact analogue of §1 F3's silent `SendPort`. **Both runtimes fail the same way, so
+this is a property of the architecture and D8 is the right shape rather than a Dart-specific
+patch.** We are not inheriting a regression.
+
+But the sharpest detail is an opportunity, not a warning:
+
+> **The same process had already fired `remove_handler` for that Actor at t=7.9s, and went on
+> calling the proxy at t=8, 9, 10…** The liveness information was *in the process*. The proxy does
+> not consult it.
+
+That is an **unconsulted** signal, not a missing one. A Dart proxy can consult the Registrar state
+the runtime already holds and fail loudly on a known-dead target — **no wire change, no upstream
+dependency, strictly better than the reference.** Recorded here rather than built: it belongs with
+D8's liveness specification.
+
+**Scope of the measurement, honestly.** Single host, localhost, one broker, one Registrar.
+`SIGSTOP` models a *frozen application with a live socket*. A true network partition also stops
+kernel ACKs, so TCP retransmission timers could interact and that case is **not measured**. The
+60–90 s band is "frozen app, socket alive" and must not be quoted as a partition-detection time.
+
 
 **(2) The `SendPort` is an unbounded queue in FRONT of the bounded mailbox.** **Measured: §1, F4** —
 400,000 messages into a paused consumer in 478ms, +345MB RSS, zero drained, producer never blocked. §2.6's carefully
@@ -356,7 +678,7 @@ outbound flush during `close()`.
 
 **The publish fence sites in the MAIN isolate, before the `SendPort`.** §2.5 suppresses a dead
 epoch's publishes; if that check runs anywhere downstream the bytes are already across the boundary
-and the zombie has published. Test ● 2 asserts *"any byte reaches the broker"*, so the mechanism
+and the zombie has published. Test **C2** asserts *"any byte reaches the broker"*, so the mechanism
 must sit upstream of the hand-off.
 
 **The web has no isolates at all — MEASURED, and the earlier wording was wrong.** Revision 4 said
@@ -396,8 +718,12 @@ split (WebSockets vs raw TCP) is a different axis that stands on its own.
 
 Carried from `0001-TEMPER-round3.md`, none of it folded yet:
 
-1. **Continuation ordering.** Two outstanding `ask`s from one actor: do their replies run in
-   original-turn order, arrival order, or causal order? Unspecified.
+1. ~~**Continuation ordering.**~~ **WITHDRAWN 2026-08-26 — the question was malformed.** It asked
+   whether two outstanding `ask` replies run in original-turn, arrival or causal order. All three
+   presuppose a correlation between request and reply that **the wire does not carry** (§2.3). The
+   reference broadcasts every reply to every registered handler; measured at two requests → four
+   firings, with cross-talk. This is now blocked on an upstream wire proposal to Andy (request
+   identity), not on a decision available to this document.
 2. **`ask` Future/handler completion, exhaustively** — peer timeout, actor close, epoch kill,
    cancellation, mailbox overflow, malformed `item_count` stream, partial response, transport
    loss. Every path must complete exactly once.
@@ -407,7 +733,10 @@ Carried from `0001-TEMPER-round3.md`, none of it folded yet:
    class, the classification point when the queue is already full, starvation rules.
 5. **Isolate failure-linking and credit-based backpressure** (D8), plus per-topic ordering,
    error propagation, reconnect/session state, and outbound flush during close.
-6. **Whether tests ● 1–5 can be written red-first** at all. Test 5 depends on broker LWT timing,
+6. ~~**Whether tests ● 1–5 can be written red-first**~~ **ANSWERED 2026-08-26 in §2.7** — and the
+   question could not be executed as asked, because the tests had been lost in the split. C5 was
+   VOID (green for the death it detects), C6 STALE (its red condition names deleted `parking`), C7
+   could not construct its own condition (F1). Original note follows. Test 5 depends on broker LWT timing,
    keepalive configuration and isolate scheduling; until the boundary is specified it is an
    aspiration, not an acceptance test.
 
