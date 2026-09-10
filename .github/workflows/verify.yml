@@ -1,0 +1,49 @@
+name: verify
+
+# PRs are the artifact under review, and this repo genuinely uses them (#4, #6,
+# #15 all landed as PRs), so this trigger fires. Worth checking rather than
+# assuming: a workflow keyed on an event a repo never emits has never run, and
+# its silence reads as safety.
+#
+# `push: main` is here because a PR-only trigger leaves main itself unverified
+# after the merge — the merge commit is not the commit any check ran against.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `stable`, not a pin. The repo's floor tracks newest-stable by policy, and
+      # `dart format` is language-version-tied — so a format red here means a
+      # contributor's SDK is behind the floor, which is the policy being enforced
+      # rather than a false alarm.
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: dart --version
+        run: dart --version
+
+      # --quick == resolve (root + spike packages), analyze --fatal-infos,
+      # format, root suite, spike suites. It deliberately skips the two
+      # differential fuzz rigs (they need a CPython aiko_services checkout) and
+      # the live-island acceptance (it needs a running broker + Python island).
+      #
+      # A --quick pass is NOT the full gate. The parts it omits are the parts
+      # that can genuinely surprise you: the `\s` divergence was 3604 mismatches
+      # that 63 green golden vectors ran straight past. Those belong to the
+      # nightly, which is the other half of this task.
+      - name: tool/verify.sh --quick
+        run: tool/verify.sh --quick
