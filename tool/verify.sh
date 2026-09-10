@@ -354,6 +354,26 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     3) bad "election probe did not run: no reachable broker, or the island has no primary registrar to stand down to" ;;
     *) bad "primary election against a live broker" ;;
   esac
+
+  # GATE A. The claim increment 2 exists to make, and the only step here that
+  # replaces part of the island rather than observing it. The falsifier is not a
+  # new suite: it is the fourteen-assertion observer acceptance ABOVE, unchanged,
+  # run against an island whose registrar is our Dart process. That reuse is the
+  # point — a suite written alongside the thing it checks tends to check what was
+  # built, and this one was written before the registrar existed.
+  #
+  # It mutates the rig and restores it on every exit path. That is the same class
+  # of mutation the observer suite already performs one step earlier, where it
+  # stops the ChatServer and restarts the BROKER.
+  step "gate A: an island whose registrar is ours"
+  tool/registrar_acceptance.sh
+  GATE_A_RC=$?
+  case "$GATE_A_RC" in
+    0) ok "the island's own acceptance suite passes against a Dart registrar" ;;
+    2) bad "gate A did not run: a harness dependency is missing (the island is up)" ;;
+    3) bad "gate A did not run: no reachable broker, or no registrar container to replace" ;;
+    *) bad "gate A: the island did not accept a Dart registrar" ;;
+  esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'
