@@ -123,4 +123,125 @@ void main() {
       );
     });
   });
+
+  group('ServiceFilter tags', () {
+    // Two tags, so "subset" is distinguishable from "equal".
+    final multi = ServiceDetails.tryParse([
+      'aiko/h/1/1',
+      'svc',
+      'p:0',
+      'mqtt',
+      'root',
+      ['ec=true', 'role=leaf'],
+    ])!;
+    final tagless = ServiceDetails.tryParse([
+      'aiko/h/1/2',
+      'plain',
+      'p:0',
+      'mqtt',
+      'root',
+      <String>[],
+    ])!;
+
+    test('the wildcard ignores tags entirely', () {
+      expect(const ServiceFilter().matches(multi), isTrue);
+      expect(const ServiceFilter().matches(tagless), isTrue);
+    });
+
+    test('required tags are a SUBSET test — extra service tags are fine', () {
+      expect(
+        const ServiceFilter(tags: RequiredTags(['ec=true'])).matches(multi),
+        isTrue,
+      );
+      expect(
+        const ServiceFilter(tags: RequiredTags(['role=leaf', 'ec=true']))
+            .matches(multi),
+        isTrue,
+        reason: 'order is irrelevant',
+      );
+      expect(
+        const ServiceFilter(tags: RequiredTags(['ec=true'])).matches(tagless),
+        isFalse,
+      );
+    });
+
+    test('matching is whole-string: no key-only, no prefix', () {
+      for (final wrong in ['ec', 'ec=t', 'EC=true', 'ec=true ']) {
+        expect(
+          ServiceFilter(tags: RequiredTags([wrong])).matches(multi),
+          isFalse,
+          reason: '"$wrong" must not match "ec=true"',
+        );
+      }
+    });
+
+    // The edge that inverts under the obvious instinct. `[] != "*"` so the
+    // reference ENTERS the tag branch, and `all([])` is true — an empty
+    // required list matches EVERY service, tagless ones included. Writing
+    // `if (required.isEmpty) return false` would be backwards.
+    test('an empty required list matches everything, as `all([])` does', () {
+      expect(
+        const ServiceFilter(tags: RequiredTags([])).matches(multi),
+        isTrue,
+      );
+      expect(
+        const ServiceFilter(tags: RequiredTags([])).matches(tagless),
+        isTrue,
+        reason: 'including a service with no tags at all',
+      );
+    });
+
+    // `*` and `()` agree on every outcome and are still different wire bytes,
+    // which is why this is a sealed pair rather than one field with a magic
+    // member. A List cannot hold `*`; a String cannot hold the list.
+    test('`*` and `()` agree on outcomes but stay distinguishable', () {
+      const wildcard = ServiceFilter();
+      const empty = ServiceFilter(tags: RequiredTags([]));
+      for (final s in [multi, tagless]) {
+        expect(wildcard.matches(s), empty.matches(s));
+      }
+      expect(wildcard.tags, isA<AnyTags>());
+      expect(empty.tags, isA<RequiredTags>());
+    });
+
+    group('tryParseTags reads the wire slot', () {
+      test('the atom `*` is the wildcard', () {
+        expect(ServiceFilter.tryParseTags('*'), isA<AnyTags>());
+      });
+
+      test('a sub-list is a requirement, empty included', () {
+        final one = ServiceFilter.tryParseTags(<Object?>['ec=true']);
+        expect((one! as RequiredTags).required, ['ec=true']);
+        final none = ServiceFilter.tryParseTags(<Object?>[]);
+        expect((none! as RequiredTags).required, isEmpty);
+      });
+
+      // The reference does not refuse a bare atom here: "ec=true" != "*" sends
+      // it into match_tags, which iterates the STRING and tests each CHARACTER
+      // for membership. No conformant sender produces that, so we refuse rather
+      // than reproduce it.
+      test(
+        'a bare non-wildcard atom is refused, not iterated per character',
+        () {
+          expect(ServiceFilter.tryParseTags('ec=true'), isNull);
+        },
+      );
+
+      test('a list containing a non-String is refused', () {
+        expect(ServiceFilter.tryParseTags(<Object?>['ok', 7]), isNull);
+        expect(ServiceFilter.tryParseTags(<Object?>['ok', null]), isNull);
+        expect(
+          ServiceFilter.tryParseTags(<Object?>[
+            <Object?>['nested'],
+          ]),
+          isNull,
+        );
+      });
+
+      test('a map or null is refused', () {
+        expect(ServiceFilter.tryParseTags(null), isNull);
+        expect(ServiceFilter.tryParseTags(<String, Object?>{}), isNull);
+      });
+    });
+  });
 }
