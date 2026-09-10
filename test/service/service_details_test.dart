@@ -150,17 +150,17 @@ void main() {
 
     test('required tags are a SUBSET test — extra service tags are fine', () {
       expect(
-        const ServiceFilter(tags: RequiredTags(['ec=true'])).matches(multi),
+        ServiceFilter(tags: RequiredTags(['ec=true'])).matches(multi),
         isTrue,
       );
       expect(
-        const ServiceFilter(tags: RequiredTags(['role=leaf', 'ec=true']))
+        ServiceFilter(tags: RequiredTags(['role=leaf', 'ec=true']))
             .matches(multi),
         isTrue,
         reason: 'order is irrelevant',
       );
       expect(
-        const ServiceFilter(tags: RequiredTags(['ec=true'])).matches(tagless),
+        ServiceFilter(tags: RequiredTags(['ec=true'])).matches(tagless),
         isFalse,
       );
     });
@@ -180,14 +180,38 @@ void main() {
     // required list matches EVERY service, tagless ones included. Writing
     // `if (required.isEmpty) return false` would be backwards.
     test('an empty required list matches everything, as `all([])` does', () {
+      expect(ServiceFilter(tags: RequiredTags([])).matches(multi), isTrue);
       expect(
-        const ServiceFilter(tags: RequiredTags([])).matches(multi),
-        isTrue,
-      );
-      expect(
-        const ServiceFilter(tags: RequiredTags([])).matches(tagless),
+        ServiceFilter(tags: RequiredTags([])).matches(tagless),
         isTrue,
         reason: 'including a service with no tags at all',
+      );
+    });
+
+    // A filter is consulted repeatedly after construction. Aliasing the
+    // caller's list means a later mutation on their side silently changes what
+    // the filter matches, from somewhere the filter cannot see —
+    // `ServiceDetails.tryParse` already copies for exactly this reason, and the
+    // inconsistency between them was the tell.
+    test('a later mutation of the source list cannot change what matches', () {
+      final source = ['ec=true'];
+      final filter = ServiceFilter(tags: RequiredTags(source));
+      expect(filter.matches(multi), isTrue);
+
+      source.add('absent=yes');
+      expect(
+        filter.matches(multi),
+        isTrue,
+        reason: 'the filter must not have picked up a tag added after the fact',
+      );
+      expect((filter.tags as RequiredTags).required, ['ec=true']);
+    });
+
+    test('the copied list is itself unmodifiable', () {
+      final filter = ServiceFilter(tags: RequiredTags(['ec=true']));
+      expect(
+        () => (filter.tags as RequiredTags).required.add('sneaky'),
+        throwsUnsupportedError,
       );
     });
 
@@ -196,7 +220,7 @@ void main() {
     // member. A List cannot hold `*`; a String cannot hold the list.
     test('`*` and `()` agree on outcomes but stay distinguishable', () {
       const wildcard = ServiceFilter();
-      const empty = ServiceFilter(tags: RequiredTags([]));
+      final empty = ServiceFilter(tags: RequiredTags([]));
       for (final s in [multi, tagless]) {
         expect(wildcard.matches(s), empty.matches(s));
       }

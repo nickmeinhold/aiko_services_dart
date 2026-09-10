@@ -117,7 +117,20 @@ final class AnyTags extends TagConstraint {
 /// write `if (required.isEmpty) return false` inverts the reference. `*` and
 /// `()` reach the same answer by different code paths; only the bytes differ.
 final class RequiredTags extends TagConstraint {
-  const RequiredTags(this.required);
+  /// Copies the list rather than aliasing it.
+  ///
+  /// Deliberately NOT `const`. A filter is a protocol value read off the wire
+  /// and then consulted repeatedly; holding the caller's list means a later
+  /// `add` on their side silently changes what this filter matches, from
+  /// somewhere the filter cannot see. `ServiceDetails.tryParse` six inches
+  /// away already copies for exactly this reason, and the inconsistency
+  /// between them was the tell.
+  ///
+  /// The cost is that a `ServiceFilter` carrying required tags is not a
+  /// constant. [AnyTags] stays `const`, so the common `const ServiceFilter()`
+  /// is unaffected.
+  RequiredTags(Iterable<String> required)
+    : required = List<String>.unmodifiable(required);
 
   final List<String> required;
 }
