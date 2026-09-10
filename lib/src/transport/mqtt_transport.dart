@@ -148,7 +148,19 @@ abstract interface class MessageBus {
   /// event. Aiko retains exactly one thing, `(primary found ...)` on the boot
   /// topic, and retains it precisely so a process joining an hour later learns
   /// who the registrar is without asking anybody.
-  void send(
+  /// Returns whether the payload was handed to the broker.
+  ///
+  /// **False is normal, not exceptional.** `autoReconnect` repairs a dropped
+  /// socket over some window, and a publish attempted inside that window cannot
+  /// go anywhere. paho — which every Python aiko service uses — returns an error
+  /// CODE in that situation and upstream ignores it; `mqtt_client` THROWS. That
+  /// divergence is not in the wire protocol but in the failure mechanics, and
+  /// it is load-bearing: it crashed a live Dart registrar mid-promotion during
+  /// an auto-reconnect, where the Python one would have carried on.
+  ///
+  /// So this reports rather than throws — but it REPORTS, because a publish
+  /// that silently went nowhere is the shape where silence reads as success.
+  bool send(
     String topic,
     String command,
     Object? params, {
@@ -167,7 +179,9 @@ abstract interface class MessageBus {
   /// A predecessor's retained `(primary absent)` is still sitting on the topic,
   /// and a new primary that does not clear it reads its own predecessor's death
   /// as news about itself.
-  void clearRetained(String topic);
+  /// Returns whether the deletion was handed to the broker. See [send] for why
+  /// this is a return value and not an exception.
+  bool clearRetained(String topic);
 
   /// Change what the broker will announce if this process dies.
   ///
@@ -437,17 +451,26 @@ class AikoClient implements MessageBus {
     _mqtt.unsubscribe(topic);
   }
 
+  /// True while the client can actually carry a publish.
+  ///
+  /// `publishMessage` throws unless the state is exactly `connected`, and
+  /// `connecting` is a state `autoReconnect` puts us in without asking. Asking
+  /// first turns a crash into a reportable miss.
+  bool get _publishable =>
+      _client?.connectionStatus?.state == MqttConnectionState.connected;
+
   /// Publish a function call as an Aiko S-expression to [topic].
   ///
   /// [params] is a `List` of positional args or a `Map` of keyword args; `null`
   /// is treated as an empty argument list.
   @override
-  void send(
+  bool send(
     String topic,
     String command,
     Object? params, {
     bool retain = false,
   }) {
+    if (!_publishable) return false;
     final payload = generate(command, params ?? const <Object?>[]);
     final builder = MqttClientPayloadBuilder()..addString(payload);
     _mqtt.publishMessage(
@@ -456,10 +479,12 @@ class AikoClient implements MessageBus {
       builder.payload!,
       retain: retain,
     );
+    return true;
   }
 
   @override
-  void clearRetained(String topic) {
+  bool clearRetained(String topic) {
+    if (!_publishable) return false;
     // An empty builder's payload is a zero-length buffer, which is the exact
     // wire form that DELETES a retained message. Going through `generate` with
     // an empty command would not do it: that produces `()`, two bytes, which
@@ -470,6 +495,7 @@ class AikoClient implements MessageBus {
       MqttClientPayloadBuilder().payload!,
       retain: true,
     );
+    return true;
   }
 
   @override

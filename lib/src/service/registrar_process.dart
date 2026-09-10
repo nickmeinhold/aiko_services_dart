@@ -340,7 +340,17 @@ class RegistrarProcess {
         _timer = null;
 
       case ClearBootTopic():
-        bus.clearRetained(bootTopic);
+        // A publish that could not go is a promotion that cannot continue.
+        // Upstream puts this call OUTSIDE its try because paho returns an error
+        // CODE on a down link; `mqtt_client` throws, and a live registrar died
+        // here mid-auto-reconnect. The transport now reports instead, and the
+        // report has to be acted on or the next effect announces onto a topic
+        // that still holds a predecessor's tombstone.
+        if (!bus.clearRetained(bootTopic)) {
+          _promotionFailed(
+            StateError('the link was down while clearing $bootTopic'),
+          );
+        }
 
       case AnnouncePrimary():
         try {
@@ -349,20 +359,25 @@ class RegistrarProcess {
           // strands a retained `found` naming a dead process, and every peer
           // joining afterwards is told a corpse is primary.
           await bus.setWill(primaryWill);
-          bus.send(bootTopic, 'primary', [
+          final announced = bus.send(bootTopic, 'primary', [
             'found',
             topicPath.path,
             registrarVersion,
             timeStarted,
           ], retain: true);
+          if (!announced) {
+            _promotionFailed(
+              StateError('the link was down while announcing on $bootTopic'),
+            );
+            return;
+          }
           if (!_announcements.isClosed) _announcements.add(topicPath);
         } on Object catch (error) {
           // `registrar.py:198-200` catches here and stands the registrar back
           // down. Anything thrown between taking the will and publishing leaves
           // an island holding a primary that never spoke, so the ROLE has to go
           // back rather than the error go up.
-          if (!_promotionFailures.isClosed) _promotionFailures.add(error);
-          _pending.addAll(_election.onPrimaryFailed());
+          _promotionFailed(error);
         }
 
       case DropRoster():
@@ -495,6 +510,19 @@ class RegistrarProcess {
     service.owner,
     service.tags,
   ];
+
+  /// Abandon a promotion and stand back down.
+  void _promotionFailed(Object error) {
+    if (!_promotionFailures.isClosed) _promotionFailures.add(error);
+    // Anything still queued FROM THIS PROMOTION must not run. Announcing after
+    // a failed clear puts a retained `found` on a topic that still holds a
+    // predecessor's tombstone; announcing after standing down is a claim about
+    // a role we no longer hold. Both are worse than not being primary.
+    _pending.removeWhere(
+      (effect) => effect is AnnouncePrimary || effect is ClearBootTopic,
+    );
+    _pending.addAll(_election.onPrimaryFailed());
+  }
 
   void _publishServiceCount() {
     if (!_serviceCounts.isClosed) _serviceCounts.add(roster.count);

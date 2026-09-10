@@ -127,34 +127,32 @@ class FakeBus implements MessageBus {
   @override
   LastWill? get will => _will;
 
-  /// A real client throws `ConnectionException` from `publishMessage` when the
-  /// socket is not up. A fake that silently accepts the publish is MORE
-  /// FORGIVING THAN THE REAL API, and a fake that is more forgiving hides
-  /// exactly the bugs it exists to catch — this one hid a promotion that kept
-  /// publishing at a bus `disconnect()` had already torn down.
-  void _requireConnected(String what) {
-    if (!connected) {
-      throw StateError('$what on a bus that is not connected');
-    }
-  }
+  /// Refuses the next [clearRetained], as a down link does.
+  bool failClearRetained = false;
 
   @override
-  void send(
+  bool send(
     String topic,
     String command,
     Object? params, {
     bool retain = false,
   }) {
-    _requireConnected('send($topic)');
+    // A real client cannot carry a publish while the link is down, and REPORTS
+    // rather than throwing — a fake more forgiving than the real API hides the
+    // bugs it exists to catch, and a fake that is HARSHER invents failures the
+    // real one never produces. This one tracks it exactly.
+    if (!connected) return false;
     final message = SentMessage(topic, command, params, retain: retain);
     actions.add(message);
     sent.add(message);
+    return true;
   }
 
   @override
-  void clearRetained(String topic) {
-    _requireConnected('clearRetained($topic)');
+  bool clearRetained(String topic) {
+    if (!connected || failClearRetained) return false;
     actions.add(RetainedCleared(topic));
+    return true;
   }
 
   /// How long [setWill] takes. Zero by default; a real one costs a reconnect,
