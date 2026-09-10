@@ -89,6 +89,26 @@ class ServicesCache {
   ServicesCacheState _state = ServicesCacheState.empty;
   bool _synced = false;
   int? _itemCount;
+
+  /// Whether a `(share …)` we sent is still unanswered.
+  ///
+  /// This is the real guard on the snapshot frame, and it is a fact we already
+  /// hold rather than a guess about what a plausible count looks like. The
+  /// private share topic carries nothing but the reply to our own request —
+  /// live `add`/`remove` deltas arrive on the registrar's `/out`, a different
+  /// topic — so an `(item_count …)` here that we did not ask for is illegitimate
+  /// whatever its value.
+  ///
+  /// It has to be, because bounding the value does not close the hole. A
+  /// negative count is refused below on its face, but `(item_count 999999)` is
+  /// a perfectly well-formed number that wedges this cache exactly as
+  /// effectively: the frame waits for records that never arrive. Any bound on
+  /// the count would be a guess at island size.
+  ///
+  /// Stays true across an incomplete frame on purpose. A second `(item_count …)`
+  /// arriving before the first completes REPLACES it, so a genuine snapshot
+  /// still heals a frame that a racing peer opened first.
+  bool _awaitingSnapshot = false;
   String? _registrarOut;
   bool _attached = false;
   StreamSubscription<ServiceTopicPath?>? _ladder;
@@ -162,6 +182,7 @@ class ServicesCache {
       ServiceFilter.anyValue,
       ServiceFilter.anyValue,
     ]);
+    _awaitingSnapshot = true;
     _state = ServicesCacheState.share;
   }
 
@@ -181,6 +202,7 @@ class ServicesCache {
     _registrarOut = null;
     _services.clear();
     _itemCount = null;
+    _awaitingSnapshot = false;
     _synced = false;
     _state = ServicesCacheState.empty;
     _emit(const RosterReleased());
@@ -206,8 +228,11 @@ class ServicesCache {
       // announcing our reply address to every peer on an unauthenticated bus.
       //
       // The guard was answering "is this an integer" where the question was
-      // "is this a plausible item count".
-      case ('item_count', [final String n]) when (int.tryParse(n) ?? -1) >= 0:
+      // "is this a plausible item count" — and even the corrected question is
+      // the wrong one. `_awaitingSnapshot` asks the question that can actually
+      // be answered: did we ask for this frame? See its declaration.
+      case ('item_count', [final String n])
+          when _awaitingSnapshot && (int.tryParse(n) ?? -1) >= 0:
         _itemCount = int.parse(n);
       case ('add', _) when parameters.length >= 6:
         if (_itemCount == null) return; // an `add` with no frame open
@@ -224,6 +249,9 @@ class ServicesCache {
 
     if (_itemCount == 0) {
       _itemCount = null;
+      // Our request is answered. From here the private topic should be silent
+      // until we ask again, so anything further on it is unsolicited.
+      _awaitingSnapshot = false;
       _state = ServicesCacheState.loaded;
       _emit(const ServicesLoaded());
       for (final service in _services.values.toList()) {

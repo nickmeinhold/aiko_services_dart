@@ -174,6 +174,77 @@ void main() {
       expect(cache.services.map((s) => s.name), ['chat_server']);
     });
 
+    // The arm a bounds-check cannot cover. `999999` is a perfectly well-formed
+    // non-negative count, so the `>= 0` guard admits it — and the frame then
+    // waits for records that never arrive, wedged exactly as a negative one
+    // would. No bound on the VALUE closes this; only "did we ask?" does.
+    test(
+      'an unsolicited frame is refused however plausible its count',
+      () async {
+        cache.attach();
+        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+        expect(cache.state, ServicesCacheState.loaded);
+
+        // Our request is answered; the topic should now be silent. A peer that
+        // knows our share topic — and the registrar broadcasts it, in
+        // `(sync <topic_response>)` on its own `/out` — opens a frame we never
+        // asked for.
+        await bus.deliver(cache.shareTopic, 'item_count', ['999999']);
+        await bus.deliver(cache.shareTopic, 'add', _registrarRecord);
+
+        expect(
+          cache.state,
+          ServicesCacheState.loaded,
+          reason: 'an unsolicited frame must not reopen a completed snapshot',
+        );
+        expect(cache.services.map((s) => s.name), [
+          'chat_server',
+        ], reason: 'and must not smuggle a record into the roster');
+      },
+    );
+
+    // The healing property, and the reason the flag stays true across an
+    // INCOMPLETE frame rather than being cleared as soon as one opens: a peer
+    // that wins the race to answer our request must not be able to lock out the
+    // registrar's real reply.
+    test('a genuine snapshot still replaces a frame someone raced us to', () async {
+      cache.attach();
+
+      // A racing peer answers our outstanding request first, with a count that
+      // will never complete.
+      await bus.deliver(cache.shareTopic, 'item_count', ['999999']);
+      expect(cache.state, ServicesCacheState.share);
+
+      // The registrar's real reply lands second and takes over.
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(cache.state, ServicesCacheState.loaded);
+      expect(cache.services.map((s) => s.name), ['chat_server']);
+    });
+
+    // Positive control for the invariant itself: after a re-request the topic
+    // is legitimately live again. Without this, a cache that simply stopped
+    // listening after its first snapshot would pass the refusal tests above.
+    test('a re-request makes the topic legitimate again', () async {
+      cache.attach();
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(cache.state, ServicesCacheState.loaded);
+
+      // A registrar restart at a new path re-asks, which re-opens the window.
+      await bus.deliver('aiko/service/registrar', 'primary', [
+        'found',
+        'aiko/island/2/1',
+        '2',
+        '9999.0',
+      ]);
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _registrarRecord);
+      expect(cache.state, ServicesCacheState.loaded);
+      expect(cache.services.map((s) => s.name), ['registrar']);
+    });
+
     // Zero is a legal frame — an island with no matching services — and is the
     // boundary the fix must not overshoot into.
     test(
