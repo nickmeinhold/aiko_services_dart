@@ -14,16 +14,24 @@
 # a test-only branch, which is what would have made the measurement worthless.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
+. spike/probe_support.sh
 
 HOST=${AIKO_MQTT_HOST:-127.0.0.1}
 PORT=${AIKO_MQTT_PORT:-1883}
 NS=${AIKO_NAMESPACE:-aiko}
 LEASE=${AIKO_PROBE_LEASE:-5}
+# `${VAR:-default}` does not substitute for set-but-EMPTY, which would hand an
+# empty string to mosquitto_sub -p AND to the Dart half separately -- the two
+# coils of one instrument pointing at different brokers again.
+[ -n "$HOST" ] || HOST=127.0.0.1
+[ -n "$PORT" ] || PORT=1883
+[ -n "$LEASE" ] || LEASE=5
 pass=0; fail=0
 ok()  { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 
-command -v mosquitto_sub >/dev/null || { echo "no mosquitto_sub — a skip is NOT a pass" >&2; exit 2; }
+probe_require_tools
+probe_require_broker "$HOST" "$PORT"
 
 # Find a live ECProducer by asking the registrar, exactly as a real consumer
 # would. Hardcoding a topic would make this a fact about one island.
@@ -45,18 +53,19 @@ ROSTER=$(mktemp)
 # would exit 3 "no chat_server". The SAME hazard was already fixed for the
 # control subscriber in this file, which is what made leaving it here an
 # inconsistency rather than an oversight.
-mosquitto_sub -h "$HOST" -p "$PORT" -t "$RESP" > "$ROSTER" 2>&1 &
-ROSTER_SUB=$!
+ROSTER_SUB=$(probe_watch "$HOST" "$PORT" "$RESP" "$ROSTER")
 sleep 1
 mosquitto_pub -h "$HOST" -p "$PORT" -t "$REG/in" -m "(share $RESP * * * * *)"
 sleep 4
-kill "$ROSTER_SUB" 2>/dev/null; wait "$ROSTER_SUB" 2>/dev/null
+probe_unwatch "$ROSTER_SUB"
 # Any service advertising ec=true has an ECProducer; the ChatServer is the one
 # the island always has.
 # The payload is `(add <topic_path> <name> <protocol> <transport> <owner> (tags))`,
 # so the path is field 2 and NOT adjacent to the opening paren. Matching on
 # `(<path> chat_server` looks right and finds nothing, silently, forever.
-PRODUCER=$(sed -n "s/^(add \($NS\/[^ ]*\) chat_server .*/\1/p" "$ROSTER" | head -1)
+# probe_watch subscribes with -v, so each line is "<topic> <payload>": the path
+# is field 2 of the PAYLOAD, which is field 3 of the line.
+PRODUCER=$(sed -n "s/^[^ ]* (add \($NS\/[^ ]*\) chat_server .*/\1/p" "$ROSTER" | head -1)
 if [ -z "$PRODUCER" ]; then
   echo "no chat_server with an ECProducer in the roster — a skip is NOT a pass." >&2
   echo "roster the registrar actually returned:" >&2
@@ -83,8 +92,7 @@ printf 'producer: %s\nlease:    %ss (renewal at 0.8x = %ss)\n' "$CONTROL" "$LEAS
 # holds it is a userspace buffer, not what the broker saw.
 LOG=$(mktemp)
 PROBE_OUT=$(mktemp)
-mosquitto_sub -h "$HOST" -p "$PORT" -t "$CONTROL" > "$LOG" 2>&1 &
-SUB=$!
+SUB=$(probe_watch "$HOST" "$PORT" "$CONTROL" "$LOG")
 sleep 1
 # mktemp, not a fixed path. Two concurrent verify.sh runs sharing one file makes
 # each read the other's CONSUMER_TOPIC -- one run counting another's renewals, or
@@ -96,13 +104,25 @@ sleep 1
 # AIKO_MQTT_HOST/PORT -- so setting the env the script itself documents would
 # have the observer watching broker A while the ECConsumer sang to broker B.
 # TAKES=0 and a false red, or a hang in connect() that nothing wraps.
-dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" "$HOST" "$PORT" > "$PROBE_OUT" 2>&1
-PROBE_RC=$?
+# An EXTERNAL deadline. An in-process Dart Timer cannot bound `dart run`
+# stalling in COMPILE before main is entered, nor an isolate blocked in a native
+# connect where no timer gets to fire -- a watchdog that shares a fate with the
+# thing it watches is not a watchdog.
+PROBE_RC=$(probe_run_bounded $((LEASE * 4 + 60)) "$PROBE_OUT" \
+  dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" "$HOST" "$PORT")
 sleep 2
-kill "$SUB" 2>/dev/null; wait "$SUB" 2>/dev/null
+probe_unwatch "$SUB"
 
 MY_TOPIC=$(sed -n 's/^CONSUMER_TOPIC=//p' "$PROBE_OUT")
-if [ -z "$MY_TOPIC" ]; then
+# THE STALL IS CHECKED, AND CHECKED FIRST. An earlier version captured PROBE_RC
+# and never read it -- a capture with no reader, so the watchdog's whole purpose
+# went nowhere. Worse, a probe killed AFTER printing CONSUMER_TOPIC leaves three
+# takes and a cancel already in the log, and the driver would grade them and
+# exit 0 while the probe had died of a stall.
+if [ "$PROBE_RC" = "75" ]; then
+  bad "the lease probe STALLED (watchdog): the harness could not complete, which is not the same as the protocol failing"
+  tail -3 "$PROBE_OUT" >&2
+elif [ -z "$MY_TOPIC" ]; then
   bad "the probe never attached — nothing below proves anything"
   cat "$PROBE_OUT" >&2
 else
@@ -124,7 +144,10 @@ else
   # timer ever having fired twice. The wait was already paid for; the gate was
   # set one below what it bought.
   if [ "$TAKES" -ge 3 ]; then
-    ok "the lease timer REPEATED: $TAKES requests at ${LEASE}s (take + $((TAKES - 1)) renewals)"
+    # A COUNT, not a cadence. Nothing here reads a clock, so "at 0.8x" would be
+    # a frequency this instrument never measured. verify.sh's message was
+    # corrected for exactly this and the probe's own PASS line kept claiming it.
+    ok "$TAKES share requests at the same lease within the window (take + $((TAKES - 1)) re-requests)"
   else
     bad "only $TAKES request(s) at ${LEASE}s — expected 3+ (take + 2 renewals); two alone cannot distinguish a repeating timer from a duplicate"
   fi
