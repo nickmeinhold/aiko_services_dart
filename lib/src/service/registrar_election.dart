@@ -79,19 +79,38 @@ final class PublishLifecycle extends ElectionEffect {
 /// collide identically here. Reproducing that is deliberate: diverging would
 /// mean inventing an election rule the Python side does not share.
 final class StartSearchTimer extends ElectionEffect {
-  const StartSearchTimer(this.timeout);
+  const StartSearchTimer(this.timeout, this.epoch);
 
   final Duration timeout;
 
+  /// Which search this timer belongs to. The driver must hand it back to
+  /// [RegistrarElection.onSearchTimeout].
+  ///
+  /// A boolean "is a search pending" cannot do this job, and looked like it
+  /// could. It was written in lockstep with entering `primarySearch` and
+  /// cleared in lockstep with leaving it — a second name for the ROLE, not the
+  /// identity of a timer. The sequence that breaks it: `initialize` arms timer
+  /// A, a `found` stands us down, an `absent` re-enters the search and arms
+  /// timer B, and then timer A arrives LATE to find the flag true and the role
+  /// `primarySearch` again. It promotes, and the island has two primaries both
+  /// holding a retained announcement on one topic.
+  ///
+  /// An epoch is not a tighter guard on that window; it removes it. A timeout
+  /// that cannot name its own search cannot be honoured.
+  final int epoch;
+
   @override
   bool operator ==(Object other) =>
-      other is StartSearchTimer && other.timeout == timeout;
+      other is StartSearchTimer &&
+      other.timeout == timeout &&
+      other.epoch == epoch;
 
   @override
-  int get hashCode => timeout.hashCode;
+  int get hashCode => Object.hash(timeout, epoch);
 
   @override
-  String toString() => 'StartSearchTimer(${timeout.inMilliseconds}ms)';
+  String toString() =>
+      'StartSearchTimer(${timeout.inMilliseconds}ms, epoch $epoch)';
 }
 
 /// Cancel a pending search timer.
@@ -189,14 +208,14 @@ class RegistrarElection {
   RegistrarRole _role = RegistrarRole.start;
   RegistrarRole get role => _role;
 
-  /// Whether a search timer is outstanding.
+  /// Which search is current. Incremented on every entry to `primarySearch`.
   ///
-  /// Tracked so a late timeout can be IGNORED rather than acted on. Upstream
-  /// re-checks the state inside the timer callback (`:172`,
-  /// `timer_valid = state == "primary_search"`) precisely because the timer can
-  /// fire after a `found` has already moved it to `secondary`; a machine that
-  /// trusted the timer would promote a second primary onto a live island.
-  bool _searchPending = false;
+  /// Upstream re-checks the state inside the timer callback (`:172`,
+  /// `timer_valid = state == "primary_search"`), which is sufficient there
+  /// because a Python registrar has one timer handler at a time. It is NOT
+  /// sufficient for an API that can re-enter the search while a previous
+  /// driver callback is still outstanding — see [StartSearchTimer.epoch].
+  int _epoch = 0;
 
   /// What the boot topic said while we were still in [RegistrarRole.start].
   ///
@@ -256,14 +275,14 @@ class RegistrarElection {
 
   /// The search timer fired.
   ///
-  /// Returns nothing at all if it is stale. A timer that fires after a `found`
-  /// has already made us `secondary` would otherwise promote a second primary
-  /// onto an island that already has one.
-  List<ElectionEffect> onSearchTimeout() {
-    if (!_searchPending || _role != RegistrarRole.primarySearch) {
+  /// Returns nothing at all unless [epoch] names the CURRENT search. A timer
+  /// from a previous search — one that fired after a `found` stood us down and
+  /// an `absent` started a fresh hunt — would otherwise promote a second
+  /// primary onto an island that already has one.
+  List<ElectionEffect> onSearchTimeout(int epoch) {
+    if (epoch != _epoch || _role != RegistrarRole.primarySearch) {
       return const [];
     }
-    _searchPending = false;
     return _enterPrimary();
   }
 
@@ -274,19 +293,19 @@ class RegistrarElection {
 
   List<ElectionEffect> _enterPrimarySearch() {
     _role = RegistrarRole.primarySearch;
-    _searchPending = true;
-    return [PublishLifecycle(_role), StartSearchTimer(searchTimeout)];
+    // A NEW search, so any timer still in flight from the previous one is stale
+    // by construction rather than by a flag anyone has to maintain.
+    _epoch++;
+    return [PublishLifecycle(_role), StartSearchTimer(searchTimeout, _epoch)];
   }
 
   List<ElectionEffect> _enterSecondary() {
     _role = RegistrarRole.secondary;
-    _searchPending = false;
     return [const CancelSearchTimer(), PublishLifecycle(_role)];
   }
 
   List<ElectionEffect> _enterPrimary() {
     _role = RegistrarRole.primary;
-    _searchPending = false;
     // Clear BEFORE announcing, and announce only after the will is taken —
     // see [ClearBootTopic] and [AnnouncePrimary]. This ordering is the whole
     // reason effects are an ordered list rather than a set.

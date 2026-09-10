@@ -63,7 +63,7 @@ void main() {
       expect(election.role, RegistrarRole.primarySearch);
       expect(effects, [
         PublishLifecycle(RegistrarRole.primarySearch),
-        StartSearchTimer(RegistrarElection.defaultSearchTimeout),
+        StartSearchTimer(RegistrarElection.defaultSearchTimeout, 1),
       ]);
     });
 
@@ -78,7 +78,7 @@ void main() {
     // publishes nothing while looking entirely healthy.
     test('nobody answers, the timer fires, we take primacy', () {
       final election = RegistrarElection()..initialize();
-      final effects = election.onSearchTimeout();
+      final effects = election.onSearchTimeout(1);
       expect(election.role, RegistrarRole.primary);
       expect(effects, [
         PublishLifecycle(RegistrarRole.primary),
@@ -91,7 +91,7 @@ void main() {
     // where a crash strands a retained `found` naming a dead process, and every
     // later joiner is told a corpse is primary.
     test('the boot topic is cleared BEFORE the announcement', () {
-      final effects = (RegistrarElection()..initialize()).onSearchTimeout();
+      final effects = (RegistrarElection()..initialize()).onSearchTimeout(1);
       final clear = effects.indexWhere((e) => e is ClearBootTopic);
       final announce = effects.indexWhere((e) => e is AnnouncePrimary);
       expect(clear, isNonNegative);
@@ -122,13 +122,52 @@ void main() {
       election.onAnnouncement(RegistrarAnnouncement.found);
       expect(election.role, RegistrarRole.secondary);
 
-      final late = election.onSearchTimeout();
+      final late = election.onSearchTimeout(1);
       expect(late, isEmpty);
       expect(
         election.role,
         RegistrarRole.secondary,
         reason: 'a stale timer must not promote a second primary',
       );
+    });
+
+    // THE SECOND HARMONIC, and the one the first must-fail arm could not reach.
+    // A boolean "is a search pending" is a second name for the ROLE, so it is
+    // true again as soon as a NEW search starts — and a timer left over from
+    // the previous one then finds the flag set and the role right, and
+    // promotes. Two primaries, both holding a retained announcement on one
+    // topic.
+    //
+    // The earlier arm only struck a timeout arriving while SECONDARY, where the
+    // flag was already false. That is the harmless phase.
+    test('a timer from a PREVIOUS search cannot promote the current one', () {
+      final election = RegistrarElection();
+      final first = election.initialize().whereType<StartSearchTimer>().single;
+
+      // Stood down, then hunting again — a fresh search, a fresh timer.
+      election.onAnnouncement(RegistrarAnnouncement.found);
+      final restart = election.onAnnouncement(RegistrarAnnouncement.absent);
+      final second = restart.whereType<StartSearchTimer>().single;
+      expect(election.role, RegistrarRole.primarySearch);
+      expect(
+        second.epoch,
+        isNot(first.epoch),
+        reason: 'a new search must be nameable apart from the old one',
+      );
+
+      // Timer A arrives late, into a role that once again says primarySearch.
+      expect(election.onSearchTimeout(first.epoch), isEmpty);
+      expect(
+        election.role,
+        RegistrarRole.primarySearch,
+        reason: 'a stale pulse must not promote the current search',
+      );
+
+      // And the CURRENT timer still works — without this, the test would pass
+      // for a machine that had simply stopped honouring timeouts at all.
+      final effects = election.onSearchTimeout(second.epoch);
+      expect(election.role, RegistrarRole.primary);
+      expect(effects.whereType<AnnouncePrimary>(), hasLength(1));
     });
 
     test(
@@ -151,7 +190,7 @@ void main() {
       'an absent while primary drops the roster and re-runs the election',
       () {
         final election = RegistrarElection()..initialize();
-        election.onSearchTimeout();
+        election.onSearchTimeout(1);
         expect(election.role, RegistrarRole.primary);
 
         final effects = election.onAnnouncement(RegistrarAnnouncement.absent);
@@ -173,7 +212,7 @@ void main() {
     // that were treated as news the machine would churn on every broker blip.
     test('a found while already primary is not news', () {
       final election = RegistrarElection()..initialize();
-      election.onSearchTimeout();
+      election.onSearchTimeout(1);
       expect(election.onAnnouncement(RegistrarAnnouncement.found), isEmpty);
       expect(election.role, RegistrarRole.primary);
     });
@@ -209,8 +248,8 @@ void main() {
       );
       // ignore: prefer_const_constructors
       expect(
-        StartSearchTimer(Duration(seconds: 2)),
-        StartSearchTimer(Duration(seconds: 2)),
+        StartSearchTimer(Duration(seconds: 2), 1),
+        StartSearchTimer(Duration(seconds: 2), 1),
       );
 
       // And DIFFERENT effects must not collapse together.
@@ -220,8 +259,8 @@ void main() {
         isNot(PublishLifecycle(RegistrarRole.secondary)),
       );
       expect(
-        const StartSearchTimer(Duration(seconds: 2)),
-        isNot(const StartSearchTimer(Duration(seconds: 3))),
+        const StartSearchTimer(Duration(seconds: 2), 1),
+        isNot(const StartSearchTimer(Duration(seconds: 3), 1)),
       );
     });
 
@@ -246,7 +285,7 @@ void main() {
         );
         expect(
           quick.initialize(),
-          contains(const StartSearchTimer(Duration(milliseconds: 50))),
+          contains(const StartSearchTimer(Duration(milliseconds: 50), 1)),
         );
       },
     );
@@ -255,9 +294,13 @@ void main() {
     // the way down and NOT again on the way back up.
     test('a deposed primary re-takes primacy, dropping the roster once', () {
       final election = RegistrarElection()..initialize();
-      election.onSearchTimeout();
+      election.onSearchTimeout(1);
       final down = election.onAnnouncement(RegistrarAnnouncement.absent);
-      final up = election.onSearchTimeout();
+      // The SECOND search has its own epoch. Passing 1 again here would be a
+      // stale pulse, and is now correctly refused — which is what makes this
+      // line evidence rather than decoration.
+      final second = down.whereType<StartSearchTimer>().single;
+      final up = election.onSearchTimeout(second.epoch);
 
       expect(down.whereType<DropRoster>(), hasLength(1));
       expect(up.whereType<DropRoster>(), isEmpty);
