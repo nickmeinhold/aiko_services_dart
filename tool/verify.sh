@@ -319,7 +319,12 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
   # "no mosquitto_sub" is an absent rig here — both are a check that could not
   # look at a rig that is demonstrably present.
   case "$LEASE_RC" in
-    0) ok "take, renewal(s) at 0.8x, then a cancellation at lease 0" ;;
+    # Says what was OBSERVED: a count of requests, and a distinct cancellation.
+    # It deliberately does NOT say "renewals at 0.8x" -- nothing here reads a
+    # clock, so the cadence is a fact about production and about comments, not
+    # about this measurement. A timer firing at 0.1x lease would buy the same
+    # sentence.
+    0) ok "3+ share requests at the same lease, then a distinct cancellation at 0" ;;
     2) bad "lease probe did not run: no mosquitto_sub on this machine (the island is up)" ;;
     3) bad "lease probe did not run: no reachable broker or no ECProducer in the roster, though the island container is up" ;;
     *) bad "EC lease renewal probe against a live producer" ;;

@@ -27,7 +27,12 @@ command -v mosquitto_sub >/dev/null || { echo "no mosquitto_sub — a skip is NO
 
 # Find a live ECProducer by asking the registrar, exactly as a real consumer
 # would. Hardcoding a topic would make this a fact about one island.
-BOOT=$(timeout 5 mosquitto_sub -h "$HOST" -p "$PORT" -t "$NS/service/registrar" -C 1 -W 4 2>/dev/null)
+# No `timeout` wrapper: `-C 1 -W 4` already bounds this, and `timeout` is absent
+# on a default macOS host. With stderr redirected, a missing `timeout` made BOOT
+# empty and the script exited 3 "no primary registrar" -- reporting a live-rig
+# failure for a missing harness dependency, which verify.sh would then print as
+# a protocol problem.
+BOOT=$(mosquitto_sub -h "$HOST" -p "$PORT" -t "$NS/service/registrar" -C 1 -W 4 2>/dev/null)
 REG=$(printf '%s' "$BOOT" | sed -n 's/^(primary found \([^ ]*\).*/\1/p')
 [ -n "$REG" ] || { echo "no primary registrar on $NS/service/registrar — is the rig up? A skip is NOT a pass." >&2; exit 3; }
 
@@ -86,7 +91,12 @@ sleep 1
 # reporting a bogus attach failure. This file already treats a shared name as a
 # real defect (the will probe carries a per-run id for the same reason), so a
 # global path here was the inconsistency.
-dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" > "$PROBE_OUT" 2>&1
+# Host and port passed THROUGH. The consumer under test was soldered to
+# 127.0.0.1 while the driver discovered, subscribed and published via
+# AIKO_MQTT_HOST/PORT -- so setting the env the script itself documents would
+# have the observer watching broker A while the ECConsumer sang to broker B.
+# TAKES=0 and a false red, or a hang in connect() that nothing wraps.
+dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" "$HOST" "$PORT" > "$PROBE_OUT" 2>&1
 sleep 2
 kill "$SUB" 2>/dev/null; wait "$SUB" 2>/dev/null
 
@@ -105,10 +115,17 @@ else
   printf '%s\n' "$MINE" | sed 's/^/    /'
   printf '\n'
 
-  if [ "$TAKES" -ge 2 ]; then
-    ok "the lease RENEWED: $TAKES requests at ${LEASE}s (take + $((TAKES - 1)) renewal(s))"
+  # THREE, not two. The probe waits 2.2 x lease precisely so the renewal timer
+  # crosses 0.8 x lease TWICE -- take at 0, renewals at 0.8L and 1.6L. At a
+  # threshold of two, "take + a duplicate" and "take + a one-shot retry" are
+  # indistinguishable from a repeating timer: MQTT redelivery, an attach that
+  # speaks twice, or a reconnect replay would all light this green without a
+  # timer ever having fired twice. The wait was already paid for; the gate was
+  # set one below what it bought.
+  if [ "$TAKES" -ge 3 ]; then
+    ok "the lease timer REPEATED: $TAKES requests at ${LEASE}s (take + $((TAKES - 1)) renewals)"
   else
-    bad "only $TAKES request at ${LEASE}s — the renewal never landed"
+    bad "only $TAKES request(s) at ${LEASE}s — expected 3+ (take + 2 renewals); two alone cannot distinguish a repeating timer from a duplicate"
   fi
   # The negative control. A renewal is only meaningful if the cancellation is
   # ALSO distinguishable: without this, "two messages" could be one take plus a

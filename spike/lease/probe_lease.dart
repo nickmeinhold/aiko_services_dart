@@ -11,7 +11,7 @@
 // boundary reachable in seconds rather than minutes, and the mechanism under
 // test is the same one production uses.
 //
-//   dart run spike/lease/probe_lease.dart <producer-control-topic> [seconds]
+//   dart run spike/lease/probe_lease.dart <control-topic> [seconds] [host] [port]
 //
 // The driver watches that control topic and asserts the SECOND request appears.
 import 'dart:io';
@@ -21,7 +21,7 @@ import 'package:aiko_services/aiko_services.dart';
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
     stderr.writeln(
-      'usage: probe_lease.dart <producer-control-topic> [lease-seconds]',
+      'usage: probe_lease.dart <control-topic> [lease-seconds] [host] [port]',
     );
     exit(64);
   }
@@ -37,7 +37,18 @@ Future<void> main(List<String> args) async {
     exit(64);
   }
 
-  final client = AikoClient(host: '127.0.0.1', clientId: 'lease_probe_$pid');
+  // Host and port come from the driver, which is the half that discovered the
+  // producer and is watching the broker. Hardcoding 127.0.0.1 here made the two
+  // halves of one instrument able to point at DIFFERENT brokers the moment
+  // AIKO_MQTT_HOST was set -- the observer watching one, the consumer singing
+  // to another.
+  final host = args.length > 2 ? args[2] : '127.0.0.1';
+  final port = args.length > 3 ? (int.tryParse(args[3]) ?? 1883) : 1883;
+  final client = AikoClient(
+    host: host,
+    port: port,
+    clientId: 'lease_probe_$pid',
+  );
   await client.connect();
   final router = TopicRouter(client);
   final consumerPath = ServiceTopicPath.parse('aiko/leaseprobe/$pid/0');
