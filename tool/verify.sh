@@ -88,6 +88,12 @@ if [ "$ENCODER_CASES" -lt 1000 ] || [ "$DECODER_CASES" -lt 1000 ]; then
 fi
 FAILED=()
 
+# The probes' shared plumbing, for `probe_run_bounded`. Sourced rather than
+# reimplemented: this file needs a watchdog for the same reason the probes do,
+# and a second copy of one is how the properties in the first stop applying to
+# the second. It defines functions only — nothing runs on source.
+. "$(dirname "$0")/../spike/probe_support.sh"
+
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 ok()   { printf '   \033[32mok\033[0m  %s\n' "$1"; }
 bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$1"; FAILED+=("$1"); }
@@ -271,12 +277,20 @@ if [ "$QUICK" = "1" ]; then
   :
 elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q true; then
   step "six-verb acceptance against a live Python island"
-  if tool/observer_acceptance.sh; then
-    ISLAND_RAN=1
-    ok "connect / discover / subscribe / receive / leave / recover"
-  else
-    bad "observer acceptance against a live island"
-  fi
+  # BOUNDED. The same suite hung for 13 minutes inside a `docker exec` when gate
+  # A ran it below, and this call site is its twin — the identical hazard, in the
+  # copy nothing had pointed at yet. `docker exec` is unbounded here and there.
+  OBSERVER_OUT=$(mktemp)
+  OBSERVER_RC=$(probe_run_bounded 480 "$OBSERVER_OUT" tool/observer_acceptance.sh)
+  cat "$OBSERVER_OUT"; rm -f "$OBSERVER_OUT"
+  case "$OBSERVER_RC" in
+    0)
+      ISLAND_RAN=1
+      ok "connect / discover / subscribe / receive / leave / recover"
+      ;;
+    75) bad "observer acceptance STALLED (watchdog) — the harness could not complete, which is not the protocol failing" ;;
+    *)  bad "observer acceptance against a live island" ;;
+  esac
 
   # The Last Will is only observable at the BROKER — nothing in our own output
   # can distinguish a will that was carried from one that was silently dropped,
@@ -353,6 +367,27 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     2) bad "election probe did not run: no mosquitto_sub/mosquitto_pub on this machine (the island is up)" ;;
     3) bad "election probe did not run: no reachable broker, or the island has no primary registrar to stand down to" ;;
     *) bad "primary election against a live broker" ;;
+  esac
+
+  # GATE A. The claim increment 2 exists to make, and the only step here that
+  # replaces part of the island rather than observing it. The falsifier is not a
+  # new suite: it is the fourteen-assertion observer acceptance ABOVE, unchanged,
+  # run against an island whose registrar is our Dart process. That reuse is the
+  # point — a suite written alongside the thing it checks tends to check what was
+  # built, and this one was written before the registrar existed.
+  #
+  # It mutates the rig and restores it on every exit path. That is the same class
+  # of mutation the observer suite already performs one step earlier, where it
+  # stops the ChatServer and restarts the BROKER.
+  step "gate A: an island whose registrar is ours"
+  tool/registrar_acceptance.sh
+  GATE_A_RC=$?
+  case "$GATE_A_RC" in
+    0) ok "the island's own acceptance suite passes against a Dart registrar" ;;
+    2) bad "gate A did not run: a harness dependency is missing (the island is up)" ;;
+    3) bad "gate A did not run: no reachable broker, or no registrar container to replace" ;;
+    75) bad "gate A STALLED (watchdog) — the harness could not complete, which is not the island rejecting us" ;;
+    *) bad "gate A: the island did not accept a Dart registrar" ;;
   esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'

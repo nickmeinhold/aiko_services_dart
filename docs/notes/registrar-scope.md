@@ -39,7 +39,7 @@
 >
 > **One risk below is now a number.** "The 2-second election timeout is a race with
 > reality" was named and unmeasured. Measured: the live island's retained announcement
-> reaches a joining process **47-54 ms** after it subscribes, against a 2000 ms promotion
+> reaches a joining process **6-54 ms** after it subscribes, against a 2000 ms promotion
 > timer. Roughly 40x of margin on this broker. Still a race; no longer a guess.
 >
 > **A signal the reference does not have, forced by the port.** Upstream's
@@ -50,6 +50,25 @@
 > told. Found by a probe killing itself on `role == primary` and catching a broker holding
 > the empty `ClearBootTopic` and nothing else. Hence `RegistrarProcess.announcements`,
 > which fires when the announcement is actually on the wire.
+
+> **Update, 2026-09-11 (later): GATE A PASSED, 14/14.** `tool/observer_acceptance.sh` —
+> the fourteen-assertion suite written for increment 1 — passes **unmodified** against an
+> island whose registrar is our Dart process. Verbs 1-6 of the invariant below are all
+> demonstrated against the live rig. An island's roster is being served by our code and the
+> Python side notices nothing.
+>
+> **The suite is what told us what was missing.** Its first run against a Dart-registrar
+> island scored **8/14**, and every one of the six failures traced to ONE absent capability:
+> verb 4. Our registrar kept serving a ChatServer that had stopped. Building the wildcard
+> state subscription took it to 14/14. A falsifier that fires and NAMES the gap is worth
+> more than one that passes.
+>
+> **The live ChatServer re-registered without being restarted.** `process.py:353-358`
+> re-pushes every service whenever the boot topic says `found`, so the running Python
+> process saw our announcement and registered four services with us seconds later. Nothing
+> on the island had to be told to switch.
+>
+> **Two divergences were forced, not chosen** — see the risks section.
 
 Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).
 Re-checked 2026-09-11: the oracle tree has since moved to `9dfcabc` and `origin/master` to
@@ -496,13 +515,15 @@ Each step is observable on the wire before the next is written.
    with `spike/election/probe_election.sh` as the falsifier. Three arms: stand down to the
    live island's Python primary publishing nothing; promote, announce and retract without
    one; and — the arm no fake can reach — still HEAR after the promotion reconnect.
-4. **`/in` registration** — `add` / `remove`, the roster, `service_count` (verb 2).
-5. **The wildcard state subscription** — `(absent)` → remove (verb 4).
-6. **`services_share`** — the producer half, against `services_cache.dart`'s table (verb 3).
+4. **`/in` registration** — `add` / `remove`, the roster, `service_count` (verb 2). ✔
+5. **The wildcard state subscription** — `(absent)` → remove (verb 4). ✔ Needed
+   spec-conformant MQTT filter matching, which `TopicRouter` had explicitly refused to do.
+6. **`services_share`** — the producer half, against `services_cache.dart`'s table (verb 3). ✔
 7. **`services_history`** + the ring buffer, including the 8-field `add`.
 8. **`ECProducer`** for the registrar's own share, so a Python dashboard can read our
    `lifecycle`.
-9. **Gate A.**
+9. **Gate A.** ✔ 2026-09-11 — `tool/observer_acceptance.sh` 14/14 against an island whose
+   registrar is a host-run `example/registrar.dart`.
 
 Lease serving (#3995) sits under step 8 and carries its own unresolved design question
 (does a test-only short-lease knob belong in production code?). Flag it there; do not
@@ -520,6 +541,40 @@ decide it silently.
   is an upstream aspiration, not current behaviour. Porting current behaviour means
   `Registrar extends Service`.
 
+## Found by RUNNING it, not by reading it
+
+* **A gracefully stopped registrar leaves a CORPSE on the boot topic, and the island cannot
+  recover by itself.** Measured: `docker stop aiko-registrar-1` at 08:19:15, and 139 seconds
+  later the retained `aiko/service/registrar` still read
+  `(primary found aiko/fddd654e4b5a/1/1 …)`. The will never fired, and the broker's own log
+  says why — `1789078755: Client … [172.22.0.3:58683] disconnected: connection closed by
+  client`, mosquitto's phrasing for a clean DISCONNECT packet, which SUPPRESSES a will. The
+  container was SIGKILLed ten seconds later (exit 137), by which point the MQTT session was
+  already gone.
+
+  **The consequence is worse than a stale value, and it was verified rather than reasoned.**
+  A replacement registrar joining that island reads the retained `found`, concludes somebody
+  is already primary, and stands down to `secondary`. Confirmed by running one against the
+  live island with NO registrar container up at all: `FINAL_ROLE=secondary`. So an island
+  whose registrar is stopped cleanly has zero registrars and every replacement will refuse
+  the job — a self-sustaining dead state that restarting does not escape. Clearing the
+  retained topic by hand is the only exit.
+
+  This is a much sharper form of candidate mechanism (a) for the 23-hour broken island.
+
+* **A publish can KILL a Dart process where it merely returns a code in Python.** paho's
+  `publish()` returns an error code on a down link and upstream ignores it, which is why
+  `registrar.py` can afford its boot-topic clear OUTSIDE the try. `mqtt_client` THROWS. A
+  live Dart registrar died of exactly this, mid-auto-reconnect. **Parity in a wire protocol
+  does not imply parity in how a library FAILS**, and that is the class, not the instance.
+
+* **A registrar can read its OWN tombstone as news.** The crash above was downstream of it:
+  our link dropped, the broker published our retained `(primary absent)` will, we
+  auto-reconnected, re-read that retained payload, dropped the entire roster and re-elected.
+  `ClearBootTopic` exists upstream for this reason (`registrar.py:186`) but only clears on
+  the NEXT promotion, so the window between the will firing and the clear is real on both
+  implementations.
+
 ## Known risks, named before building
 
 * **The transport's will support changes `connect()`, which every existing test path uses.**
@@ -532,7 +587,7 @@ decide it silently.
 * **The 2-second election timeout is a race with reality**, not a constant to tune.
   Upstream's own TODO (`:167`) asks for jitter to avoid collisions and does not implement
   it. Two Dart registrars started together would collide identically.
-  **MEASURED 2026-09-11:** the retained announcement arrives 47-54 ms after subscribe on
+  **MEASURED 2026-09-11:** the retained announcement arrives 6-54 ms after subscribe on
   the live rig (`LATENCY_MS` in arm 1). The margin is ~40x, and the probe reports the
   number rather than asserting a threshold — a threshold would turn a measurement into a
   flaky gate, and the number is more use to the next reader than a boolean.
@@ -547,6 +602,13 @@ decide it silently.
   SAFE against that TODO. Nothing in `process.py` compares the field today — checked at
   `:332-337`, where it is stored into `aiko.registrar` and never read. Chosen, documented,
   and queued for Andy rather than resolved unilaterally.
+
+* **The `+/+/+/state` wildcard forced a matcher, and the reference's is not one.**
+  `process.py:408-424` compares only the FIRST and LAST segments of a `+` filter and ignores
+  depth, so `aiko/+/+/+/state` locally matches `aiko/a/state` and `aiko/a/b/c/d/e/state`.
+  Harmless upstream because the BROKER does the real filtering and a loose local matcher can
+  only misroute between two wildcard subscriptions held at once. Ours implements 3.1.1 §4.7;
+  the divergence cannot drop anything a handler wanted, and is recorded for Andy.
 
 * ~~**Nothing here has been run.**~~ Steps 1-3 have now been run against a live broker,
   and running them corrected this note twice (the LWT section, and the acceptance

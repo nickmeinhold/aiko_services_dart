@@ -137,6 +137,75 @@ in our own docs and leave yours alone.
 
 ---
 
+## The big one: a cleanly stopped registrar leaves an island that cannot recover
+
+> **STATUS: DRAFT, NOT SENT.** Probably the one worth sending first when the queue drains —
+> it is reproducible in two commands and it is a stuck state, not a slow one.
+
+Hi Andy — we found this while running a Dart registrar against a live island, and it
+reproduces entirely on the Python side.
+
+**Stopping a registrar leaves a retained `(primary found …)` naming the dead process.**
+Measured on our local island: `docker stop aiko-registrar-1` at 08:19:15; 139 seconds later
+`aiko/service/registrar` still held
+`(primary found aiko/fddd654e4b5a/1/1 2 831255.387865359)`. No `(primary absent)` ever
+arrived.
+
+The broker says why:
+
+```
+1789078755: Client … [172.22.0.3:58683] disconnected: connection closed by client.
+```
+
+That is mosquitto's phrasing for a clean DISCONNECT packet, and a clean DISCONNECT
+**suppresses the will**. So the retained `(primary absent)` the registrar armed at promotion
+(`registrar.py:189-190`) never fires on an orderly shutdown — which is exactly the shutdown
+an operator performs. (The container was SIGKILLed ten seconds later, exit 137, but by then
+the MQTT session was already closed.)
+
+**The consequence is a stuck island, not just a stale value.** A replacement registrar
+starting up reads that retained `found`, sees that somebody is already primary, and
+transitions `primary_found → secondary` (`registrar.py:272-275`). We verified this rather
+than reasoning about it: with the registrar container stopped and nothing else running, a
+fresh registrar joining the island reported `FINAL_ROLE=secondary`. So the island has zero
+registrars and every replacement will decline the job. Restarting does not escape it;
+clearing the retained topic by hand is the only exit we found.
+
+Three possible shapes for a fix, and we do not know which you would prefer:
+
+1. Publish `(primary absent)` explicitly on the way down, so a graceful stop retracts
+   deliberately instead of relying on a will that a graceful stop cancels.
+2. Have a joining registrar treat a retained `found` naming a topic path that does not
+   answer as stale — which needs a liveness probe and a timeout, so it is the expensive one.
+3. Put a monotonic `time_started` or a session token in the announcement and let a joiner
+   reject its own predecessor. This is the one that interacts with the `time_started`
+   question above.
+
+We have not implemented any of them; our port reproduces the behaviour faithfully, including
+the stuck state.
+
+## Three smaller ones, all in `process.py`
+
+**`topic_matcher` is not an MQTT matcher** (`:408-424`). For a `+` filter it compares only
+`tokens[0]` and `tokens[-1]`, so `aiko/+/+/+/state` matches `aiko/a/state` and
+`aiko/a/b/c/d/e/state` locally. It is harmless today because the broker does the real
+filtering and a process holds one wildcard subscription — but a second wildcard subscription
+would misroute between them.
+
+**`remove_message_handler` raises on a wildcard topic** (`:227-230`).
+`_message_handlers_wildcard_topics` is a list (`:152`), and both branches do
+`del self._message_handlers_wildcard_topics[topic]` with a string index — a `TypeError`.
+The first branch also keys the wildcard delete off `_message_handlers_binary_topics`, which
+looks like a copy-paste. Latent because nothing currently removes a wildcard handler.
+
+**`(add …)` is built two different ways.** `service_add` (`:355-357`) goes through
+`generate()`, while `services_share` (`:340-347`) concatenates an f-string with
+`" ".join(tags)`. A tag containing a space or a parenthesis is length-prefixed by the live
+path and not by the snapshot path, so a consumer would decode the same service differently
+depending on which message it learned about it from.
+
+---
+
 ## Notes for us, not for the message
 
 * Everything above about Python was verified in source at the cited lines by the main

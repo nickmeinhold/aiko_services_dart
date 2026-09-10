@@ -346,6 +346,37 @@ void main() {
   });
 
   group('a promotion that fails', () {
+    test('a clear that cannot go out aborts the promotion, and NOTHING is '
+        'announced', () async {
+      // A live registrar died exactly here: its link was auto-reconnecting, and
+      // mqtt_client THROWS from a publish where paho merely returns an error
+      // code. The transport now reports; this is the report being acted on.
+      final bus = FakeBus()..failClearRetained = true;
+      final process = _process(bus, searchTimeout: const Duration(seconds: 30));
+      final failures = <Object>[];
+      final sub = process.promotionFailures.listen(failures.add);
+      await process.connect();
+      bus.clear();
+
+      await _deliverAbsent(bus);
+      await settle();
+
+      expect(failures, hasLength(1));
+      expect(process.role, RegistrarRole.primarySearch);
+      // The will must NOT have been taken and nothing announced. Announcing
+      // after a failed clear puts a retained `found` onto a topic that still
+      // holds a predecessor's tombstone.
+      expect(bus.actions.whereType<WillChanged>(), isEmpty);
+      expect(
+        bus.actions.whereType<SentMessage>().where(
+          (sent) => sent.topic == _bootTopic,
+        ),
+        isEmpty,
+      );
+      await sub.cancel();
+      await process.disconnect();
+    });
+
     test('stands back down instead of holding a role it never announced', () async {
       final bus = FakeBus()..failSetWillWith = StateError('broker gone');
       final process = _process(bus, searchTimeout: const Duration(seconds: 30));

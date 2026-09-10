@@ -32,6 +32,8 @@ import '../transport/mqtt_transport.dart';
 import 'bus_process.dart' show registrarBootTopic;
 import 'process_identity.dart';
 import 'registrar_election.dart';
+import 'service_details.dart';
+import 'service_roster.dart';
 import 'service_topic_path.dart';
 
 /// `main/__init__.py:15`, `REGISTRAR_VERSION = 2`. Published as parameter 2 of
@@ -102,6 +104,34 @@ class RegistrarProcess {
 
   /// `process.py:91`, `TOPIC_REGISTRAR_BOOT` — the one retained topic in Aiko.
   String get bootTopic => registrarBootTopic(namespace);
+
+  /// Where services register and where the roster is asked for.
+  String get topicIn => topicPath.topicIn;
+
+  /// Where arrivals, departures and snapshot completions are announced.
+  String get topicOut => topicPath.topicOut;
+
+  /// Every process's state topic, across the whole namespace.
+  ///
+  /// `registrar.py:137`, `_SERVICE_STATE_TOPIC`. This is the broadest
+  /// subscription the port takes, and it is what makes the registrar the
+  /// island's LWT CONSUMER — the port had been treating a Last Will as
+  /// something to EMIT. Verb 4 of the capability invariant is "notice a service
+  /// dying, without that service saying anything", and this is the only wire
+  /// that carries it: a killed process never gets to deregister, so the BROKER
+  /// speaks for it.
+  String get serviceStateFilter => '$namespace/+/+/+/state';
+
+  /// Who is on this island.
+  final ServiceRoster roster = ServiceRoster();
+
+  /// The roster size after every change.
+  ///
+  /// Upstream publishes this into its own EC share as `service_count`
+  /// (`registrar.py:370`, `:394`), which is how a dashboard watches an island
+  /// fill up. This port has no share producer yet, so — as with [lifecycle] —
+  /// the value is surfaced rather than performed.
+  Stream<int> get serviceCounts => _serviceCounts.stream;
 
   /// The will a PRIMARY holds: retained, so a late joiner learns the registrar
   /// is gone without having to ask anyone who is no longer there to answer.
@@ -189,6 +219,7 @@ class RegistrarProcess {
   final _lifecycle = StreamController<RegistrarRole>.broadcast();
   final _rosterDrops = StreamController<void>.broadcast();
   final _announcements = StreamController<ServiceTopicPath>.broadcast();
+  final _serviceCounts = StreamController<int>.broadcast();
   final _promotionFailures = StreamController<Object>.broadcast();
 
   final Stopwatch _clock = Stopwatch();
@@ -227,6 +258,13 @@ class RegistrarProcess {
     _clock.start();
     await bus.connect();
     router.addHandler(bootTopic, _onAnnouncement);
+    // Subscribed unconditionally, exactly as upstream registers
+    // `_topic_in_handler` in `__init__` (`registrar.py:262`) rather than on
+    // promotion. A SECONDARY listens too and simply never hears anything: a
+    // service learns where to register from the retained announcement, which
+    // names the PRIMARY's path, so nothing is ever addressed here until we win.
+    router.addHandler(topicIn, _onTopicIn);
+    router.addHandler(serviceStateFilter, _onServiceState);
     _subscribedAt = _clock.elapsed;
     await _apply(_election.initialize());
   }
@@ -314,7 +352,17 @@ class RegistrarProcess {
         _timer = null;
 
       case ClearBootTopic():
-        bus.clearRetained(bootTopic);
+        // A publish that could not go is a promotion that cannot continue.
+        // Upstream puts this call OUTSIDE its try because paho returns an error
+        // CODE on a down link; `mqtt_client` throws, and a live registrar died
+        // here mid-auto-reconnect. The transport now reports instead, and the
+        // report has to be acted on or the next effect announces onto a topic
+        // that still holds a predecessor's tombstone.
+        if (!bus.clearRetained(bootTopic)) {
+          _promotionFailed(
+            StateError('the link was down while clearing $bootTopic'),
+          );
+        }
 
       case AnnouncePrimary():
         try {
@@ -323,25 +371,196 @@ class RegistrarProcess {
           // strands a retained `found` naming a dead process, and every peer
           // joining afterwards is told a corpse is primary.
           await bus.setWill(primaryWill);
-          bus.send(bootTopic, 'primary', [
+          final announced = bus.send(bootTopic, 'primary', [
             'found',
             topicPath.path,
             registrarVersion,
             timeStarted,
           ], retain: true);
+          if (!announced) {
+            _promotionFailed(
+              StateError('the link was down while announcing on $bootTopic'),
+            );
+            return;
+          }
           if (!_announcements.isClosed) _announcements.add(topicPath);
         } on Object catch (error) {
           // `registrar.py:198-200` catches here and stands the registrar back
           // down. Anything thrown between taking the will and publishing leaves
           // an island holding a primary that never spoke, so the ROLE has to go
           // back rather than the error go up.
-          if (!_promotionFailures.isClosed) _promotionFailures.add(error);
-          _pending.addAll(_election.onPrimaryFailed());
+          _promotionFailed(error);
         }
 
       case DropRoster():
+        roster.clear();
+        _publishServiceCount();
         if (!_rosterDrops.isClosed) _rosterDrops.add(null);
     }
+  }
+
+  /// `add`, `remove` and `share`, the three commands a registrar serves.
+  ///
+  /// Arity is the gate, and it is upstream's (`registrar.py:294-305`): six
+  /// parameters for `add`, one for `remove`, six for `share`. Anything else
+  /// falls through silently — this topic is world-writable on ADR-023's
+  /// unauthenticated bus, so malformed input is an expected arrival to drop,
+  /// not an error to raise.
+  void _onTopicIn(AikoMessage message) {
+    if (_leaving) return;
+    final parameters = switch (message.arguments) {
+      PositionalArguments(:final values) => values,
+      KeywordArguments() => const <Object?>[],
+    };
+    switch ((message.command, parameters)) {
+      case ('add', _) when parameters.length == 6:
+        _serviceAdd(parameters);
+      case ('remove', [final String path]):
+        _serviceRemove(path);
+      case ('share', _) when parameters.length == 6:
+        _servicesShare(parameters);
+      default:
+        return;
+    }
+  }
+
+  /// A process died, and the broker said so on its behalf.
+  ///
+  /// `registrar.py:284-288`. The `/state` check is upstream's and is kept even
+  /// though the subscription already guarantees it: this handler is registered
+  /// for a FILTER, and a filter is a claim about what we asked for rather than
+  /// about what arrived.
+  ///
+  /// Note what this inherits. The broker publishes a will when IT notices the
+  /// drop, which for a frozen process is 1.5x keepalive — the measured 60-90
+  /// second band. So a service that froze and recovered can be evicted here
+  /// AFTER it has already reconnected and re-registered, with nothing to undo
+  /// it. That is upstream's behaviour too and a live island was found in
+  /// exactly that state; see docs/notes/registrar-scope.md.
+  void _onServiceState(AikoMessage message) {
+    if (_leaving) return;
+    if (message.command != 'absent') return;
+    const suffix = '/state';
+    if (!message.topic.endsWith(suffix)) return;
+    _serviceRemove(
+      message.topic.substring(0, message.topic.length - suffix.length),
+    );
+  }
+
+  /// `registrar.py:355-377`.
+  void _serviceAdd(List<Object?> parameters) {
+    final service = ServiceDetails.tryParse(parameters);
+    if (service == null) return;
+    // Idempotent, and the silence is the contract: the payload is built before
+    // the guard upstream but published inside it, so a re-registration produces
+    // no traffic. `process.py:353-358` re-pushes every service on every `found`,
+    // which a reconnect re-reads — so this fires routinely, not exceptionally.
+    if (!roster.add(service)) return;
+    _publishServiceCount();
+    bus.send(topicOut, 'add', _addParameters(service));
+  }
+
+  /// `registrar.py:378-400`.
+  void _serviceRemove(String path) {
+    final ServiceTopicPath topicPath;
+    try {
+      topicPath = ServiceTopicPath.parse(path);
+    } on FormatException {
+      // Upstream's `if service_topic_path:` guard — a path that does not parse
+      // is dropped without comment.
+      return;
+    }
+    final removed = roster.remove(topicPath);
+    if (removed.isEmpty) return;
+    _publishServiceCount();
+    // One announcement PER SERVICE, not one per request. A process death
+    // removes several and every consumer needs to hear about each.
+    for (final service in removed) {
+      bus.send(topicOut, 'remove', [service.topicPath.path]);
+    }
+  }
+
+  /// `registrar.py:331-350` — the producer half of the share protocol.
+  void _servicesShare(List<Object?> parameters) {
+    final [replyTopic, name, protocol, transport, owner, tags] = parameters;
+    if (replyTopic is! String ||
+        name is! String ||
+        protocol is! String ||
+        transport is! String ||
+        owner is! String) {
+      return;
+    }
+    final constraint = ServiceFilter.tryParseTags(tags);
+    if (constraint == null) return;
+    if (!_isPublishable(replyTopic)) return;
+
+    final filter = ServiceFilter(
+      name: name,
+      protocol: protocol,
+      transport: transport,
+      owner: owner,
+      tags: constraint,
+    );
+    // Materialised before the first publish. The roster is a live view, and a
+    // count published from one walk followed by a second walk that yields a
+    // different number is a frame a consumer can never complete — it decrements
+    // to zero or never reaches it.
+    final matched = roster.filter(filter).toList(growable: false);
+
+    bus.send(replyTopic, 'item_count', [matched.length]);
+    for (final service in matched) {
+      bus.send(replyTopic, 'add', _addParameters(service));
+    }
+    // NOT to the reply topic. `(sync …)` goes to the registrar's own `/out`
+    // (`registrar.py:349-350`), naming the topic it completes — which is how a
+    // consumer distinguishes its own snapshot's end from a peer's, and how
+    // every consumer learns that somebody else asked.
+    bus.send(topicOut, 'sync', [replyTopic]);
+  }
+
+  /// A reply topic we are willing to publish to.
+  ///
+  /// Upstream validates `topic_response` not at all — that is finding 1 of
+  /// `docs/notes/registrar-findings-for-upstream.md`, and the only rejections
+  /// observed were incidental ones from paho refusing wildcards and empty
+  /// strings. Refusing exactly those two is therefore PARITY with upstream's
+  /// observed behaviour rather than a unilateral divergence, while the wider
+  /// hole is left open deliberately and stays filed.
+  bool _isPublishable(String topic) =>
+      topic.isNotEmpty && !topic.contains('+') && !topic.contains('#');
+
+  /// The six fields of an `(add ...)`, in wire order.
+  ///
+  /// Built once so the live announcement and the snapshot row cannot drift.
+  /// Upstream has them in two places and they are NOT identical: `service_add`
+  /// goes through `generate` while `services_share` concatenates an f-string,
+  /// so a tag containing a space is length-prefixed by one path and not by the
+  /// other. Ours uses the encoder both times; the divergence is recorded rather
+  /// than reproduced.
+  List<Object?> _addParameters(ServiceDetails service) => [
+    service.topicPath.path,
+    service.name,
+    service.protocol,
+    service.transport,
+    service.owner,
+    service.tags,
+  ];
+
+  /// Abandon a promotion and stand back down.
+  void _promotionFailed(Object error) {
+    if (!_promotionFailures.isClosed) _promotionFailures.add(error);
+    // Anything still queued FROM THIS PROMOTION must not run. Announcing after
+    // a failed clear puts a retained `found` on a topic that still holds a
+    // predecessor's tombstone; announcing after standing down is a claim about
+    // a role we no longer hold. Both are worse than not being primary.
+    _pending.removeWhere(
+      (effect) => effect is AnnouncePrimary || effect is ClearBootTopic,
+    );
+    _pending.addAll(_election.onPrimaryFailed());
+  }
+
+  void _publishServiceCount() {
+    if (!_serviceCounts.isClosed) _serviceCounts.add(roster.count);
   }
 
   /// Leave the bus.
@@ -369,6 +588,7 @@ class RegistrarProcess {
     await _lifecycle.close();
     await _rosterDrops.close();
     await _announcements.close();
+    await _serviceCounts.close();
     await _promotionFailures.close();
   }
 }
