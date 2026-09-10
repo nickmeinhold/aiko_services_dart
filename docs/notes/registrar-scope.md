@@ -1,0 +1,406 @@
+# Scope — a Dart registrar (increment 2)
+
+> **Status, 2026-09-10: scoped, nothing built.** This note is step 0. Nothing in
+> `lib/` has changed. Everything below was read against a pinned ref, not recalled.
+>
+> **One thing here was measured rather than read, and it found a live defect:** running
+> the existing acceptance suite to establish a baseline failed, because the island had
+> been serving a roster that did not contain its own ChatServer for 23 hours. See
+> *"The island was found broken"* below. Baseline is now green, 14/14.
+
+Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).
+
+**Oracle hygiene, because the local checkout is somebody's working tree.**
+`~/git/orgs/aiko/aiko_services` currently sits on branch `fix/services-iterator-iter`
+with eight local branches and an untracked `uv.lock`. Before reading a line of it, this
+was established rather than assumed:
+
+```
+registrar.py: HEAD == origin/master, byte-identical
+git log 702b896..origin/master -- registrar.py  ->  empty
+```
+
+So the file is unchanged since the port last read it, and which branch the tree happens
+to be on does not matter *for this file*. It would matter for others.
+
+*(The inherited task says `registrar.py` is 413 lines. It is 417 on every ref checked.
+Trivial, and recorded only so the next reader does not think they have a different
+file.)*
+
+---
+
+## The capability invariant
+
+An **island** can:
+
+1. **elect** our process as its primary registrar, from cold start,
+2. **accept** service registrations and deregistrations on its `/in`,
+3. **serve** the roster to a requester that asks for it,
+4. **notice** a service dying, without that service saying anything,
+5. **announce** itself so joining peers find it, and
+6. **retract** that announcement when it dies, without saying anything.
+
+Verbs 4 and 6 are the two an island actually *depends on*, and both are things that
+happen when nothing sends a message. Verb 1 is the one the inherited plan omits
+entirely. As with increment 1, each verb needs its own evidence — and 1, 4 and 6 are
+where a happy-path run proves nothing.
+
+---
+
+## Three responsibilities the inherited plan does not mention
+
+The task description (claude-tasks #3994) lists registration, the producer half of the
+share protocol, the retained primary announcement, LWT, and lease serving. Reading the
+file turns up three more, and one of them is a precondition for everything else.
+
+### 1. The primary election is not optional
+
+`StateMachineModel` (`registrar.py:142-199`) — `start → primary_search →
+{secondary | primary}`, with `primary_failed` returning either back to `primary_search`.
+
+This is load-bearing rather than decorative: **`(primary found ...)` is published in
+exactly one place, `on_enter_primary` (`:182-197`).** A process that does not run the
+election never announces itself, so verb 5 is downstream of verb 1. Entry to `primary`
+comes from one of two triggers:
+
+* `_registrar_handler("absent")` while in `primary_search` (`:277-279`) — the retained
+  boot topic says nobody is primary; or
+* `primary_search_timer` firing after `_PRIMARY_SEARCH_TIMEOUT = 2.0` seconds with the
+  state still `primary_search` (`:171-176`) — nobody answered.
+
+`secondary` is reachable (`_registrar_handler("found")`, `:272-275`) and, for our
+purposes, is a state that does almost nothing: a secondary serves no roster and the
+header's own To Do ("Secondary Registrar subscribe to primary Registrar and update
+`self.history`") says the interesting part is unbuilt upstream.
+
+**Scope call: implement `start → primary_search → primary` and the `primary_failed`
+edge. Implement `secondary` as a state we can ENTER and sit in, doing nothing.** That is
+the honest port of what upstream actually does, and it keeps a second registrar from
+fighting ours. Ordering: `primary_search` is entered from `__init__` via
+`transition("initialize")` (`:266`), *after* the handlers are registered (`:261-264`).
+
+### 2. The registrar is the island's LWT *consumer*
+
+`_SERVICE_STATE_TOPIC = f"{get_namespace()}/+/+/+/state"` (`:137`), subscribed at
+`:261-262`, handled at `:284-288`: on `(absent)` from a topic ending `/state`, strip the
+suffix and `service_remove(topic_path)`.
+
+This is verb 4, and it is how a roster stays true when a service is killed rather than
+shut down. **The port has been treating LWT as a thing we must *emit*; here it is a
+thing we must *consume*, with a wildcard subscription across the whole namespace.**
+
+It also connects a measured fact to a consequence. The frozen-app-to-LWT window is a
+**60-90 second band** (1.5 × keepalive, keepalive=60; two observations, 86 s and 71 s,
+bracketing the ceiling — ADR-0002). That band is exactly how long our registrar would
+serve a roster naming a service that is already gone. That is upstream's behaviour too,
+so it is parity, not a defect — but it should be written down rather than discovered.
+
+And note the interaction with `service_remove`'s process rule (`:381-386`): the LWT
+topic is per-**process**, `{ns}/{host}/{pid}/0/state`, so `service_id == "0"` fires the
+"remove every service of this process" branch. The two halves are designed together.
+
+### 3. `(history ...)` — protocol V2, and it has a different `add` arity
+
+`services_history` (`:307-328`), reachable from `_topic_in_handler` (`:298-303`).
+A `deque(maxlen=4096)` of removed services, replayed newest-first, with
+`count == "*"` meaning `_HISTORY_LIMIT_DEFAULT = 16`.
+
+The trap is in the payload. `services_share` emits a **6-field** `add`
+(`:341-347`); `services_history` emits an **8-field** one, appending `time_add` and
+`time_remove` (`:318-326`). Same command word, two arities, distinguished only by which
+request you sent. Our `ServicesCache` table documents the 6-field form as *the* registrar
+`add`; that is true of `share` and false of `history`.
+
+**Scope call: implement `history`.** It is ~20 lines, the ring buffer is already implied
+by `service_remove`, and leaving it out means a Python dashboard pointed at our registrar
+gets silence where it expects a reply — the exact "an island notices nothing" claim this
+increment exists to make.
+
+---
+
+## The island was found broken, and that is the first finding
+
+Before writing any of the above into a plan, the existing acceptance suite was run to
+establish a baseline. **It failed** — `tool/observer_acceptance.sh` exited 2 at its own
+oracle step: *"ORACLE: no chat_server in the roster"*. No Dart was involved; the island
+was asked directly.
+
+What was observed, on the wire, with `mosquitto_sub`/`mosquitto_pub` and no Dart:
+
+* `aiko/service/registrar` held a valid retained
+  `(primary found aiko/fddd654e4b5a/1/1 2 831255.387865359)` — a registrar, primary,
+  answering.
+* Asking that registrar `(share <resp> * * * * *)` returned **`(item_count 1)`**: itself,
+  and nothing else.
+* Meanwhile `aiko-chat-1` had been up 23 hours, healthy, printing its full Category tree
+  (`channels`, `users`, five channels). **Running, and invisible.**
+* `docker restart aiko-chat-1`, then the identical query: **`(item_count 5)`** — the
+  registrar, `chat_server`, `chat_space`, `channels`, `users`.
+
+**The registrar had not lost the services. It never had them.** That is the discriminating
+result: if entries had been dropped, restarting the *producer* would not be what fixes it.
+
+The mechanism is a **hypothesis, not a measurement**, and is recorded as one. Consistent
+with everything above: the whole compose project restarted ~23 h ago, the registrar's log
+shows it could not reach the broker for several seconds at startup
+(`Couldn't connect to MQTT server mosquitto:1883`), and a service pushes its registration
+**once**, on the `on_registrar` "found" transition (`process.py:353-358`). A ChatServer
+that read a *stale* retained `found` naming the previous registrar would have published
+its `(add ...)` to a topic path nobody was listening on, reached `REGISTRAR` state, and
+never pushed again. That is upstream's own header BUG at `registrar.py:48-50`, from the
+other side.
+
+Not measured, and it would take a deliberate reproduction to confirm: hand-publish a
+retained `found` naming a dead topic path, start a service, and see where its `add` goes.
+
+**Why this belongs in a registrar scope note.** Three things follow:
+
+1. **The baseline is a precondition, not a given.** A run of this suite against a
+   silently-degraded island would have "failed" for reasons having nothing to do with our
+   code, and the obvious reading — *our registrar broke it* — would have been wrong. The
+   suite is now green 14/14 against a restored island. Any future comparison is against
+   that, and the check is one `(share ...)` on the wire.
+2. **Registration is push-once with no reconciliation, and that is the service's side,
+   not ours.** Do not "fix" it in the registrar. But it does mean an empty or partial
+   roster is a state a *correct* registrar can be in, so no acceptance assertion may
+   treat "roster is complete" as self-evidently our doing.
+3. **It is a real answer to "what does an island depend on a registrar for".** Not
+   uptime — this registrar had 23 hours of it while the island was functionally
+   headless. What depends on it is the *roster being true*, and nothing in the system
+   currently notices when it stops being true. Worth offering to Andy alongside the
+   duplicate-snapshot finding (claude-tasks #3993), once his queue drains — same channel,
+   same rule about not opening a fifth thread.
+
+---
+
+## The reply address is a request parameter — and this decides #3962
+
+Both request-shaped commands take the reply topic as **parameter 0**:
+
+```
+(share   topic_response name protocol transport owner tags)   -> services_share
+(history topic_response count)                                -> services_history
+```
+
+The interface docstrings say it outright (`:204-210`): *"Requests reply via messages to
+`topic_response` (s_02 §2), never return values"*.
+
+This is the concrete input the HandlerContext ADR (#3962) has been missing, and it lands
+on the side that ADR already chose:
+
+* the reply address is **data in the request**, not structure derived from the topic the
+  request arrived on — so a handler signature returning a payload cannot express it;
+* there is **no correlation token** anywhere in either command, consistent with the
+  already-recorded `do_request` finding. On the sealed two-shape reply address
+  (`Uniplex(topic) | Multiplex(topic, token)`), **every registrar request is `Uniplex`.**
+  Nothing here exercises `Multiplex`;
+* and the reply is **not one message**. `services_share` publishes `item_count`, then N
+  × `add`, then a `sync` — a handler that returns *a* reply cannot express it at all.
+
+**One asymmetry worth pinning, because it is easy to get backwards.** The `item_count`
+and the `add`s go to the caller's `topic_response`. The closing `(sync topic_response)`
+goes to **the registrar's own `topic_out`** (`:350-351`) — broadcast, carrying the
+requester's topic as its payload. Our `ServicesCache` already consumes it that way
+(`services_cache.dart`'s table: *"replies on two topics"*), so the consumer half proves
+the shape; the producer half must reproduce it.
+
+**This does not mean writing the ADR is a prerequisite for starting.** It means the
+registrar's `/in` handler is the first real call site the ADR has ever had, and the ADR
+should be written *against* it rather than in the abstract — which is precisely the
+mistake ADR-0003 made and was dissolved for.
+
+---
+
+## LWT: our transport can be better than the reference, and still be at parity
+
+`mqtt_transport.dart` sets no will (grep for `will`/`lwt` returns only a prose match).
+`MessageBus` exposes `connect / subscribe / unsubscribe / send / disconnect` and no way
+to declare one. So this is genuinely new surface.
+
+**Upstream's mechanism is a reconnect.** `MQTT.set_last_will_and_testament`
+(`message/mqtt.py:200-209`) is:
+
+```python
+self._disconnect()
+self.wait_disconnected()
+self._connect(topic_lwt, payload_lwt, retain_lwt)
+```
+
+because paho only accepts `will_set` before `connect` (`mqtt.py:118-120`). So a Python
+registrar entering `primary` **drops its broker connection and reconnects**, mid-startup,
+every time. That file's own header (`mqtt.py:15-23`) documents the resulting deadlock —
+*"when Registrar processed `(primary absent)` message and attempts
+`set_last_will_and_testament()`, which causes a `wait_disconnected()` whilst on the MQTT
+thread"* — and names the registrar path by name.
+
+Dart does not have to inherit this. `mqtt_client` takes the will on the connect message,
+and our registrar knows its will topic and payload before it connects, so it can set it
+once and never reconnect.
+
+**Is skipping the reconnect a wire divergence?** No. A clean MQTT `DISCONNECT` does not
+publish the will, so no peer observes anything on `TOPIC_REGISTRAR_BOOT` from the cycle;
+what an observer sees is a broker-side connect/disconnect pair and a brief subscription
+gap. It is invisible at the protocol layer we claim parity at. **Record it as a
+deliberate, additive divergence with a named reason**, the way `RosterReleased` was —
+not as a silent improvement.
+
+The ordering inside `on_enter_primary` (`:185-197`) is not incidental and must be
+reproduced:
+
+1. publish `""` retained to `TOPIC_REGISTRAR_BOOT` — clears the *previous* primary's
+   retained announcement so this process does not immediately re-read a stale one;
+2. set the will to `(primary absent)`, retained;
+3. publish `(primary found <topic_path> <version> <time_started>)`, retained.
+
+Doing 3 before 2 leaves a window where a crash strands a retained `found` naming a dead
+process — which is the exact failure the inherited task names as the reason LWT is not
+optional here.
+
+---
+
+## What is already built and what is genuinely new
+
+Verified by reading, not by remembering. `lib/` is 2180 lines across 13 files.
+
+| Need | Status |
+|---|---|
+| `ServiceTopicPath` parse/format, `service_id == "0"` process rule | **exists** (`service_topic_path.dart`, 82 lines) — confirm the process-expansion helper exists too |
+| `ConnectionState` machine | **exists** (`connection_state.dart`) — the *client* ladder; the registrar's election is a **different** state machine, not this one |
+| `TopicRouter` (dispatch by topic) | **exists** (`topic_router.dart`) — needed for `/in`, the boot topic, and the `+/+/+/state` wildcard |
+| `ServiceDetails` / `ServiceFilter` | **exists** (`service_details.dart`) — confirm `filter_by_attributes` semantics match `registrar.py:333` |
+| S-expression codec | **exists**, fuzz-verified against CPython |
+| `Share` tree, `ShareEvent` | **exists** — the registrar's own share is flat (`aiko_id`, `lifecycle`, `log_level`, `source_file`, `service_count`), depth 1 |
+| `MessageBus` fake for broker-free tests | **exists** |
+| `ECConsumer` | **exists** — the wrong half |
+| **`ECProducer`** | **NEW.** The registrar owns one for its own share (`:257-259`) |
+| **`services_share` / `services_history` producer** | **NEW.** Not `ECProducer` — the registrar-specific protocol |
+| **LWT in the transport** | **NEW.** No will support at all today |
+| **Wildcard `+/+/+/state` subscription + `(absent)` handling** | **NEW** |
+| **The election state machine** | **NEW** |
+| **The history ring buffer** | **NEW** |
+
+Two things named as "reusable" in the inherited task are listed above as *needing
+confirmation* rather than as facts: the `ServiceTopicPath` process helper and
+`ServiceFilter`'s match semantics. Neither has been read against `registrar.py:333` yet.
+That is step 1 and it is cheap.
+
+---
+
+## Upstream defects: port, fix, or diverge — decide each explicitly
+
+`registrar.py`'s own header names four. A port has to take a position on each, because
+"faithful" and "correct" point different ways.
+
+| Upstream BUG (header line) | Position |
+|---|---|
+| `:46` — `service_count` needs `int()` when the ECProducer updates it | **Fix.** Our `Share` is typed; emitting a string where the reference emits a string-that-should-be-an-int is copying a defect no peer depends on. Verify what actually goes on the wire first. |
+| `:48-50` — won't become primary when a stale retained `found` names a dead registrar | **Fix, carefully.** This is the same class as the LWT ordering above and it is a real availability bug: an island cannot recover. Needs its own falsifier (a hand-published stale retained `found`, then start ours). |
+| `:52-53` — multiple secondaries all promote when the primary fails | **Do not encounter.** With `secondary` implemented as inert, one Dart registrar cannot exhibit it. Do not claim it fixed. |
+| `:44`, `:380` — "if Process, remove *all* Process' Services" | **Appears already implemented** at `:381-386`, so both notes read as stale. Confirm by running it before saying so — a stale-TODO report to Andy is cheap and is only worth sending if measured. |
+
+Also `service_add` (`:353-375`) computes `payload_out` *before* the duplicate check, and
+a duplicate `add` is silently dropped with **no re-announcement** on `topic_out`. A
+service that re-registers after a registrar restart therefore gets nothing back. Parity
+says copy it; note it and move on.
+
+---
+
+## The falsifier — and the inherited acceptance criterion has a hole
+
+The task says the test is *"change one `command:` line"*. That is not achievable as
+written, and it is better to say so now than to discover it at the end.
+
+`aiko-chat-island/docker-compose.yml:327-340`:
+
+```yaml
+  registrar:
+    image: ghcr.io/nickmeinhold/aiko-chat-island:${ISLAND_VERSION:-edge}
+    command: ["aiko_registrar"]
+```
+
+The `command:` is one line, but the **image is the Python island image** — it contains no
+Dart runtime and no compiled binary of ours. Swapping the command alone gives a container
+that cannot start. The real swap is `image:` **and** `command:`, which means building and
+publishing a Dart registrar image first.
+
+**So the falsifier splits into two gates, and only the second is the claim.**
+
+* **Gate A — the honest cheap proof.** `docker stop aiko-registrar-1`, run the Dart
+  registrar on the host against the broker on `127.0.0.1:1883` (the dev-ports overlay
+  already publishes it), and require **`tool/observer_acceptance.sh` to pass unmodified**
+  — 14 assertions, an existing instrument written before this increment existed, which is
+  what makes it a real test rather than one shaped to fit. Plus the ChatServer, which is
+  a *Python* service, successfully registering itself with us and being discoverable.
+* **Gate B — the actual claim.** A published Dart registrar image, `image:` + `command:`
+  changed, `docker compose up`, the island coming up healthy with no Python registrar
+  present at all.
+
+Gate A is reachable this increment. Gate B needs a container story
+(multi-arch GHCR, per the org's versioned-container default) and should not be folded in
+silently.
+
+**Controls, because a registrar that does nothing also produces no complaints:**
+
+* **Must-fail arm for verb 4:** `docker kill` (not `stop`) a registered service and assert
+  the roster drops it — *after* first asserting the roster still contains it while the
+  service is merely paused. Without both arms, "the roster is right" is unfalsifiable.
+* **Must-fail arm for verb 6:** `docker kill` our registrar and assert
+  `TOPIC_REGISTRAR_BOOT` goes to `(primary absent)` — with a positive control that it
+  read `(primary found ...)` a moment earlier, from the same subscription.
+* **Verb 1 needs a cold-start arm:** clear the retained boot topic, start ours, assert it
+  promotes via the 2-second timeout — and a second arm with a *live* Python registrar
+  already primary, asserting ours enters `secondary` and does **not** announce.
+* Every assertion reads the **broker**, not our own logs. The observer increment's single
+  most valuable finding (MQTT 3.1 vs 3.1.1) was invisible in our output and visible only
+  in `docker logs aiko-mosquitto-1`.
+
+---
+
+## Build order
+
+Each step is observable on the wire before the next is written.
+
+0. **This note.** ✔
+1. **Confirm the reusable set** — `ServiceTopicPath`'s process expansion against
+   `:381-386`, `ServiceFilter` against `:333`. Read, do not assume.
+2. **LWT in `mqtt_transport.dart`** — moved to the front. The election's `on_enter_primary`
+   cannot be written correctly without it, and it is the one piece with no Dart precedent.
+3. **The election state machine** + the retained announcement (verbs 1, 5, 6).
+4. **`/in` registration** — `add` / `remove`, the roster, `service_count` (verb 2).
+5. **The wildcard state subscription** — `(absent)` → remove (verb 4).
+6. **`services_share`** — the producer half, against `services_cache.dart`'s table (verb 3).
+7. **`services_history`** + the ring buffer, including the 8-field `add`.
+8. **`ECProducer`** for the registrar's own share, so a Python dashboard can read our
+   `lifecycle`.
+9. **Gate A.**
+
+Lease serving (#3995) sits under step 8 and carries its own unresolved design question
+(does a test-only short-lease knob belong in production code?). Flag it there; do not
+decide it silently.
+
+## What is deliberately NOT in it
+
+* **Gate B / the container image.** Named above, not built here.
+* **A working `secondary`.** Entered, inert. Upstream's own To Do says the interesting
+  behaviour does not exist there either.
+* **Raft, CRDTs, multi-registrar consensus.** The header's Ideas section; not a port
+  obligation.
+* **`--primary` force-takeover.** Upstream's usage block marks it TODO and it is unbuilt.
+* **HyperSpace / Category.** The header's "Implement Registrar as a sub-class of Category"
+  is an upstream aspiration, not current behaviour. Porting current behaviour means
+  `Registrar extends Service`.
+
+## Known risks, named before building
+
+* **The transport's will support changes `connect()`, which every existing test path uses.**
+  A shared-type change makes the verification surface the whole package.
+* **The `+/+/+/state` wildcard is the broadest subscription this port has ever taken.**
+  On a busy island it sees every process's state traffic. No volume measured yet.
+* **`_registrar_handler("absent")` wipes the whole roster** (`:281`, `self.services =
+  Services()`). Reproducing that faithfully means our registrar can lose everything on a
+  boot-topic blip. Understand the trigger before copying it.
+* **The 2-second election timeout is a race with reality**, not a constant to tune.
+  Upstream's own TODO (`:167`) asks for jitter to avoid collisions and does not implement
+  it. Two Dart registrars started together would collide identically.
+* **Nothing here has been run.** Every claim above is from reading a pinned ref. The
+  first three build steps should each falsify or confirm a line of this note.
