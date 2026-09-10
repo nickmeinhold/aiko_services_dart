@@ -26,7 +26,16 @@ Future<void> main(List<String> args) async {
     exit(64);
   }
   final producerControl = args[0];
-  final seconds = args.length > 1 ? int.parse(args[1]) : 5;
+  // tryParse, not parse. A probe that dies with an unhandled FormatException on
+  // a typo'd argument reports a broken harness as a broken protocol, and the
+  // driver reads only the exit code.
+  final seconds = args.length > 1 ? int.tryParse(args[1]) : 5;
+  if (seconds == null || seconds < 1) {
+    stderr.writeln(
+      'lease-seconds must be a whole number of seconds >= 1, got "${args[1]}"',
+    );
+    exit(64);
+  }
 
   final client = AikoClient(host: '127.0.0.1', clientId: 'lease_probe_$pid');
   await client.connect();

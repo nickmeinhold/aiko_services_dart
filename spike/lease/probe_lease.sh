@@ -33,10 +33,19 @@ REG=$(printf '%s' "$BOOT" | sed -n 's/^(primary found \([^ ]*\).*/\1/p')
 
 RESP="$NS/leaseprobe/$$/roster"
 ROSTER=$(mktemp)
-( timeout 8 mosquitto_sub -h "$HOST" -p "$PORT" -t "$RESP" > "$ROSTER" 2>&1 & )
+# Owned and flushed, like the control subscriber below. An earlier version
+# backgrounded this in a subshell under `timeout` and parsed the file while
+# mosquitto_sub still held it -- reading a userspace buffer rather than what the
+# broker sent, so a perfectly good roster could still be in flight and the probe
+# would exit 3 "no chat_server". The SAME hazard was already fixed for the
+# control subscriber in this file, which is what made leaving it here an
+# inconsistency rather than an oversight.
+mosquitto_sub -h "$HOST" -p "$PORT" -t "$RESP" > "$ROSTER" 2>&1 &
+ROSTER_SUB=$!
 sleep 1
 mosquitto_pub -h "$HOST" -p "$PORT" -t "$REG/in" -m "(share $RESP * * * * *)"
 sleep 4
+kill "$ROSTER_SUB" 2>/dev/null; wait "$ROSTER_SUB" 2>/dev/null
 # Any service advertising ec=true has an ECProducer; the ChatServer is the one
 # the island always has.
 # The payload is `(add <topic_path> <name> <protocol> <transport> <owner> (tags))`,
@@ -68,17 +77,23 @@ printf 'producer: %s\nlease:    %ss (renewal at 0.8x = %ss)\n' "$CONTROL" "$LEAS
 # lifetime and flush it before reading — a log read while mosquitto_sub still
 # holds it is a userspace buffer, not what the broker saw.
 LOG=$(mktemp)
+PROBE_OUT=$(mktemp)
 mosquitto_sub -h "$HOST" -p "$PORT" -t "$CONTROL" > "$LOG" 2>&1 &
 SUB=$!
 sleep 1
-dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" > /tmp/lease-probe-out.txt 2>&1
+# mktemp, not a fixed path. Two concurrent verify.sh runs sharing one file makes
+# each read the other's CONSUMER_TOPIC -- one run counting another's renewals, or
+# reporting a bogus attach failure. This file already treats a shared name as a
+# real defect (the will probe carries a per-run id for the same reason), so a
+# global path here was the inconsistency.
+dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" > "$PROBE_OUT" 2>&1
 sleep 2
 kill "$SUB" 2>/dev/null; wait "$SUB" 2>/dev/null
 
-MY_TOPIC=$(sed -n 's/^CONSUMER_TOPIC=//p' /tmp/lease-probe-out.txt)
+MY_TOPIC=$(sed -n 's/^CONSUMER_TOPIC=//p' "$PROBE_OUT")
 if [ -z "$MY_TOPIC" ]; then
   bad "the probe never attached — nothing below proves anything"
-  cat /tmp/lease-probe-out.txt >&2
+  cat "$PROBE_OUT" >&2
 else
   # Only OUR requests. The producer's control topic is shared, so counting every
   # (share ...) would count other consumers' traffic as our renewals.
@@ -104,7 +119,7 @@ else
     bad "expected exactly 1 cancellation at lease 0, saw $CANCELS"
   fi
 fi
-rm -f "$LOG"
+rm -f "$LOG" "$PROBE_OUT"
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then
