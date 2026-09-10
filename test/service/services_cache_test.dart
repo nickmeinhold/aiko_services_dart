@@ -304,20 +304,24 @@ void main() {
       'a service deregistering mid-snapshot stays gone after the commit',
       () async {
         cache.attach();
-        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        // TWO expected records, so the frame is still OPEN when the remove
+        // arrives. With a count of one the frame commits on the first `add`
+        // and the remove lands afterwards — the ordinary live-delta path,
+        // which passes whatever the staging code does. Verified: that shape
+        // stayed green with the staging remove deleted, i.e. it could not fail.
+        await bus.deliver(cache.shareTopic, 'item_count', ['2']);
         await bus.deliver(cache.shareTopic, 'add', _chatRecord);
         // The snapshot named it, and then it left before the frame committed.
         await bus.deliver('$_registrar/out', 'remove', [
           _chatRecord[0] as String,
         ]);
+        await bus.deliver(cache.shareTopic, 'add', _registrarRecord);
         await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
 
         expect(cache.state, ServicesCacheState.ready);
-        expect(
-          cache.services,
-          isEmpty,
-          reason: 'the commit must not resurrect a service already retired',
-        );
+        expect(cache.services.map((s) => s.name), [
+          'registrar',
+        ], reason: 'the commit must not resurrect a service already retired');
       },
     );
 

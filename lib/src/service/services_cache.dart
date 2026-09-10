@@ -135,6 +135,23 @@ class ServicesCache {
   /// was added to fix: the cache would report a confident empty island.
   ///
   /// So the protocol's own answer-signal ends the window. We do not invent one.
+  ///
+  /// **What this is NOT, stated plainly because two cage-match rounds kept
+  /// finding instances of it: a liveness guard, not an AUTHENTICITY guard.** It
+  /// establishes that we asked, never that the registrar is the one answering.
+  /// On ADR-023's unauthenticated bus a peer can still publish onto our share
+  /// topic inside the window, and one case survives every arrangement of local
+  /// flags: `(sync …)` is deliberately LATCHED to tolerate cross-topic
+  /// reordering (see [_onRegistrarOut]), so a sync that arrives BEFORE any
+  /// frame will promote whichever frame completes first — a raced
+  /// `(item_count 0)` included.
+  ///
+  /// That residual is not fixable here. Distinguishing the registrar's frame
+  /// from a peer's needs something on the wire that authenticates the sender or
+  /// binds the reply to the request — which is the same gap as the registrar's
+  /// unvalidated `topic_response` (`docs/notes/registrar-findings-for-upstream.md`)
+  /// and belongs with ADR-023 and the reply-shape ADR, not with another local
+  /// flag. Filed rather than patched a third time.
   bool _awaitingSnapshot = false;
   String? _registrarOut;
   bool _attached = false;
