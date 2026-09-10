@@ -277,6 +277,26 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
   else
     bad "observer acceptance against a live island"
   fi
+
+  # The Last Will is only observable at the BROKER — nothing in our own output
+  # can distinguish a will that was carried from one that was silently dropped,
+  # which is the same shape as the 3.1-vs-3.1.1 defect whose only witness was
+  # mosquitto's log. Runs here rather than by hand, because a gate nobody fires
+  # is advisory (the whole reason this script exists).
+  step "last will: carried on a hard exit, suppressed on a clean one"
+  # RC captured explicitly, not read from `$?` inside an else-branch: there it
+  # is the exit status of whatever the branch last ran, which is a different
+  # question than the one being asked, and it reads as correct either way.
+  spike/will/probe_will.sh
+  WILL_RC=$?
+  case "$WILL_RC" in
+    0) ok "the broker published (absent), and stayed silent after a goodbye" ;;
+    # 2 is "no broker / no mosquitto_sub". The island arm above already failed
+    # for that same missing broker, so counting it again would report one
+    # absent rig as two distinct defects.
+    2) printf '   \033[33mskipped\033[0m last will (no broker or no mosquitto_sub)\n' ;;
+    *) bad "last will probe against a live broker" ;;
+  esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'
