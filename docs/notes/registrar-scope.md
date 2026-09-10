@@ -1,7 +1,13 @@
 # Scope — a Dart registrar (increment 2)
 
-> **Status, 2026-09-10: scoped, nothing built.** This note is step 0. Nothing in
-> `lib/` has changed. Everything below was read against a pinned ref, not recalled.
+> **Status, 2026-09-10: scoped; step 1 landed.** This note began as step 0, written
+> before any code. Everything below was read against a pinned ref, not recalled.
+>
+> **Step 1 is now done and this note is no longer ahead of the tree.** Confirming the
+> "reusable" set found two gaps and closed them: `ServiceTopicPath.processPath` /
+> `isProcess` did not exist and now do, and `ServicesCache`'s snapshot admission was
+> hardened after a cage-match. `ServiceFilter`'s tag matching is still absent and is
+> still step 1's remaining item.
 >
 > **One thing here was measured rather than read, and it found a live defect:** running
 > the existing acceptance suite to establish a baseline failed, because the island had
@@ -295,7 +301,7 @@ Verified by reading, not by remembering. `lib/` is 2180 lines across 13 files.
 
 | Need | Status |
 |---|---|
-| `ServiceTopicPath` parse/format, `service_id == "0"` process rule | **exists** (`service_topic_path.dart`, 82 lines) — confirm the process-expansion helper exists too |
+| `ServiceTopicPath` parse/format, `service_id == "0"` process rule | **exists** — and the process-expansion helper was MISSING; `processPath` + `isProcess` added in step 1 |
 | `ConnectionState` machine | **exists** (`connection_state.dart`) — the *client* ladder; the registrar's election is a **different** state machine, not this one |
 | `TopicRouter` (dispatch by topic) | **exists** (`topic_router.dart`) — needed for `/in`, the boot topic, and the `+/+/+/state` wildcard |
 | `ServiceDetails` / `ServiceFilter` | **exists** (`service_details.dart`) — confirm `filter_by_attributes` semantics match `registrar.py:333` |
