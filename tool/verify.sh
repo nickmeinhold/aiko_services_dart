@@ -289,12 +289,20 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
   # question than the one being asked, and it reads as correct either way.
   spike/will/probe_will.sh
   WILL_RC=$?
+  # EVERY non-zero is a failure here, and the earlier version's exemption was a
+  # true sentence filed in the wrong role. It reasoned that a skip is harmless
+  # because "the island arm above already failed for the same absent rig" --
+  # true of a missing BROKER, false of a missing `mosquitto_sub`, which is the
+  # other thing the probe exits non-zero for. This branch only runs when the
+  # island container IS up, so there is a broker by construction; a probe that
+  # cannot observe it is a hole, not an absent rig. Island green + no host
+  # mosquitto_sub would otherwise print ALL CHECKS PASSED with the death
+  # announcement never checked -- the same silence-reads-as-success this script
+  # stopped granting the missing-container path one commit earlier.
   case "$WILL_RC" in
     0) ok "the broker published (absent), and stayed silent after a goodbye" ;;
-    # 2 is "no broker / no mosquitto_sub". The island arm above already failed
-    # for that same missing broker, so counting it again would report one
-    # absent rig as two distinct defects.
-    2) printf '   \033[33mskipped\033[0m last will (no broker or no mosquitto_sub)\n' ;;
+    2) bad "last will did not run: no mosquitto_sub on this machine (the island is up, so the broker is not the problem)" ;;
+    3) bad "last will did not run: no broker reachable, though the island container is up" ;;
     *) bad "last will probe against a live broker" ;;
   esac
 else
