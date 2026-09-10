@@ -67,7 +67,18 @@ class FakeBus implements MessageBus {
   /// Topics that were unsubscribed.
   final List<String> unsubscribed = [];
 
-  var connected = false;
+  /// Starts LIVE, because that is what every caller means by handing a bus to a
+  /// consumer: you are given a connected wire. Fourteen tests drive an
+  /// ECConsumer through `attach()`, which publishes, and none of them models a
+  /// connection — requiring one would be ceremony that tests the fake.
+  ///
+  /// Strict where it counts and lenient where it does not: this fake refuses
+  /// publishes AFTER [disconnect] and says nothing about the pre-connect
+  /// window. Use-after-teardown is the class that actually bit (a promotion
+  /// still publishing at a bus already torn down); publish-before-connect has
+  /// never hidden anything here, and a real caller cannot reach it — a process
+  /// awaits `connect()` before anything can attach.
+  var connected = true;
 
   final _transport = StreamController<bool>.broadcast();
 
@@ -116,6 +127,17 @@ class FakeBus implements MessageBus {
   @override
   LastWill? get will => _will;
 
+  /// A real client throws `ConnectionException` from `publishMessage` when the
+  /// socket is not up. A fake that silently accepts the publish is MORE
+  /// FORGIVING THAN THE REAL API, and a fake that is more forgiving hides
+  /// exactly the bugs it exists to catch — this one hid a promotion that kept
+  /// publishing at a bus `disconnect()` had already torn down.
+  void _requireConnected(String what) {
+    if (!connected) {
+      throw StateError('$what on a bus that is not connected');
+    }
+  }
+
   @override
   void send(
     String topic,
@@ -123,13 +145,21 @@ class FakeBus implements MessageBus {
     Object? params, {
     bool retain = false,
   }) {
+    _requireConnected('send($topic)');
     final message = SentMessage(topic, command, params, retain: retain);
     actions.add(message);
     sent.add(message);
   }
 
   @override
-  void clearRetained(String topic) => actions.add(RetainedCleared(topic));
+  void clearRetained(String topic) {
+    _requireConnected('clearRetained($topic)');
+    actions.add(RetainedCleared(topic));
+  }
+
+  /// How long [setWill] takes. Zero by default; a real one costs a reconnect,
+  /// and the window it opens is where a concurrent [disconnect] lands.
+  Duration setWillDelay = Duration.zero;
 
   /// Thrown by the next [setWill], if set.
   ///
@@ -148,6 +178,7 @@ class FakeBus implements MessageBus {
       failSetWillWith = null;
       throw failure;
     }
+    if (setWillDelay > Duration.zero) await Future<void>.delayed(setWillDelay);
     if (next == _will) return;
     _will = next;
     actions.add(WillChanged(next));

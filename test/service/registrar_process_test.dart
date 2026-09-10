@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
@@ -301,6 +303,45 @@ void main() {
       await settle();
 
       expect(bus.actions, isEmpty);
+    });
+
+    test('leaving mid-promotion lets it finish instead of publishing at a dead '
+        'bus', () async {
+      // A real will change costs a reconnect. This models the window it opens.
+      final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 80);
+      final process = _process(bus, searchTimeout: const Duration(seconds: 30));
+      await process.connect();
+      bus.clear();
+
+      // Open a promotion, then leave while the will change is still in flight.
+      unawaited(_deliverAbsent(bus));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await process.disconnect();
+      final atLeaving = bus.actions.length;
+
+      // Outlive the will change. Anything arriving after disconnect() RETURNED
+      // is a publish at a bus that has already been torn down — which on a real
+      // client throws ConnectionException out of an async drain, where the only
+      // catch belongs to AnnouncePrimary and so reports a promotion failure for
+      // something that was really a shutdown.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await settle();
+
+      expect(
+        bus.actions.length,
+        atLeaving,
+        reason: 'nothing may touch the bus after disconnect() returns',
+      );
+      // The promotion was allowed to COMPLETE rather than being cut in half:
+      // taking the retained will and then never announcing is the worst of the
+      // three outcomes, because the will is what a peer would act on.
+      expect(bus.actions.whereType<WillChanged>(), hasLength(1));
+      expect(
+        bus.actions.whereType<SentMessage>().where(
+          (sent) => sent.topic == _bootTopic,
+        ),
+        hasLength(1),
+      );
     });
   });
 

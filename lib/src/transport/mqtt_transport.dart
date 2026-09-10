@@ -355,9 +355,6 @@ class AikoClient implements MessageBus {
       ..onDisconnected = (() => _reportTransport(up: false))
       ..onAutoReconnected = (() => _reportTransport(up: true))
       ..onConnected = (() => _reportTransport(up: true));
-    // Assigned BEFORE the will block below, which reaches the client through
-    // the `_mqtt` getter.
-    _client = client;
 
     final will = _will;
     if (will != null) {
@@ -372,7 +369,7 @@ class AikoClient implements MessageBus {
       // The client id and keep-alive do NOT need repeating: `connect()` patches
       // both onto a user-supplied message (`:399-404`). `startClean` is the sole
       // omission, which is why it is the only one restored here.
-      _mqtt.connectionMessage = MqttConnectMessage()
+      client.connectionMessage = MqttConnectMessage()
           .startClean()
           // Topic AND message are what set the will FLAG. `withWillQos` and
           // `withWillRetain` alone do not, and a topic with no message throws
@@ -384,11 +381,17 @@ class AikoClient implements MessageBus {
           // 0 is what every island peer already expects.
           .withWillQos(MqttQos.atMostOnce);
       if (will.retain) {
-        _mqtt.connectionMessage = _mqtt.connectionMessage!.withWillRetain();
+        client.connectionMessage = client.connectionMessage!.withWillRetain();
       }
     }
 
     await client.connect();
+    // Published only once the socket is UP. Assigning before the connect would
+    // leave `_client` naming a client that never connected if this throws —
+    // non-null, so every reader passes the null check and then fails at the
+    // broker instead. A failed open leaves the previous state, which is either
+    // null (nothing to lie about) or the old client the caller is replacing.
+    _client = client;
     _updates = client.updates?.listen(_onData);
     // A fresh CONNECT with `startClean` opens an EMPTY session, so every
     // subscription this client held is gone as far as the broker is concerned.

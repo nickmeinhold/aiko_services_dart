@@ -208,6 +208,13 @@ class RegistrarProcess {
   final List<ElectionEffect> _pending = [];
   bool _draining = false;
 
+  /// The drain currently in flight, so [disconnect] can wait for it.
+  Future<void>? _drain;
+
+  /// Set by [disconnect]. Refuses NEW effects while letting in-flight ones
+  /// finish — see [disconnect] for why the asymmetry matters.
+  bool _leaving = false;
+
   /// Join the bus and enter the election.
   ///
   /// Subscribes to the boot topic BEFORE initialising, which is what lets a
@@ -257,17 +264,27 @@ class RegistrarProcess {
 
   /// Perform [effects] in order, one at a time, never two drains at once.
   Future<void> _apply(List<ElectionEffect> effects) async {
+    // A search timer can fire after we have begun leaving. Queueing its effects
+    // would publish from a process that is on its way out.
+    if (_leaving) return;
     _pending.addAll(effects);
     // A drain is already running and will reach what we just queued. Returning
     // here is what keeps the ordering single-threaded.
     if (_draining) return;
     _draining = true;
+    final drain = _drainPending();
+    _drain = drain;
     try {
-      while (_pending.isNotEmpty) {
-        await _perform(_pending.removeAt(0));
-      }
+      await drain;
     } finally {
       _draining = false;
+      _drain = null;
+    }
+  }
+
+  Future<void> _drainPending() async {
+    while (_pending.isNotEmpty) {
+      await _perform(_pending.removeAt(0));
     }
   }
 
@@ -335,8 +352,18 @@ class RegistrarProcess {
   /// behaviour too (nothing in `registrar.py` retracts on shutdown), and the
   /// two-arm probe asserts both halves rather than only the convenient one.
   Future<void> disconnect() async {
+    // Stop accepting NEW effects, then let anything already in flight finish
+    // against a bus that is still up. The asymmetry is the point: a promotion
+    // is HALF DONE between taking the retained will and publishing the
+    // announcement, and tearing the bus out from under it throws from
+    // `clearRetained` or `send` inside an async drain, where there is nobody to
+    // catch it. Only `AnnouncePrimary` sits in a try, so the throw would come
+    // from `ClearBootTopic` and surface as an unhandled async error rather than
+    // as a promotion failure.
+    _leaving = true;
     _timer?.cancel();
     _timer = null;
+    await _drain;
     await router.dispose();
     await bus.disconnect();
     await _lifecycle.close();
