@@ -311,7 +311,11 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
   # that long. `leaseTime` is an ordinary constructor parameter, so a short
   # lease exercises the SAME timer rather than a test-only branch — which is
   # what makes running it here worth anything.
-  step "EC lease: renewed on the wire, and cancelled distinctly"
+  # The TITLE says what is measured too, not just the PASS line. Correcting the
+  # ok() and leaving the heading claiming "renewed" is the same twin-instance
+  # miss this PR has now made three times: nothing here reads a clock, so
+  # cardinality is what was observed and frequency is what production does.
+  step "EC lease: repeated share requests on the wire, and a distinct cancel"
   spike/lease/probe_lease.sh
   LEASE_RC=$?
   # Same fail-closed shape as the will arm above, and for the same reason: this

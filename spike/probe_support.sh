@@ -33,8 +33,29 @@ probe_require_tools() {
 }
 
 probe_require_broker() {  # $1 host $2 port
-  mosquitto_pub -h "$1" -p "$2" -t 'aiko/probe/_reachability' -m x 2>/dev/null || {
-    echo "no broker at $1:$2 — bring the island rig up. A skip is NOT a pass." >&2
+  # BOUNDED. This is the first current the script sends, and an unbounded
+  # mosquitto_pub against a host that drops SYN (a wrong overlay, a firewall,
+  # an AIKO_MQTT_HOST aimed at a black hole) sits in TCP's long dark until the
+  # whole gate looks dead. The file that defines a bounding primitive had no
+  # spark gap on its own first wire.
+  #
+  # Bounded with probe_run_bounded rather than a flag: `-W` is mosquitto_SUB's
+  # timeout and mosquitto_PUB has no such option — passing it makes pub exit 1
+  # with "Unknown option", which this function then reports as "no broker",
+  # turning a reachable rig into a failed gate. (Measured: it did exactly that.)
+  # Assuming a flag carries across sibling tools is the same twin-instance
+  # mistake these probes have already made three times.
+  local out rc
+  out=$(mktemp)
+  rc=$(probe_run_bounded 8 "$out" \
+    mosquitto_pub -h "$1" -p "$2" -t 'aiko/probe/_reachability' -m x)
+  rm -f "$out"
+  [ "$rc" = "0" ] || {
+    if [ "$rc" = "75" ]; then
+      echo "broker at $1:$2 did not answer within 8s — it is unreachable or black-holing. A skip is NOT a pass." >&2
+    else
+      echo "no broker at $1:$2 — bring the island rig up. A skip is NOT a pass." >&2
+    fi
     exit 3
   }
 }

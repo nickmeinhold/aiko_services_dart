@@ -129,8 +129,13 @@ else
   # Only OUR requests. The producer's control topic is shared, so counting every
   # (share ...) would count other consumers' traffic as our renewals.
   MINE=$(grep -F "$MY_TOPIC" "$LOG")
-  TAKES=$(printf '%s\n' "$MINE" | grep -cE "\(share $MY_TOPIC $LEASE ")
-  CANCELS=$(printf '%s\n' "$MINE" | grep -cE "\(share $MY_TOPIC 0 ")
+  # -F, not -E. The topic is a literal and the line filter above already
+  # treats it as one; leaving the COUNTERS as regexes means a host containing
+  # `+`, `*` or `[` (any AIKO_MQTT_HOST you point the other half at) makes grep
+  # refuse the pattern, TAKES comes back EMPTY, and `[ "$TAKES" -ge 3 ]` becomes
+  # a non-integer comparison. Dots merely happen to match themselves.
+  TAKES=$(printf '%s\n' "$MINE" | grep -cF "(share $MY_TOPIC $LEASE ")
+  CANCELS=$(printf '%s\n' "$MINE" | grep -cF "(share $MY_TOPIC 0 ")
 
   printf '\n\033[1mrequests observed on the producer control topic\033[0m\n'
   printf '%s\n' "$MINE" | sed 's/^/    /'
