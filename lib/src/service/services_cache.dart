@@ -196,7 +196,18 @@ class ServicesCache {
   void _onShare(AikoMessage message) {
     final parameters = _positional(message);
     switch ((message.command, parameters)) {
-      case ('item_count', [final String n]) when int.tryParse(n) != null:
+      // `>= 0`, not merely parseable. `int.tryParse('-1')` is `-1`, not null,
+      // so the obvious guard admits a negative count — and a negative one is
+      // unrecoverable rather than merely wrong: every `add` decrements, so the
+      // frame moves AWAY from the `== 0` completion below and this cache never
+      // reaches `loaded` again. One 20-byte message is a permanent wedge, and
+      // the topic it arrives on is not private: the registrar broadcasts
+      // `(sync <topic_response>)` on its own `/out` (`registrar.py:350-351`),
+      // announcing our reply address to every peer on an unauthenticated bus.
+      //
+      // The guard was answering "is this an integer" where the question was
+      // "is this a plausible item count".
+      case ('item_count', [final String n]) when (int.tryParse(n) ?? -1) >= 0:
         _itemCount = int.parse(n);
       case ('add', _) when parameters.length >= 6:
         if (_itemCount == null) return; // an `add` with no frame open
