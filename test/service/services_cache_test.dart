@@ -246,7 +246,13 @@ void main() {
 
       await bus.deliver(cache.shareTopic, 'item_count', ['2']);
       await bus.deliver(cache.shareTopic, 'add', _registrarRecord);
-      expect(cache.services.map((s) => s.name), ['registrar']);
+      expect(
+        cache.services,
+        isEmpty,
+        reason:
+            'an open frame is staged, not published — the roster is only '
+            'replaced when the frame commits',
+      );
 
       // The registrar's real frame opens; the poisoned record must not survive.
       await bus.deliver(cache.shareTopic, 'item_count', ['1']);
@@ -258,6 +264,62 @@ void main() {
         'chat_server',
       ], reason: 'the earlier frame\'s record must not survive into this one');
     });
+
+    // The other writer. Live deltas arrive on the registrar's `/out` while a
+    // snapshot frame is open on our private topic, and a delta is NEWER than
+    // the snapshot the registrar already serialised — so it must survive the
+    // commit. An earlier fix cleared the roster when a frame opened, which
+    // emitted the live service as a ServiceAdded and then annihilated it with
+    // no ServiceRemoved and no second chance: the publisher does not send it
+    // again.
+    test('a service registering mid-snapshot survives the commit', () async {
+      cache.attach();
+      final changes = <ServiceChange>[];
+      cache.changes.listen(changes.add);
+
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      // A live registration lands on the registrar's own topic mid-frame.
+      await bus.deliver('$_registrar/out', 'add', _registrarRecord);
+      expect(changes.whereType<ServiceAdded>(), hasLength(1));
+
+      // The frame completes with a snapshot that predates that registration.
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+
+      expect(cache.state, ServicesCacheState.ready);
+      expect(cache.services.map((s) => s.name).toSet(), {
+        'chat_server',
+        'registrar',
+      }, reason: 'the mid-frame registration must not be erased by the commit');
+      expect(
+        changes.whereType<ServiceRemoved>(),
+        isEmpty,
+        reason: 'and it must not vanish silently either',
+      );
+    });
+
+    // A live REMOVE during a frame must also survive, or the commit resurrects
+    // a service the registrar has already retired.
+    test(
+      'a service deregistering mid-snapshot stays gone after the commit',
+      () async {
+        cache.attach();
+        await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+        await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+        // The snapshot named it, and then it left before the frame committed.
+        await bus.deliver('$_registrar/out', 'remove', [
+          _chatRecord[0] as String,
+        ]);
+        await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+
+        expect(cache.state, ServicesCacheState.ready);
+        expect(
+          cache.services,
+          isEmpty,
+          reason: 'the commit must not resurrect a service already retired',
+        );
+      },
+    );
 
     // The healing property, and the reason the flag stays true across an
     // INCOMPLETE frame rather than being cleared as soon as one opens: a peer

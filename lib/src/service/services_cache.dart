@@ -83,7 +83,26 @@ class ServicesCache {
   /// Our private topic for the snapshot. `share.py:700`.
   late final String shareTopic = '${_process.topicPath.path}/registrar_share';
 
+  /// The committed roster — what [services] reports.
   final Map<String, ServiceDetails> _services = {};
+
+  /// The snapshot currently being received, if a frame is open.
+  ///
+  /// A frame is built HERE and committed atomically, rather than accumulated
+  /// into [_services] directly. That separation is what lets a snapshot
+  /// REPLACE without a `clear()` that reaches into live state: the two writers
+  /// — a snapshot frame on our private topic, and live `(add …)`/`(remove …)`
+  /// deltas on the registrar's `/out` — no longer share one mutable map with
+  /// no notion of which of them owns it.
+  ///
+  /// Live deltas are applied to BOTH this and [_services] while a frame is
+  /// open, because a delta is NEWER than the snapshot the registrar already
+  /// serialised. Without that, a service registering mid-snapshot is emitted
+  /// as a [ServiceAdded] and then annihilated by the commit, with no
+  /// [ServiceRemoved] and no second chance — the publisher will not send it
+  /// again.
+  Map<String, ServiceDetails>? _incoming;
+
   final _changes = StreamController<ServiceChange>.broadcast();
 
   ServicesCacheState _state = ServicesCacheState.empty;
@@ -182,11 +201,15 @@ class ServicesCache {
     // Five wildcards: name, protocol, transport, owner, tags. The registrar
     // filters server-side (`registrar.py:331 services_share()`); asking for
     // everything and filtering locally is what `ServiceFilter` is for.
-    // Armed BEFORE the send, not after. A bus that delivers synchronously
-    // inside `send` would otherwise hand us our own snapshot while the flag is
-    // still false, and we would refuse the reply we just asked for. Nothing
-    // does that today; the ordering costs nothing and does not depend on it.
+    // BOTH the flag and the state are set BEFORE the send, not after. A bus
+    // that delivers synchronously inside `send` would otherwise hand us our own
+    // snapshot while the flag is still false — and, having then advanced the
+    // cache to `loaded` or even `ready`, would see the post-send assignment
+    // regress the public state back to `share`. Nothing does that today; the
+    // ordering costs nothing and no longer depends on it. Setting one of the
+    // two before the send and not the other was half a fix.
     _awaitingSnapshot = true;
+    _state = ServicesCacheState.share;
     _process.bus.send(registrar.topicIn, 'share', <Object?>[
       shareTopic,
       ServiceFilter.anyValue,
@@ -195,7 +218,6 @@ class ServicesCache {
       ServiceFilter.anyValue,
       ServiceFilter.anyValue,
     ]);
-    _state = ServicesCacheState.share;
   }
 
   /// Drops everything that was true only while that registrar was alive.
@@ -213,6 +235,7 @@ class ServicesCache {
     _process.router.removeHandler(out, _onRegistrarOut);
     _registrarOut = null;
     _services.clear();
+    _incoming = null;
     _itemCount = null;
     _awaitingSnapshot = false;
     _synced = false;
@@ -245,18 +268,18 @@ class ServicesCache {
       // be answered: did we ask for this frame? See its declaration.
       case ('item_count', [final String n])
           when _awaitingSnapshot && (int.tryParse(n) ?? -1) >= 0:
-        // A frame REPLACES, it does not merge. Resetting the accumulator is
-        // what makes "a later frame replaces an earlier one" true of the
-        // CONTENTS and not merely of the counter: without it, a peer's
-        // `(item_count 2)` + one poisoned `add`, followed by the registrar's
-        // real `(item_count 1)` + real `add`, completes with the poison still
-        // sitting in the roster and emitted as a [ServiceAdded]. Retuning the
-        // remaining decrements is not healing.
+        // A frame REPLACES, it does not merge — so it starts a FRESH staging
+        // map rather than clearing the committed roster. Without a replace, a
+        // peer's `(item_count 2)` + one poisoned `add`, followed by the
+        // registrar's real `(item_count 1)` + real `add`, would complete with
+        // the poison still present and emitted as a [ServiceAdded]. Retuning
+        // the remaining decrements is not healing.
         //
-        // It is also what the reference requires for an unrelated reason: one
+        // The reference requires the replace for an unrelated reason too: one
         // `(share …)` can draw several complete snapshots, so a key that
-        // vanished between bursts survives as fact under a merging consumer.
-        _services.clear();
+        // vanished between bursts would survive as fact under a merging
+        // consumer.
+        _incoming = {};
         _itemCount = int.parse(n);
       case ('add', _) when parameters.length >= 6:
         if (_itemCount == null) return; // an `add` with no frame open
@@ -266,13 +289,20 @@ class ServicesCache {
         // and Python's share handler accepts both arities. We never ask for
         // history, so the tail is dropped rather than modelled.
         final service = ServiceDetails.tryParse(parameters.sublist(0, 6));
-        if (service != null) _services[service.topicPath.path] = service;
+        if (service != null) _incoming?[service.topicPath.path] = service;
       default:
         return;
     }
 
     if (_itemCount == 0) {
       _itemCount = null;
+      // Commit the frame atomically. Live deltas that landed while it was open
+      // are already inside [_incoming] (see [_onRegistrarOut]), so the commit
+      // carries them rather than erasing them.
+      _services
+        ..clear()
+        ..addAll(_incoming ?? const {});
+      _incoming = null;
       _state = ServicesCacheState.loaded;
       _emit(const ServicesLoaded());
       for (final service in _services.values.toList()) {
@@ -307,8 +337,14 @@ class ServicesCache {
         final service = ServiceDetails.tryParse(parameters);
         if (service == null) return;
         _services[service.topicPath.path] = service;
+        // Also into an open frame. A live delta is NEWER than the snapshot the
+        // registrar already serialised, so it must survive the commit — this is
+        // the half that stops a service registering mid-snapshot from being
+        // emitted and then silently annihilated.
+        _incoming?[service.topicPath.path] = service;
         _emit(ServiceAdded(service));
       case ('remove', [final String path]):
+        _incoming?.remove(path);
         final service = _services.remove(path);
         if (service != null) _emit(ServiceRemoved(service));
       default:
