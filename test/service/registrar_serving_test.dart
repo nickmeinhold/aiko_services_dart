@@ -237,6 +237,78 @@ void main() {
     });
   });
 
+  group('noticing a death nobody announced (verb 4)', () {
+    test('a will on a PROCESS state topic removes all its services', () async {
+      await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
+      await bus.deliver(_in, 'add', _add('aiko/h/1/2'));
+      await bus.deliver(_in, 'add', _add('aiko/h/2/1'));
+      await settle();
+      bus.clear();
+
+      // The exact topic and payload a broker publishes for a dead process:
+      // {ns}/{host}/{pid}/0/state, `(absent)`, un-retained.
+      await bus.deliver('aiko/h/1/0/state', 'absent', const []);
+      await settle();
+
+      expect(registrar.roster.count, 1);
+      expect(bus.sent.map((s) => s.command).toSet(), {'remove'});
+      expect(bus.sent, hasLength(2));
+    });
+
+    test(
+      'a will on a single SERVICE state topic removes only that one',
+      () async {
+        await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
+        await bus.deliver(_in, 'add', _add('aiko/h/1/2'));
+        await settle();
+        bus.clear();
+
+        await bus.deliver('aiko/h/1/2/state', 'absent', const []);
+        await settle();
+
+        expect(registrar.roster.topicPaths, ['aiko/h/1/1']);
+      },
+    );
+
+    test('any other state payload is ignored', () async {
+      await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
+      await settle();
+      bus.clear();
+
+      // A live island's state topics carry more than deaths. Acting on
+      // anything but `(absent)` would evict healthy services.
+      await bus.deliver('aiko/h/1/0/state', 'ready', const []);
+      await bus.deliver('aiko/h/1/0/state', 'running', const []);
+      await settle();
+
+      expect(registrar.roster.count, 1);
+      expect(bus.sent, isEmpty);
+    });
+
+    test('a will for a process we never knew changes nothing', () async {
+      await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
+      await settle();
+      bus.clear();
+
+      await bus.deliver('aiko/h/9/0/state', 'absent', const []);
+      await settle();
+
+      expect(registrar.roster.count, 1);
+      expect(bus.sent, isEmpty);
+    });
+
+    test('the subscription is a depth-exact filter, not a suffix match', () async {
+      expect(registrar.serviceStateFilter, 'aiko/+/+/+/state');
+      // The reference's local matcher compares only the first and last segments
+      // of a `+` filter, so this topic matches there. Ours refuses it, and the
+      // broker would never have delivered it either.
+      expect(
+        topicFilterMatches(registrar.serviceStateFilter, 'aiko/h/state'),
+        isFalse,
+      );
+    });
+  });
+
   test('(primary absent) while primary drops the roster', () async {
     await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
     await settle();
