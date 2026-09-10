@@ -277,6 +277,34 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
   else
     bad "observer acceptance against a live island"
   fi
+
+  # The Last Will is only observable at the BROKER — nothing in our own output
+  # can distinguish a will that was carried from one that was silently dropped,
+  # which is the same shape as the 3.1-vs-3.1.1 defect whose only witness was
+  # mosquitto's log. Runs here rather than by hand, because a gate nobody fires
+  # is advisory (the whole reason this script exists).
+  step "last will: carried on a hard exit, suppressed on a clean one"
+  # RC captured explicitly, not read from `$?` inside an else-branch: there it
+  # is the exit status of whatever the branch last ran, which is a different
+  # question than the one being asked, and it reads as correct either way.
+  spike/will/probe_will.sh
+  WILL_RC=$?
+  # EVERY non-zero is a failure here, and the earlier version's exemption was a
+  # true sentence filed in the wrong role. It reasoned that a skip is harmless
+  # because "the island arm above already failed for the same absent rig" --
+  # true of a missing BROKER, false of a missing `mosquitto_sub`, which is the
+  # other thing the probe exits non-zero for. This branch only runs when the
+  # island container IS up, so there is a broker by construction; a probe that
+  # cannot observe it is a hole, not an absent rig. Island green + no host
+  # mosquitto_sub would otherwise print ALL CHECKS PASSED with the death
+  # announcement never checked -- the same silence-reads-as-success this script
+  # stopped granting the missing-container path one commit earlier.
+  case "$WILL_RC" in
+    0) ok "the broker published (absent), and stayed silent after a goodbye" ;;
+    2) bad "last will did not run: no mosquitto_sub on this machine (the island is up, so the broker is not the problem)" ;;
+    3) bad "last will did not run: no broker reachable, though the island container is up" ;;
+    *) bad "last will probe against a live broker" ;;
+  esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'

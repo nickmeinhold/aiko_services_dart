@@ -55,6 +55,45 @@ class const AikoMessage(
   String toString() => 'AikoMessage($topic: $command $arguments)';
 }
 
+/// A process's death announcement, published by the BROKER when the connection
+/// drops without a clean disconnect.
+///
+/// Aiko has two of these and they differ in every field, which is why this is a
+/// value rather than a pair of hardcoded constants:
+///
+/// | | topic | payload | retain |
+/// |---|---|---|---|
+/// | every process, at startup | `{ns}/{host}/{pid}/0/state` | `(absent)` | **false** (`process.py:169`) |
+/// | a registrar, on promotion | `{ns}/service/registrar` | `(primary absent)` | **true** (`registrar.py:189-190`) |
+///
+/// The retain flag is not decoration. An un-retained `(absent)` is seen only by
+/// peers already subscribed at the moment of death, so a late joiner learns
+/// nothing and asks the registrar instead. Primacy IS retained, precisely so a
+/// late joiner can discover it without asking anyone.
+final class LastWill {
+  const LastWill({
+    required this.topic,
+    required this.payload,
+    this.retain = false,
+  });
+
+  /// The per-process `(absent)` on `{process path}/0/state`, un-retained.
+  ///
+  /// `retain: false` is the reference's choice (`process.py:169` passes `False`
+  /// as position 5 of `MQTT.__init__`), not an oversight of ours — three of
+  /// this repo's own documents claimed it was retained before that was checked.
+  factory LastWill.processAbsent(String processPath) =>
+      LastWill(topic: '$processPath/0/state', payload: '(absent)');
+
+  final String topic;
+  final String payload;
+  final bool retain;
+
+  @override
+  String toString() =>
+      'LastWill($topic: $payload${retain ? ', retained' : ''})';
+}
+
 /// The bus, as everything above the transport needs it.
 ///
 /// Five members, which is the whole of what [AikoClient] offers — the interface
@@ -96,13 +135,62 @@ abstract interface class MessageBus {
 /// Registration + Registrar discovery build on this (next layer); the wire
 /// protocol itself — "a function call, serialized, over MQTT" — is fully here.
 class AikoClient implements MessageBus {
-  AikoClient({this.host = 'localhost', this.port = 1883, String? clientId})
-    : clientId =
-          clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}';
+  AikoClient({
+    this.host = 'localhost',
+    this.port = 1883,
+    String? clientId,
+    this.will,
+  }) : clientId =
+           clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}';
 
   final String host;
   final int port;
   final String clientId;
+
+  /// What the broker publishes if this process dies without saying goodbye.
+  ///
+  /// Null for a process nothing is watching for — an observer needs none, which
+  /// is why the transport went this long without one. It is load-bearing the
+  /// moment a peer's roster depends on hearing that we are gone.
+  ///
+  /// **Set only at [connect].** MQTT carries the will in the CONNECT packet, so
+  /// there is no way to change it on a live connection: assigning
+  /// `connectionMessage` after `connect()` is silently ignored by the reconnect
+  /// path while reading back as though it took. A process that must CHANGE its
+  /// will — a registrar being promoted to primary swaps a per-process
+  /// `(absent)` for a retained `(primary absent)` — has to reconnect, which is
+  /// exactly what the reference does (`message/mqtt.py:200-209` is
+  /// `_disconnect(); wait_disconnected(); _connect(…)`). That is MQTT's law,
+  /// not paho clumsiness, and the Dart side does not get to skip it.
+  ///
+  /// **A will and `autoReconnect` are two mechanisms on one connection with
+  /// opposite jobs.** One refuses to die; the other exists to announce death.
+  /// An unclean drop makes the broker publish `(absent)` to every live
+  /// subscriber, and then this client resurrects with the stored CONNECT and
+  /// carries on — having already told the island it was gone. That the will
+  /// SURVIVES the reconnect is a fact about the arming, not about the truth of
+  /// what it announced.
+  ///
+  /// The reference has the same pairing and heals a different way: it never
+  /// re-announces liveness on the state topic — there is no `(ready)` — but
+  /// `process.py:353-358` re-pushes every service to the registrar whenever the
+  /// boot topic says `found`, which a reconnect re-reads. The roster recovers
+  /// through RE-REGISTRATION, not by contradicting the death note.
+  ///
+  /// That recovery has a race worth knowing before anything depends on it. The
+  /// broker publishes the will when IT notices the drop, which for a frozen
+  /// process is 1.5 × keepalive later — the measured 60-90s band. A client that
+  /// reconnects in seconds re-registers FIRST, and the late `(absent)` then
+  /// evicts a service that is alive and freshly registered, with nothing to
+  /// undo it. A live island was found in exactly that state: a healthy
+  /// ChatServer, running and absent from its own registrar's roster for 23
+  /// hours (`docs/notes/registrar-scope.md`).
+  ///
+  /// Nothing here fixes it, deliberately. Re-announcing liveness would invent a
+  /// wire message the Python side does not send, and this transport has no
+  /// registration to re-push yet. Named so the registrar increment inherits the
+  /// hazard rather than rediscovering it.
+  final LastWill? will;
 
   late final MqttServerClient _mqtt;
   final _controller = StreamController<AikoMessage>.broadcast();
@@ -170,6 +258,36 @@ class AikoClient implements MessageBus {
       ..onDisconnected = (() => _reportTransport(up: false))
       ..onAutoReconnected = (() => _reportTransport(up: true))
       ..onConnected = (() => _reportTransport(up: true));
+
+    final will = this.will;
+    if (will != null) {
+      // Supplying our own connect message REPLACES the package default —
+      // `mqtt_client.dart:414` is `connectionMessage ??= …` — and that default
+      // is the ONLY thing that calls `.startClean()` (`:419`).
+      // `MqttConnectFlags.cleanStart` is false by default, so omitting it here
+      // would silently switch every Aiko process to a persistent session: the
+      // broker would queue messages for a dead client id and redeliver a
+      // backlog on reconnect. Nothing in our code would report that.
+      //
+      // The client id and keep-alive do NOT need repeating: `connect()` patches
+      // both onto a user-supplied message (`:399-404`). `startClean` is the sole
+      // omission, which is why it is the only one restored here.
+      _mqtt.connectionMessage = MqttConnectMessage()
+          .startClean()
+          // Topic AND message are what set the will FLAG. `withWillQos` and
+          // `withWillRetain` alone do not, and a topic with no message throws
+          // when the CONNECT is serialised — so these two always travel
+          // together.
+          .withWillTopic(will.topic)
+          .withWillMessage(will.payload)
+          // QoS 0: the reference never passes a will QoS, so paho's default of
+          // 0 is what every island peer already expects.
+          .withWillQos(MqttQos.atMostOnce);
+      if (will.retain) {
+        _mqtt.connectionMessage = _mqtt.connectionMessage!.withWillRetain();
+      }
+    }
+
     await _mqtt.connect();
     _mqtt.updates?.listen(_onData);
     _reportTransport(up: true);

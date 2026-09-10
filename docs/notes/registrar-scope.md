@@ -167,6 +167,26 @@ its `(add ...)` to a topic path nobody was listening on, reached `REGISTRAR` sta
 never pushed again. That is upstream's own header BUG at `registrar.py:48-50`, from the
 other side.
 
+**A SECOND candidate mechanism, added 2026-09-10 and better supported than the first.**
+Surfaced by a cage-match reviewer looking at the Last Will work, not by looking at the
+island at all.
+
+A will and `autoReconnect` are two mechanisms on one connection with opposite jobs. The
+broker publishes `(absent)` when IT notices a drop — for a frozen process that is 1.5 ×
+keepalive later, the measured 60-90s band — while the client itself reconnects in
+seconds. The registrar subscribes `{ns}/+/+/+/state` and answers `(absent)` by removing
+**every service of that process** (`registrar.py:284-288` → `:381-386`).
+
+So the ordering can invert: the ChatServer drops, reconnects, re-reads the retained
+`found`, re-pushes its services (`process.py:353-358`) — and only *then* does the late
+`(absent)` arrive and evict all five, permanently, with nothing that re-fires.
+
+This fits evidence the first hypothesis did not use: the registrar's own log is full of
+`MQTT on_disconnect: will reconnect` lines in the hours before the roster went empty.
+Both hypotheses remain unconfirmed, and they are distinguishable — the stale-boot-topic
+one predicts the `add` goes to a dead topic path, this one predicts it lands and is then
+undone.
+
 Not measured, and it would take a deliberate reproduction to confirm: hand-publish a
 retained `found` naming a dead topic path, start a service, and see where its `add` goes.
 
