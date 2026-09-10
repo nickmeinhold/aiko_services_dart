@@ -54,6 +54,48 @@ void main() {
       }
     });
 
+    // A process, not a service, is what dies. The LWT lands on the process's
+    // `0` path and the registrar answers it by removing every service of that
+    // process, so the roster has to be able to ask "who belongs to this
+    // process?" — which needs the path with the service id dropped.
+    test('exposes the owning process path, which is what an LWT names', () {
+      final service = ServiceTopicPath.parse('aiko/host/17/3');
+      expect(service.processPath, 'aiko/host/17');
+      expect(service.isProcess, isFalse);
+
+      final process = ServiceTopicPath.parse('aiko/host/17/0');
+      expect(process.processPath, 'aiko/host/17');
+      expect(process.isProcess, isTrue);
+      expect(
+        process.topicState,
+        'aiko/host/17/0/state',
+        reason: 'the per-process LWT topic, verified on a live island',
+      );
+    });
+
+    // Every service of one process shares a process path, and that is the
+    // property the remove-all branch relies on. Asserting it on siblings
+    // rather than on one path is what makes the test able to fail if the
+    // getter ever included the service id.
+    test('siblings of one process agree on the process path', () {
+      final siblings = ['aiko/h/9/0', 'aiko/h/9/1', 'aiko/h/9/2']
+          .map(ServiceTopicPath.parse)
+          .map((p) => p.processPath)
+          .toSet();
+      expect(siblings, hasLength(1));
+      expect(siblings.single, 'aiko/h/9');
+    });
+
+    // The must-fail direction: two processes on one host must NOT collapse
+    // together, or "remove every service of this process" would take out a
+    // bystander's services.
+    test('different processes on one host do not share a process path', () {
+      expect(
+        ServiceTopicPath.parse('aiko/h/9/1').processPath,
+        isNot(ServiceTopicPath.parse('aiko/h/10/1').processPath),
+      );
+    });
+
     test('equality is by path, so it can key a roster', () {
       expect(
         ServiceTopicPath.parse('aiko/h/1/2'),
