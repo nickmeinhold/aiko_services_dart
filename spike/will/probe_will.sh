@@ -11,79 +11,49 @@
 # "correctly suppressed" from "no will was ever set". Each is the other's
 # control, and the pair is what makes the check able to fail.
 #
-# Needs a broker on 127.0.0.1:1883 (the island rig's dev-ports overlay
-# publishes one) and mosquitto_sub on PATH.
+# Exit codes: 0 pass, 1 an assertion failed, 2 a missing harness dependency,
+# 3 no reachable broker, 75 the harness stalled. The last three are NOT
+# assertion failures and the caller must be able to tell them apart.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
+. spike/probe_support.sh
 
 BROKER_HOST=${AIKO_MQTT_HOST:-127.0.0.1}
 BROKER_PORT=${AIKO_MQTT_PORT:-1883}
+# `${VAR:-default}` does not substitute for set-but-EMPTY, which would hand an
+# empty string to mosquitto_sub -p and to the Dart half separately.
+[ -n "$BROKER_HOST" ] || BROKER_HOST=127.0.0.1
+[ -n "$BROKER_PORT" ] || BROKER_PORT=1883
+
 pass=0; fail=0
 ok()  { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 
-# Two DISTINCT exit codes, because the two causes are not the same fact and a
-# caller must be able to tell them apart. Collapsing them is what let verify.sh
-# treat "this machine has no mosquitto_sub" as though it were "there is no
-# broker", and skip a check while the island it depends on was demonstrably up.
-#   2 = no mosquitto_sub on this machine (a tooling gap here)
-#   3 = no broker reachable (the rig is down)
-for _bin in mosquitto_sub mosquitto_pub; do
-  # BOTH, not just mosquitto_sub. The reachability fallback below publishes, so
-  # checking only the subscriber let a machine with sub-but-not-pub report
-  # "no broker reachable" for a broker that was fine — and verify.sh would then
-  # record the wrong failed condition. A measurement defect, not a message one.
-  command -v "$_bin" >/dev/null || {
-    echo "$_bin not found — cannot observe the broker. A skip is NOT a pass." >&2
-    exit 2
-  }
-done
-if ! timeout 3 mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1; then
-  # $SYS may be disabled; fall back to proving we can connect at all.
-  if ! timeout 3 mosquitto_pub -h "$BROKER_HOST" -p "$BROKER_PORT" -t 'aiko/probe/will/ping' -m x 2>/dev/null; then
-    echo "no broker at $BROKER_HOST:$BROKER_PORT — bring the island rig up. A skip is NOT a pass." >&2
-    exit 3
-  fi
-fi
+probe_require_tools
+probe_require_broker "$BROKER_HOST" "$BROKER_PORT"
 
-run_arm() {  # $1 = die|bye ; echoes the observed will payload (empty if none)
-  local arm=$1 out sub_log sub_pid run_id topic
-  # A run id chosen HERE, so the will topic is known before the subscriber
-  # starts. The earlier version watched `aiko/probe/will/+/0/state` because the
-  # topic carried the Dart process's pid and could not be known in advance --
-  # and that wildcard makes concurrent runs read each other: a clean `bye` arm
-  # fails on somebody else's `die`, and a `die` arm passes on somebody else's
-  # will. Either way the result is about the wrong process.
-  run_id="$$_${arm}_$(od -An -N2 -tu2 < /dev/urandom | tr -d ' ')"
-  topic="aiko/probe/will/${run_id}/0/state"
+run_arm() {  # $1 = die|bye ; echoes the observed will payload, or a marker
+  local arm=$1 out sub_log sub_pid run_id topic rc
   out=$(mktemp); sub_log=$(mktemp)
-  # Cleanup on EVERY exit from this function, including the early return below.
-  # A `return` that skips its own `rm` leaks a temp file per arm, quietly.
   trap 'rm -f "$out" "$sub_log"' RETURN
 
-  # The subscriber's lifetime is OWNED here, not fused to a timeout that races
-  # the probe. An earlier version backgrounded it in a subshell under
-  # `timeout 14`, which hid the child's PID and made two things possible:
-  # a cold `dart run` compile outliving the fuse (arm 1 false-reds against an
-  # un-retained will that is gone the moment it is published), and reading the
-  # log while mosquitto_sub still held it (grepping a userspace buffer rather
-  # than what the broker actually said).
-  mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$topic" -v > "$sub_log" 2>&1 &
-  sub_pid=$!
-  # Give the SUBSCRIBE a moment to be established at the broker. An un-retained
-  # will published before this lands is unobservable, forever.
+  # A run id chosen HERE, so the will topic is known before the subscriber
+  # starts. Watching a wildcard instead lets concurrent runs read each other:
+  # a clean `bye` arm fails on somebody else's `die`, and — worse — a `die` arm
+  # PASSES on somebody else's will.
+  run_id="$$_${arm}_$(od -An -N2 -tu2 < /dev/urandom | tr -d ' ')"
+  topic="aiko/probe/will/${run_id}/0/state"
+
+  sub_pid=$(probe_watch "$BROKER_HOST" "$BROKER_PORT" "$topic" "$sub_log")
   sleep 1
 
-  # Unbounded on purpose: a cold compile is slow and that is not a failure.
-  dart run spike/will/probe_will.dart "$run_id" "$arm" > "$out" 2>&1
+  rc=$(probe_run_bounded 60 "$out" \
+    dart run spike/will/probe_will.dart "$run_id" "$arm" "$BROKER_HOST" "$BROKER_PORT")
   # Let a will published at exit reach the broker and the subscriber.
   sleep 4
+  probe_unwatch "$sub_pid"
 
-  # Stop the subscriber and WAIT for it, so its stdio is flushed before the file
-  # is read. Reading a live process's redirect is reading a block buffer.
-  kill "$sub_pid" 2>/dev/null
-  wait "$sub_pid" 2>/dev/null
-
+  if [ "$rc" = "75" ]; then echo "PROBE_STALLED"; return; fi
   grep -q 'connected as will_probe' "$out" || {
     echo "PROBE_DID_NOT_CONNECT"
     cat "$out" >&2
@@ -94,21 +64,21 @@ run_arm() {  # $1 = die|bye ; echoes the observed will payload (empty if none)
 
 printf '\n\033[1mArm 1 — exit without disconnecting: the will MUST fire\033[0m\n'
 got=$(run_arm die)
-if [ "$got" = "(absent)" ]; then
-  ok "the broker published (absent) on the process state topic"
-else
-  bad "no will observed (got: '${got:-nothing}') — the will never reached the broker"
-fi
+case "$got" in
+  '(absent)')        ok "the broker published (absent) on the process state topic" ;;
+  PROBE_STALLED)     bad "the probe STALLED (watchdog) — the harness could not complete, which is not the protocol failing" ;;
+  PROBE_DID_NOT_CONNECT) bad "the probe never connected — nothing here proves anything" ;;
+  *)                 bad "no will observed (got: '${got:-nothing}') — the will never reached the broker" ;;
+esac
 
 printf '\n\033[1mArm 2 — clean disconnect: the will MUST NOT fire\033[0m\n'
 got=$(run_arm bye)
-if [ -z "$got" ]; then
-  ok "silence after a clean disconnect, as MQTT requires"
-elif [ "$got" = "PROBE_DID_NOT_CONNECT" ]; then
-  bad "the probe never connected — arm 2's silence proves nothing"
-else
-  bad "the broker published '$got' after a CLEAN disconnect"
-fi
+case "$got" in
+  '')                ok "silence after a clean disconnect, as MQTT requires" ;;
+  PROBE_STALLED)     bad "the probe STALLED (watchdog) — arm 2's silence proves nothing" ;;
+  PROBE_DID_NOT_CONNECT) bad "the probe never connected — arm 2's silence proves nothing" ;;
+  *)                 bad "the broker published '$got' after a CLEAN disconnect" ;;
+esac
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

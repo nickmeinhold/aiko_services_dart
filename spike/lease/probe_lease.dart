@@ -14,7 +14,6 @@
 //   dart run spike/lease/probe_lease.dart <control-topic> [seconds] [host] [port]
 //
 // The driver watches that control topic and asserts the SECOND request appears.
-import 'dart:async';
 import 'dart:io';
 
 import 'package:aiko_services/aiko_services.dart';
@@ -44,11 +43,21 @@ Future<void> main(List<String> args) async {
   // AIKO_MQTT_HOST was set -- the observer watching one, the consumer singing
   // to another.
   final host = args.length > 2 ? args[2] : '127.0.0.1';
-  final port = args.length > 3 ? (int.tryParse(args[3]) ?? 1883) : 1883;
-  // Connect + 2.2 x lease + teardown, with generous headroom for a cold
-  // compile. Anything past this is a stall, not slowness.
-  _armWatchdog(Duration(seconds: seconds * 4 + 30), 'the lease probe');
-
+  // Fail CLOSED, like `seconds` above. `?? 1883` silently swallowed a garbage
+  // or empty port into the default while the shell handed mosquitto_sub the
+  // original string — putting observer and consumer on different brokers, which
+  // is the exact failure passing host/port through exists to prevent.
+  final int port;
+  if (args.length > 3 && args[3].isNotEmpty) {
+    final parsed = int.tryParse(args[3]);
+    if (parsed == null) {
+      stderr.writeln('port must be an integer, got "${args[3]}"');
+      exit(64);
+    }
+    port = parsed;
+  } else {
+    port = 1883;
+  }
   final client = AikoClient(
     host: host,
     port: port,
@@ -80,24 +89,4 @@ Future<void> main(List<String> args) async {
   await Future<void>.delayed(const Duration(seconds: 1));
   await client.disconnect();
   exit(0);
-}
-
-/// Refuse to hang.
-///
-/// A probe with no upper bound turns a sick broker into CI entropy: `verify.sh`
-/// waits forever instead of reporting a named failure, and nobody can Ctrl-C a
-/// gate running at 3am. Bounded HERE rather than with a `timeout` wrapper
-/// because `timeout` is absent on a default macOS host — the same reason it was
-/// removed from this probe's own discovery step.
-///
-/// Exit 75 (EX_TEMPFAIL), distinct from an assertion failure, so the driver can
-/// say "the harness stalled" rather than "the protocol is broken".
-void _armWatchdog(Duration budget, String what) {
-  Timer(budget, () {
-    stderr.writeln(
-      'WATCHDOG: $what did not finish within ${budget.inSeconds}s — '
-      'refusing to hang a gate on a sick broker',
-    );
-    exit(75);
-  });
 }
