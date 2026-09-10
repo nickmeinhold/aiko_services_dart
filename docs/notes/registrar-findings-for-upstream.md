@@ -96,6 +96,47 @@ you may well have all three filed under "that is what the sandbox is for".
 
 ---
 
+## A separate item: `time_started` — a question, not a defect
+
+> **Deliberately kept OUT of the three-finding message above**, whose thesis is one root
+> (unvalidated input reaching a publish). This shares nothing with that root, and stapling
+> it on would blunt a message that is currently sharp. It travels on its own, or with the
+> duplicate-snapshot finding, whenever the queue drains.
+
+Hi Andy — one thing we had to decide unilaterally while porting the registrar, flagged
+because we would rather be corrected early than diverge quietly.
+
+`on_enter_primary` publishes `(primary found {topic_path} {version} {time_started})`, and
+`time_started` is `time.monotonic()` sampled at service start (`service.py:564`). CPython
+documents that clock's origin as undefined; on Linux it is boot, which is what makes the
+values on one host comparable with each other.
+
+Dart has no equivalent clock, so exact parity is not available at any price. The two
+options and what each costs:
+
+* A `Stopwatch` — the same KIND of quantity (monotonic seconds, unspecified origin), but
+  it resets to ~0 on every restart. A freshly started Dart registrar would then look like
+  the *oldest* process on the island.
+* Wall-clock seconds since the Unix epoch — a different SCALE from yours (about 1.7e9
+  against 8.3e5), so the two cannot be compared, but it rises across restarts.
+
+We took the second, on one specific ground: `registrar.py:166` carries a TODO to promote
+*"the oldest known secondary"*. Under a `Stopwatch` a Dart registrar would win every
+election it ever entered; under epoch seconds it always looks newest and therefore always
+defers to a Python one. Given the choice was forced, we picked the direction that fails
+safe against your own stated intention.
+
+Nothing reads the field today — `process.py:332-337` stores it into `aiko.registrar` and
+never compares it — so this costs nothing right now. It becomes load-bearing the moment
+that TODO is implemented.
+
+The question for you: is `time_started` meant to be *comparable across processes*? If yes,
+it probably wants to be a wall-clock value on both sides, and we would send a patch. If it
+is only ever a per-process liveness marker, our divergence is harmless and we will note it
+in our own docs and leave yours alone.
+
+---
+
 ## Notes for us, not for the message
 
 * Everything above about Python was verified in source at the cited lines by the main

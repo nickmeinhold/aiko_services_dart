@@ -333,6 +333,27 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     3) bad "lease probe did not run: no reachable broker or no ECProducer in the roster, though the island container is up" ;;
     *) bad "EC lease renewal probe against a live producer" ;;
   esac
+
+  # The election, RUN. Its unit suite proves the state machine transitions
+  # correctly given events; it cannot say whether the events arrive correctly
+  # from a broker holding a real retained message, and it structurally cannot
+  # reach the third arm at all — promotion changes the will, MQTT carries a will
+  # only in a CONNECT packet, so promotion RECONNECTS and a reconnect with
+  # startClean throws the session away. Whether the subscriptions come back is a
+  # property of a real socket being replaced. Mutating the restore away leaves
+  # arms 1 and 2 green and takes only arm 3 red, which is the whole reason it is
+  # a separate arm.
+  step "primary election: stand down to a live primary, promote without one, and still hear"
+  spike/election/probe_election.sh
+  ELECTION_RC=$?
+  # Same fail-closed shape as the will and lease arms, for the same reason: this
+  # branch only runs when the island container is up.
+  case "$ELECTION_RC" in
+    0) ok "secondary against the live island, primary + will + retraction without one, not deaf after promotion" ;;
+    2) bad "election probe did not run: no mosquitto_sub/mosquitto_pub on this machine (the island is up)" ;;
+    3) bad "election probe did not run: no reachable broker, or the island has no primary registrar to stand down to" ;;
+    *) bad "primary election against a live broker" ;;
+  esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'

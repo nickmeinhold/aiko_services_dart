@@ -25,7 +25,36 @@
 > with different retain flags and MQTT allows one per connection, so the will must change
 > at promotion. Corrected in place, with the reasoning kept rather than deleted.
 
+> **Update, 2026-09-11: step 3 landed, and it was RUN.** The election now drives a real
+> bus. Verbs 1, 5 and 6 of the invariant below — elect, announce, retract — are
+> demonstrated against a live broker, with a three-arm gate in `verify.sh`.
+>
+> **The blocker was in the transport, not in the plan.** Of the five effects the election
+> emits, two could not be performed at all: `AnnouncePrimary` needs a RETAINED publish and
+> `MessageBus.send` had no `retain`; `ClearBootTopic` needs an EMPTY retained publish and
+> `send` runs `generate`, which cannot emit zero bytes. Promotion also CHANGES the will,
+> which MQTT carries only in a CONNECT packet. All three affordances landed with the
+> driver. That is why `RegistrarElection` sat merged and green with zero callers for a
+> session — not neglect, an unbuilt layer underneath.
+>
+> **One risk below is now a number.** "The 2-second election timeout is a race with
+> reality" was named and unmeasured. Measured: the live island's retained announcement
+> reaches a joining process **47-54 ms** after it subscribes, against a 2000 ms promotion
+> timer. Roughly 40x of margin on this broker. Still a race; no longer a guess.
+>
+> **A signal the reference does not have, forced by the port.** Upstream's
+> `on_enter_primary` is one synchronous handler: its first line sets `lifecycle` and its
+> last publishes, so a Python peer observing `lifecycle == "primary"` observes a registrar
+> that has already announced. Ours cannot be — taking the retained will means reconnecting,
+> and a reconnect is an await — so `role` reaches `primary` while the island has not been
+> told. Found by a probe killing itself on `role == primary` and catching a broker holding
+> the empty `ClearBootTopic` and nothing else. Hence `RegistrarProcess.announcements`,
+> which fires when the announcement is actually on the wire.
+
 Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).
+Re-checked 2026-09-11: the oracle tree has since moved to `9dfcabc` and `origin/master` to
+`d13cb98`, and `registrar.py` is byte-identical across all three. The file this note reads
+is still the file it was written against.
 
 **Oracle hygiene, because the local checkout is somebody's working tree.**
 `~/git/orgs/aiko/aiko_services` currently sits on branch `fix/services-iterator-iter`
@@ -462,7 +491,11 @@ Each step is observable on the wire before the next is written.
    `:381-386`, `ServiceFilter` against `:333`. Read, do not assume.
 2. **LWT in `mqtt_transport.dart`** — moved to the front. The election's `on_enter_primary`
    cannot be written correctly without it, and it is the one piece with no Dart precedent.
-3. **The election state machine** + the retained announcement (verbs 1, 5, 6).
+3. **The election state machine** + the retained announcement (verbs 1, 5, 6). ✔
+   Landed as `registrar_election.dart` (pure) + `registrar_process.dart` (the driver),
+   with `spike/election/probe_election.sh` as the falsifier. Three arms: stand down to the
+   live island's Python primary publishing nothing; promote, announce and retract without
+   one; and — the arm no fake can reach — still HEAR after the promotion reconnect.
 4. **`/in` registration** — `add` / `remove`, the roster, `service_count` (verb 2).
 5. **The wildcard state subscription** — `(absent)` → remove (verb 4).
 6. **`services_share`** — the producer half, against `services_cache.dart`'s table (verb 3).
@@ -499,5 +532,23 @@ decide it silently.
 * **The 2-second election timeout is a race with reality**, not a constant to tune.
   Upstream's own TODO (`:167`) asks for jitter to avoid collisions and does not implement
   it. Two Dart registrars started together would collide identically.
-* **Nothing here has been run.** Every claim above is from reading a pinned ref. The
-  first three build steps should each falsify or confirm a line of this note.
+  **MEASURED 2026-09-11:** the retained announcement arrives 47-54 ms after subscribe on
+  the live rig (`LATENCY_MS` in arm 1). The margin is ~40x, and the probe reports the
+  number rather than asserting a threshold — a threshold would turn a measurement into a
+  flaky gate, and the number is more use to the next reader than a boolean.
+* **`time_started` cannot be ported exactly, and the divergence is a decision.** Upstream
+  sends `time.monotonic()` sampled at service start (`service.py:564`), a clock whose
+  origin CPython documents as undefined. Dart cannot read it. A `Stopwatch` gives the same
+  KIND of quantity but resets to ~0 on every restart, making a fresh registrar look like
+  the OLDEST process on the island — dangerous against `registrar.py:166`'s TODO to
+  promote *"the oldest known secondary"*, under which our registrar would win every
+  election forever. Wall-clock epoch seconds is a different SCALE from upstream's (1.7e9
+  against 8.3e5) and cannot be compared with it, but it rises across restarts and fails
+  SAFE against that TODO. Nothing in `process.py` compares the field today — checked at
+  `:332-337`, where it is stored into `aiko.registrar` and never read. Chosen, documented,
+  and queued for Andy rather than resolved unilaterally.
+
+* ~~**Nothing here has been run.**~~ Steps 1-3 have now been run against a live broker,
+  and running them corrected this note twice (the LWT section, and the acceptance
+  criterion) and turned up a live island defect and a missing signal. The claim now holds
+  only for steps 4-9.
