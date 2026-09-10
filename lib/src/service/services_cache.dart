@@ -105,9 +105,17 @@ class ServicesCache {
   /// effectively: the frame waits for records that never arrive. Any bound on
   /// the count would be a guess at island size.
   ///
-  /// Stays true across an incomplete frame on purpose. A second `(item_count …)`
-  /// arriving before the first completes REPLACES it, so a genuine snapshot
-  /// still heals a frame that a racing peer opened first.
+  /// It clears on [ServicesCacheState.ready], NOT on `loaded`, and that
+  /// distinction is the whole guard. `loaded` is a claim a peer can make: any
+  /// speaker on this topic can send `(item_count 0)`, which completes a frame
+  /// instantly with an empty roster. `ready` additionally requires
+  /// `(sync <our topic>)` on the REGISTRAR'S OWN `/out` — a topic a peer would
+  /// have to forge on, not merely publish to. Clearing on `loaded` let one
+  /// raced `(item_count 0)` mark us complete-and-empty and then LOCK OUT the
+  /// registrar's real reply, which is strictly worse than the wedge this guard
+  /// was added to fix: the cache would report a confident empty island.
+  ///
+  /// So the protocol's own answer-signal ends the window. We do not invent one.
   bool _awaitingSnapshot = false;
   String? _registrarOut;
   bool _attached = false;
@@ -174,6 +182,11 @@ class ServicesCache {
     // Five wildcards: name, protocol, transport, owner, tags. The registrar
     // filters server-side (`registrar.py:331 services_share()`); asking for
     // everything and filtering locally is what `ServiceFilter` is for.
+    // Armed BEFORE the send, not after. A bus that delivers synchronously
+    // inside `send` would otherwise hand us our own snapshot while the flag is
+    // still false, and we would refuse the reply we just asked for. Nothing
+    // does that today; the ordering costs nothing and does not depend on it.
+    _awaitingSnapshot = true;
     _process.bus.send(registrar.topicIn, 'share', <Object?>[
       shareTopic,
       ServiceFilter.anyValue,
@@ -182,7 +195,6 @@ class ServicesCache {
       ServiceFilter.anyValue,
       ServiceFilter.anyValue,
     ]);
-    _awaitingSnapshot = true;
     _state = ServicesCacheState.share;
   }
 
@@ -233,6 +245,18 @@ class ServicesCache {
       // be answered: did we ask for this frame? See its declaration.
       case ('item_count', [final String n])
           when _awaitingSnapshot && (int.tryParse(n) ?? -1) >= 0:
+        // A frame REPLACES, it does not merge. Resetting the accumulator is
+        // what makes "a later frame replaces an earlier one" true of the
+        // CONTENTS and not merely of the counter: without it, a peer's
+        // `(item_count 2)` + one poisoned `add`, followed by the registrar's
+        // real `(item_count 1)` + real `add`, completes with the poison still
+        // sitting in the roster and emitted as a [ServiceAdded]. Retuning the
+        // remaining decrements is not healing.
+        //
+        // It is also what the reference requires for an unrelated reason: one
+        // `(share …)` can draw several complete snapshots, so a key that
+        // vanished between bursts survives as fact under a merging consumer.
+        _services.clear();
         _itemCount = int.parse(n);
       case ('add', _) when parameters.length >= 6:
         if (_itemCount == null) return; // an `add` with no frame open
@@ -249,9 +273,6 @@ class ServicesCache {
 
     if (_itemCount == 0) {
       _itemCount = null;
-      // Our request is answered. From here the private topic should be silent
-      // until we ask again, so anything further on it is unsolicited.
-      _awaitingSnapshot = false;
       _state = ServicesCacheState.loaded;
       _emit(const ServicesLoaded());
       for (final service in _services.values.toList()) {
@@ -299,6 +320,11 @@ class ServicesCache {
   /// seen. Either may arrive first.
   void _promoteIfReady() {
     if (_state != ServicesCacheState.loaded || !_synced) return;
+    // Our request is answered, and answered by the registrar rather than by
+    // whoever spoke on our topic: `(sync …)` arrives on the registrar's own
+    // `/out`. Only now does the private topic go quiet, so only now is a
+    // further `(item_count …)` on it unsolicited.
+    _awaitingSnapshot = false;
     _state = ServicesCacheState.ready;
     _emit(const ServicesReady());
   }

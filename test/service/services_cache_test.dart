@@ -184,7 +184,10 @@ void main() {
         cache.attach();
         await bus.deliver(cache.shareTopic, 'item_count', ['1']);
         await bus.deliver(cache.shareTopic, 'add', _chatRecord);
-        expect(cache.state, ServicesCacheState.loaded);
+        // The REGISTRAR confirms on its own `/out`, which is what actually
+        // answers the request. `loaded` alone is a claim any peer can make.
+        await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+        expect(cache.state, ServicesCacheState.ready);
 
         // Our request is answered; the topic should now be silent. A peer that
         // knows our share topic — and the registrar broadcasts it, in
@@ -195,14 +198,66 @@ void main() {
 
         expect(
           cache.state,
-          ServicesCacheState.loaded,
-          reason: 'an unsolicited frame must not reopen a completed snapshot',
+          ServicesCacheState.ready,
+          reason: 'an unsolicited frame must not reopen an answered snapshot',
         );
         expect(cache.services.map((s) => s.name), [
           'chat_server',
         ], reason: 'and must not smuggle a record into the roster');
       },
     );
+
+    // THE RACE THE FIRST VERSION OF THIS GUARD ARMED INSTEAD OF CLOSING.
+    // Zero is a legal frame, so `(item_count 0)` from a racing peer COMPLETES
+    // instantly with an empty roster. When the window closed on `loaded`, that
+    // one packet marked us confidently-empty and then locked out the
+    // registrar's real reply — strictly worse than the wedge the guard was
+    // added to fix, because a wedged cache at least does not claim an answer.
+    // Closing the window on `ready` instead is what makes the registrar's
+    // `(sync …)`, on its OWN topic, the thing that ends the exchange.
+    test('a raced empty frame cannot lock out the real snapshot', () async {
+      cache.attach();
+
+      // One packet from any peer that knows our topic.
+      await bus.deliver(cache.shareTopic, 'item_count', ['0']);
+      expect(cache.state, ServicesCacheState.loaded);
+      expect(cache.services, isEmpty);
+      expect(
+        cache.state,
+        isNot(ServicesCacheState.ready),
+        reason: 'nothing has confirmed on the registrar\'s own topic yet',
+      );
+
+      // The registrar's real answer still lands and still wins.
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+      expect(cache.state, ServicesCacheState.ready);
+      expect(cache.services.map((s) => s.name), ['chat_server']);
+    });
+
+    // A frame REPLACES, it does not merge. Without clearing the accumulator, a
+    // peer's oversized frame plus one poisoned record, followed by the
+    // registrar's real frame, completes with the poison still in the roster and
+    // emitted as a ServiceAdded — a lie rather than a void, and the harder of
+    // the two to notice.
+    test('a replacing frame discards records the previous one accumulated', () async {
+      cache.attach();
+
+      await bus.deliver(cache.shareTopic, 'item_count', ['2']);
+      await bus.deliver(cache.shareTopic, 'add', _registrarRecord);
+      expect(cache.services.map((s) => s.name), ['registrar']);
+
+      // The registrar's real frame opens; the poisoned record must not survive.
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      await bus.deliver('$_registrar/out', 'sync', [cache.shareTopic]);
+
+      expect(cache.state, ServicesCacheState.ready);
+      expect(cache.services.map((s) => s.name), [
+        'chat_server',
+      ], reason: 'the earlier frame\'s record must not survive into this one');
+    });
 
     // The healing property, and the reason the flag stays true across an
     // INCOMPLETE frame rather than being cleared as soon as one opens: a peer
