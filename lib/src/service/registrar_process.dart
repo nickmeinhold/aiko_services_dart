@@ -266,6 +266,13 @@ class RegistrarProcess {
         });
 
       case CancelSearchTimer():
+        // Defence in depth, and honest about which layer is load-bearing: a
+        // stray timer is ALREADY harmless because [RegistrarElection] rejects a
+        // timeout whose epoch does not name the current search. Mutating this
+        // to a no-op leaves every behavioural test green — measured, not
+        // assumed. What it buys is not leaving armed timers behind, and on
+        // [disconnect] that stops being bookkeeping and becomes protocol: a
+        // timer surviving our departure promotes a process that has left.
         _timer?.cancel();
         _timer = null;
 

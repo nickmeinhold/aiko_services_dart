@@ -283,6 +283,27 @@ void main() {
     );
   });
 
+  group('leaving', () {
+    test('disconnect cancels a search still in flight', () async {
+      final bus = FakeBus();
+      final process = _process(bus);
+      await process.connect();
+      expect(process.role, RegistrarRole.primarySearch);
+
+      await process.disconnect();
+      bus.clear();
+
+      // Outlive the search timeout. A timer left armed promotes a process that
+      // has already LEFT, publishing a retained announcement that names it —
+      // the exact corpse-is-primary state the retained will exists to prevent,
+      // arrived at without anybody dying.
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await settle();
+
+      expect(bus.actions, isEmpty);
+    });
+  });
+
   group('a promotion that fails', () {
     test('stands back down instead of holding a role it never announced', () async {
       final bus = FakeBus()..failSetWillWith = StateError('broker gone');
