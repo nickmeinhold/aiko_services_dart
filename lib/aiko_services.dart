@@ -16,6 +16,7 @@ export 'src/service/bus_process.dart';
 export 'src/service/connection_state.dart';
 export 'src/service/service_details.dart';
 export 'src/service/service_topic_path.dart';
+export 'src/service/registrar_election.dart';
 export 'src/service/services_cache.dart';
 export 'src/share/ec_consumer.dart';
 export 'src/share/share_event.dart';
