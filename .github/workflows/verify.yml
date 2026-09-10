@@ -23,7 +23,7 @@ jobs:
   quick:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # `stable`, not a pin. The repo's floor tracks newest-stable by policy, and
       # `dart format` is language-version-tied — so a format red here means a
