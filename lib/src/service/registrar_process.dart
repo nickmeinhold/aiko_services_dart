@@ -127,6 +127,25 @@ class RegistrarProcess {
   /// arrives, has an obvious place to listen rather than a re-derivation.
   Stream<void> get rosterDrops => _rosterDrops.stream;
 
+  /// Fires once the retained announcement is ON THE WIRE, carrying the address
+  /// it named.
+  ///
+  /// **Distinct from [role] reaching primary, and the split is forced by the
+  /// port rather than chosen.** Upstream's `on_enter_primary` is a single
+  /// synchronous handler: its first line updates `lifecycle` and its last line
+  /// publishes, so by the time any Python peer can observe
+  /// `lifecycle == "primary"` the announcement has already gone out. Ours
+  /// cannot work that way — taking the retained will means RECONNECTING, and a
+  /// reconnect is an await — so [role] reaches primary while the island has not
+  /// yet been told, and stays that way for as long as a socket takes.
+  ///
+  /// This was found by a probe killing itself on `role == primary` and catching
+  /// a broker that had received the empty [ClearBootTopic] and nothing else. A
+  /// caller keying on the role reports a registrar that is not yet
+  /// discoverable; there is no such window upstream, so there is no upstream
+  /// signal to port. Hence a new one, named for what it actually witnesses.
+  Stream<ServiceTopicPath> get announcements => _announcements.stream;
+
   /// A promotion that could not be completed, after the election has been stood
   /// back down. See [RegistrarElection.onPrimaryFailed].
   Stream<Object> get promotionFailures => _promotionFailures.stream;
@@ -169,6 +188,7 @@ class RegistrarProcess {
 
   final _lifecycle = StreamController<RegistrarRole>.broadcast();
   final _rosterDrops = StreamController<void>.broadcast();
+  final _announcements = StreamController<ServiceTopicPath>.broadcast();
   final _promotionFailures = StreamController<Object>.broadcast();
 
   final Stopwatch _clock = Stopwatch();
@@ -292,6 +312,7 @@ class RegistrarProcess {
             registrarVersion,
             timeStarted,
           ], retain: true);
+          if (!_announcements.isClosed) _announcements.add(topicPath);
         } on Object catch (error) {
           // `registrar.py:198-200` catches here and stands the registrar back
           // down. Anything thrown between taking the will and publishing leaves
@@ -320,6 +341,7 @@ class RegistrarProcess {
     await bus.disconnect();
     await _lifecycle.close();
     await _rosterDrops.close();
+    await _announcements.close();
     await _promotionFailures.close();
   }
 }
