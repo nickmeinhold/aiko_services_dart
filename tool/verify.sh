@@ -305,6 +305,34 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     3) bad "last will did not run: no broker reachable, though the island container is up" ;;
     *) bad "last will probe against a live broker" ;;
   esac
+
+  # The lease renewal, which until now had never been watched happening: the
+  # production default renews at 0.8 x 300s = 240s and no run had ever lasted
+  # that long. `leaseTime` is an ordinary constructor parameter, so a short
+  # lease exercises the SAME timer rather than a test-only branch — which is
+  # what makes running it here worth anything.
+  # The TITLE says what is measured too, not just the PASS line. Correcting the
+  # ok() and leaving the heading claiming "renewed" is the same twin-instance
+  # miss this PR has now made three times: nothing here reads a clock, so
+  # cardinality is what was observed and frequency is what production does.
+  step "EC lease: repeated share requests on the wire, and a distinct cancel"
+  spike/lease/probe_lease.sh
+  LEASE_RC=$?
+  # Same fail-closed shape as the will arm above, and for the same reason: this
+  # branch only runs when the island container is up, so neither "no broker" nor
+  # "no mosquitto_sub" is an absent rig here — both are a check that could not
+  # look at a rig that is demonstrably present.
+  case "$LEASE_RC" in
+    # Says what was OBSERVED: a count of requests, and a distinct cancellation.
+    # It deliberately does NOT say "renewals at 0.8x" -- nothing here reads a
+    # clock, so the cadence is a fact about production and about comments, not
+    # about this measurement. A timer firing at 0.1x lease would buy the same
+    # sentence.
+    0) ok "3+ share requests at the same lease, then a distinct cancellation at 0" ;;
+    2) bad "lease probe did not run: no mosquitto_sub on this machine (the island is up)" ;;
+    3) bad "lease probe did not run: no reachable broker or no ECProducer in the roster, though the island container is up" ;;
+    *) bad "EC lease renewal probe against a live producer" ;;
+  esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
   printf 'Bring the rig up (see tool/island-rig/compose.dev-ports.yml), then re-run.\n'

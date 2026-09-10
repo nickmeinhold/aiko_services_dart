@@ -6,8 +6,7 @@
 // publishes this on every disconnect"; a run that only disconnects cleanly and
 // sees silence cannot tell "suppressed correctly" from "never set at all".
 //
-//   dart run spike/will/probe_will.dart <run-id> die   # exits WITHOUT disconnecting
-//   dart run spike/will/probe_will.dart <run-id> bye   # disconnects cleanly first
+//   dart run spike/will/probe_will.dart <run-id> <die|bye> [host] [port]
 //
 // The run id is supplied by the driver rather than derived from our pid, so the
 // will topic is known BEFORE the subscriber starts. A driver that had to wait
@@ -32,8 +31,22 @@ Future<void> main(List<String> args) async {
   final clean = args.contains('bye');
   final topic = 'aiko/probe/will/$runId/0/state';
 
+  // Host and port from the driver, which is the half watching the broker.
+  // Hardcoding 127.0.0.1 let the two halves of one instrument point at
+  // DIFFERENT brokers the moment AIKO_MQTT_HOST was set — the same defect
+  // this file's sibling was fixed for one round earlier, left standing here.
+  final host = args.length > 2 && args[2].isNotEmpty ? args[2] : '127.0.0.1';
+  final port = args.length > 3 && args[3].isNotEmpty
+      ? int.tryParse(args[3])
+      : 1883;
+  if (port == null) {
+    stderr.writeln('port must be an integer, got "${args[3]}"');
+    exit(64);
+  }
+
   final client = AikoClient(
-    host: '127.0.0.1',
+    host: host,
+    port: port,
     clientId: 'will_probe_$runId',
     will: LastWill(topic: topic, payload: '(absent)'),
   );
