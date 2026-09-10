@@ -11,6 +11,7 @@ export 'src/service/share.dart';
 
 /// The runtime an observer needs: an identity, a connection ladder, discovery
 /// through the registrar, and a replica of a remote producer's share.
+export 'src/dispatch/topic_filter.dart';
 export 'src/dispatch/topic_router.dart';
 export 'src/service/bus_process.dart';
 export 'src/service/connection_state.dart';

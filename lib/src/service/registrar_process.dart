@@ -111,6 +111,17 @@ class RegistrarProcess {
   /// Where arrivals, departures and snapshot completions are announced.
   String get topicOut => topicPath.topicOut;
 
+  /// Every process's state topic, across the whole namespace.
+  ///
+  /// `registrar.py:137`, `_SERVICE_STATE_TOPIC`. This is the broadest
+  /// subscription the port takes, and it is what makes the registrar the
+  /// island's LWT CONSUMER — the port had been treating a Last Will as
+  /// something to EMIT. Verb 4 of the capability invariant is "notice a service
+  /// dying, without that service saying anything", and this is the only wire
+  /// that carries it: a killed process never gets to deregister, so the BROKER
+  /// speaks for it.
+  String get serviceStateFilter => '$namespace/+/+/+/state';
+
   /// Who is on this island.
   final ServiceRoster roster = ServiceRoster();
 
@@ -253,6 +264,7 @@ class RegistrarProcess {
     // service learns where to register from the retained announcement, which
     // names the PRIMARY's path, so nothing is ever addressed here until we win.
     router.addHandler(topicIn, _onTopicIn);
+    router.addHandler(serviceStateFilter, _onServiceState);
     _subscribedAt = _clock.elapsed;
     await _apply(_election.initialize());
   }
@@ -410,6 +422,29 @@ class RegistrarProcess {
       default:
         return;
     }
+  }
+
+  /// A process died, and the broker said so on its behalf.
+  ///
+  /// `registrar.py:284-288`. The `/state` check is upstream's and is kept even
+  /// though the subscription already guarantees it: this handler is registered
+  /// for a FILTER, and a filter is a claim about what we asked for rather than
+  /// about what arrived.
+  ///
+  /// Note what this inherits. The broker publishes a will when IT notices the
+  /// drop, which for a frozen process is 1.5x keepalive — the measured 60-90
+  /// second band. So a service that froze and recovered can be evicted here
+  /// AFTER it has already reconnected and re-registered, with nothing to undo
+  /// it. That is upstream's behaviour too and a live island was found in
+  /// exactly that state; see docs/notes/registrar-scope.md.
+  void _onServiceState(AikoMessage message) {
+    if (_leaving) return;
+    if (message.command != 'absent') return;
+    const suffix = '/state';
+    if (!message.topic.endsWith(suffix)) return;
+    _serviceRemove(
+      message.topic.substring(0, message.topic.length - suffix.length),
+    );
   }
 
   /// `registrar.py:355-377`.
