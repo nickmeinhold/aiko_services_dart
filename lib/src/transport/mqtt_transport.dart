@@ -162,6 +162,34 @@ class AikoClient implements MessageBus {
   /// exactly what the reference does (`message/mqtt.py:200-209` is
   /// `_disconnect(); wait_disconnected(); _connect(…)`). That is MQTT's law,
   /// not paho clumsiness, and the Dart side does not get to skip it.
+  ///
+  /// **A will and `autoReconnect` are two mechanisms on one connection with
+  /// opposite jobs.** One refuses to die; the other exists to announce death.
+  /// An unclean drop makes the broker publish `(absent)` to every live
+  /// subscriber, and then this client resurrects with the stored CONNECT and
+  /// carries on — having already told the island it was gone. That the will
+  /// SURVIVES the reconnect is a fact about the arming, not about the truth of
+  /// what it announced.
+  ///
+  /// The reference has the same pairing and heals a different way: it never
+  /// re-announces liveness on the state topic — there is no `(ready)` — but
+  /// `process.py:353-358` re-pushes every service to the registrar whenever the
+  /// boot topic says `found`, which a reconnect re-reads. The roster recovers
+  /// through RE-REGISTRATION, not by contradicting the death note.
+  ///
+  /// That recovery has a race worth knowing before anything depends on it. The
+  /// broker publishes the will when IT notices the drop, which for a frozen
+  /// process is 1.5 × keepalive later — the measured 60-90s band. A client that
+  /// reconnects in seconds re-registers FIRST, and the late `(absent)` then
+  /// evicts a service that is alive and freshly registered, with nothing to
+  /// undo it. A live island was found in exactly that state: a healthy
+  /// ChatServer, running and absent from its own registrar's roster for 23
+  /// hours (`docs/notes/registrar-scope.md`).
+  ///
+  /// Nothing here fixes it, deliberately. Re-announcing liveness would invent a
+  /// wire message the Python side does not send, and this transport has no
+  /// registration to re-push yet. Named so the registrar increment inherits the
+  /// hazard rather than rediscovering it.
   final LastWill? will;
 
   late final MqttServerClient _mqtt;
