@@ -523,7 +523,7 @@ but got the **physics wrong**, and Tesla caught it:
   held a `Timer(0)`, a `Timer(50ms)` and a `Timer(150ms)`, all three firing together and already
   late once it ended.
 
-The failure it permits: a ping is missed, the broker publishes our retained last will `(absent)`
+The failure it permits: a ping is missed, the broker publishes our (un-retained) last will `(absent)`
 on `{ns}/{host}/{pid}/0/state`, and **the fleet fails over a process that was only busy.**
 
 **Decision: the MQTT client runs on its own isolate. Default, not fallback.** Reached

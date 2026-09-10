@@ -7,6 +7,11 @@
 > the existing acceptance suite to establish a baseline failed, because the island had
 > been serving a roster that did not contain its own ChatServer for 23 hours. See
 > *"The island was found broken"* below. Baseline is now green, 14/14.
+>
+> **Corrected 2026-09-10 (same day):** the LWT section originally claimed Dart could skip
+> upstream's disconnect-reconnect. That is wrong *for a registrar* — there are two wills
+> with different retain flags and MQTT allows one per connection, so the will must change
+> at promotion. Corrected in place, with the reasoning kept rather than deleted.
 
 Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).
 
@@ -211,7 +216,7 @@ mistake ADR-0003 made and was dissolved for.
 
 ---
 
-## LWT: our transport can be better than the reference, and still be at parity
+## LWT: the registrar must reconnect, and this section previously said otherwise
 
 `mqtt_transport.dart` sets no will (grep for `will`/`lwt` returns only a prose match).
 `MessageBus` exposes `connect / subscribe / unsubscribe / send / disconnect` and no way
@@ -233,23 +238,49 @@ every time. That file's own header (`mqtt.py:15-23`) documents the resulting dea
 `set_last_will_and_testament()`, which causes a `wait_disconnected()` whilst on the MQTT
 thread"* — and names the registrar path by name.
 
-Dart does not have to inherit this. `mqtt_client` takes the will on the connect message,
-and our registrar knows its will topic and payload before it connects, so it can set it
-once and never reconnect.
+> **CORRECTED 2026-09-10, same day, before any code was written against it.** The
+> paragraph that stood here said Dart does not have to inherit the reconnect, because
+> `mqtt_client` takes the will on the connect message and "our registrar knows its will
+> topic and payload before it connects". **The second half is false, and it is false
+> specifically for a registrar.** The claim was written after reading `registrar.py` and
+> `mqtt.py` and before reading `process.py` — it generalised from the one will it had
+> seen.
 
-**Is skipping the reconnect a wire divergence?** No. A clean MQTT `DISCONNECT` does not
-publish the will, so no peer observes anything on `TOPIC_REGISTRAR_BOOT` from the cycle;
-what an observer sees is a broker-side connect/disconnect pair and a brief subscription
-gap. It is invisible at the protocol layer we claim parity at. **Record it as a
-deliberate, additive divergence with a named reason**, the way `RosterReleased` was —
-not as a silent improvement.
+**There are TWO wills with different topics, different payloads and different retain
+flags, and MQTT permits exactly one per connection.**
+
+| | topic | payload | retain |
+|---|---|---|---|
+| every process, set at startup | `{ns}/{host}/{pid}/0/state` | `(absent)` | **False** (`process.py:169`, position 5 of `mqtt.py:66-74`) |
+| a registrar, set on **promotion** | `{ns}/service/registrar` | `(primary absent)` | **True** (`registrar.py:189-190`) |
+
+A registrar starts as an ordinary process holding the first will. It only learns it is
+primary later — after the election, which is either a 2-second timeout or an `absent` on
+the boot topic. At that moment its will must **change**. `mqtt_client` cannot do that:
+assigning `connectionMessage` after `connect()` is silently ignored by the reconnect path
+while reading back as though it took (measured). **So the Dart registrar must reconnect at
+promotion, exactly as Python does.** Python is not being clumsy; it is doing the only
+thing MQTT allows.
+
+**Setting the retained `(primary absent)` will up front, at connect, is not a shortcut —
+it is a bug.** A registrar that does so and then loses the election becomes a *secondary*
+holding a retained will that says the primary is gone. When that secondary dies, it wipes
+a live primary's announcement and blinds every joining peer on the island.
+
+What Dart genuinely does get for free, and should still be recorded: the will **survives
+auto-reconnect** without any work, because the connection handler retains the same
+`MqttConnectMessage` instance and re-serialises it on each attempt (verified against a
+live broker). That property is invisible in the code and would be silently destroyed by
+anyone who later moved the configuration after `connect()`, so it wants an acceptance test
+that can fail — kill the process *after* a reconnect and assert the will still fires.
 
 The ordering inside `on_enter_primary` (`:185-197`) is not incidental and must be
 reproduced:
 
 1. publish `""` retained to `TOPIC_REGISTRAR_BOOT` — clears the *previous* primary's
    retained announcement so this process does not immediately re-read a stale one;
-2. set the will to `(primary absent)`, retained;
+2. set the will to `(primary absent)`, **retained** — which in Dart means tearing down
+   the connection and reconnecting with the new will, per the correction above;
 3. publish `(primary found <topic_path> <version> <time_started>)`, retained.
 
 Doing 3 before 2 leaves a window where a crash strands a retained `found` naming a dead
