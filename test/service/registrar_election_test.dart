@@ -3,18 +3,58 @@ import 'package:test/test.dart';
 
 void main() {
   group('RegistrarElection', () {
-    test('start is inert until initialized', () {
+    // THE WINDOW BETWEEN SUBSCRIBING AND STARTING. The retained announcement is
+    // delivered the instant we subscribe, which can be before the machine is
+    // running. An earlier version of this test named that window and then only
+    // struck `absent` — the harmless half — while `found` was silently dropped.
+    // Dropping a `found` is the dual-primary bug: discard it, start searching,
+    // and two seconds later a second primary announces onto an island that
+    // already has one, both holding a retained announcement on one topic.
+    test(
+      'a found seen before initialize makes us a SECONDARY, not a rival',
+      () {
+        final election = RegistrarElection();
+        expect(election.onAnnouncement(RegistrarAnnouncement.found), isEmpty);
+        expect(
+          election.role,
+          RegistrarRole.start,
+          reason: 'latched, not acted on — the machine is not running yet',
+        );
+
+        final effects = election.initialize();
+        expect(
+          election.role,
+          RegistrarRole.secondary,
+          reason: 'an island with a primary must not be raced',
+        );
+        expect(effects.whereType<AnnouncePrimary>(), isEmpty);
+        expect(effects.whereType<StartSearchTimer>(), isEmpty);
+      },
+    );
+
+    test('an absent seen before initialize still leads to a search', () {
       final election = RegistrarElection();
+      expect(election.onAnnouncement(RegistrarAnnouncement.absent), isEmpty);
       expect(election.role, RegistrarRole.start);
-      // A boot-topic message before initialize must not promote anything. The
-      // retained announcement is delivered the instant we subscribe, which can
-      // be before the machine is running.
-      expect(election.onAnnouncement(RegistrarAnnouncement.absent), isNotEmpty);
+
+      final effects = election.initialize();
+      expect(election.role, RegistrarRole.primarySearch);
+      expect(effects.whereType<StartSearchTimer>(), hasLength(1));
       expect(
-        election.role,
-        isNot(RegistrarRole.primary),
-        reason: 'an absent arriving in `start` must not mint a primary',
+        effects.whereType<DropRoster>(),
+        isEmpty,
+        reason: 'there is no roster to drop before the machine has started',
       );
+    });
+
+    // The latch takes the LATEST word. A primary that announces and then dies
+    // before we start must not leave us permanently standing down.
+    test('the latch keeps the most recent announcement, not the first', () {
+      final election = RegistrarElection();
+      election.onAnnouncement(RegistrarAnnouncement.found);
+      election.onAnnouncement(RegistrarAnnouncement.absent);
+      election.initialize();
+      expect(election.role, RegistrarRole.primarySearch);
     });
 
     test('initialize enters the search and arms the timer', () {
@@ -148,6 +188,43 @@ void main() {
     // The role names are the wire's `lifecycle` values, not Dart-side labels: a
     // peer reads these exact strings off the share. Pinned so a rename for
     // Dart taste cannot silently become a wire change.
+    // Carnot's catch: four of six effects had identity equality only, working
+    // by `const` canonicalisation alone. A caller constructing one WITHOUT
+    // `const` would then compare unequal to a structurally identical effect,
+    // and the PR claiming "effects carry value equality" would be true of two
+    // of them. Constructed non-const here on purpose — that is the case that
+    // was broken.
+    test('every effect compares by value, not by identity', () {
+      // ignore: prefer_const_constructors
+      expect(CancelSearchTimer(), CancelSearchTimer());
+      // ignore: prefer_const_constructors
+      expect(ClearBootTopic(), ClearBootTopic());
+      // ignore: prefer_const_constructors
+      expect(AnnouncePrimary(), AnnouncePrimary());
+      // ignore: prefer_const_constructors
+      expect(DropRoster(), DropRoster());
+      expect(
+        PublishLifecycle(RegistrarRole.primary),
+        PublishLifecycle(RegistrarRole.primary),
+      );
+      // ignore: prefer_const_constructors
+      expect(
+        StartSearchTimer(Duration(seconds: 2)),
+        StartSearchTimer(Duration(seconds: 2)),
+      );
+
+      // And DIFFERENT effects must not collapse together.
+      expect(const ClearBootTopic(), isNot(const AnnouncePrimary()));
+      expect(
+        PublishLifecycle(RegistrarRole.primary),
+        isNot(PublishLifecycle(RegistrarRole.secondary)),
+      );
+      expect(
+        const StartSearchTimer(Duration(seconds: 2)),
+        isNot(const StartSearchTimer(Duration(seconds: 3))),
+      );
+    });
+
     test('role names are the wire lifecycle values', () {
       expect(RegistrarRole.values.map((r) => r.lifecycle), [
         'start',

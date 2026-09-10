@@ -99,6 +99,12 @@ final class CancelSearchTimer extends ElectionEffect {
   const CancelSearchTimer();
 
   @override
+  bool operator ==(Object other) => other is CancelSearchTimer;
+
+  @override
+  int get hashCode => (CancelSearchTimer).hashCode;
+
+  @override
   String toString() => 'CancelSearchTimer()';
 }
 
@@ -110,6 +116,12 @@ final class CancelSearchTimer extends ElectionEffect {
 /// process reads its own predecessor's death as news.
 final class ClearBootTopic extends ElectionEffect {
   const ClearBootTopic();
+
+  @override
+  bool operator ==(Object other) => other is ClearBootTopic;
+
+  @override
+  int get hashCode => (ClearBootTopic).hashCode;
 
   @override
   String toString() => 'ClearBootTopic()';
@@ -131,6 +143,12 @@ final class AnnouncePrimary extends ElectionEffect {
   const AnnouncePrimary();
 
   @override
+  bool operator ==(Object other) => other is AnnouncePrimary;
+
+  @override
+  int get hashCode => (AnnouncePrimary).hashCode;
+
+  @override
   String toString() => 'AnnouncePrimary()';
 }
 
@@ -145,6 +163,12 @@ final class AnnouncePrimary extends ElectionEffect {
 /// findings note rather than silently "fixed".
 final class DropRoster extends ElectionEffect {
   const DropRoster();
+
+  @override
+  bool operator ==(Object other) => other is DropRoster;
+
+  @override
+  int get hashCode => (DropRoster).hashCode;
 
   @override
   String toString() => 'DropRoster()';
@@ -174,15 +198,41 @@ class RegistrarElection {
   /// trusted the timer would promote a second primary onto a live island.
   bool _searchPending = false;
 
+  /// What the boot topic said while we were still in [RegistrarRole.start].
+  ///
+  /// The retained announcement is delivered the INSTANT we subscribe, which can
+  /// be before the machine is running — so an announcement arriving in `start`
+  /// is latched rather than acted on or discarded.
+  ///
+  /// Discarding a `found` here is a dual-primary bug, and it is the asymmetry a
+  /// cage-match caught: the reference's ordering closes this window by accident
+  /// (`registrar.py:264-266` registers the handler and transitions in one
+  /// synchronous `__init__`), but a machine with an explicit `initialize()` has
+  /// a real gap between subscribing and starting. Drop the `found`, then start
+  /// searching, and two seconds later a second primary announces itself onto an
+  /// island that already has one — both holding a retained announcement on the
+  /// same topic, and every later `found` dismissed as "not news".
+  bool? _seenPrimaryBeforeStart;
+
   /// Enter the election. `registrar.py:266`.
+  ///
+  /// Honours anything the boot topic already said. A `found` seen while in
+  /// `start` means an island already has a primary, so we begin as a SECONDARY
+  /// rather than racing it.
   List<ElectionEffect> initialize() {
     if (_role != RegistrarRole.start) return const [];
+    if (_seenPrimaryBeforeStart ?? false) return _enterSecondary();
     return _enterPrimarySearch();
   }
 
   /// The retained boot topic said something.
   List<ElectionEffect> onAnnouncement(RegistrarAnnouncement announcement) =>
       switch ((announcement, _role)) {
+        // Before initialize(): LATCH, do not act. Both arms, symmetrically —
+        // an earlier version acted on `absent` here and dropped `found`, which
+        // is precisely backwards: the harmless one moved the machine and the
+        // dangerous one was thrown away.
+        (_, RegistrarRole.start) => _latch(announcement),
         // Somebody else is primary and we are looking: stand down.
         (RegistrarAnnouncement.found, RegistrarRole.primarySearch) =>
           _enterSecondary(),
@@ -215,6 +265,11 @@ class RegistrarElection {
     }
     _searchPending = false;
     return _enterPrimary();
+  }
+
+  List<ElectionEffect> _latch(RegistrarAnnouncement announcement) {
+    _seenPrimaryBeforeStart = announcement == RegistrarAnnouncement.found;
+    return const [];
   }
 
   List<ElectionEffect> _enterPrimarySearch() {
