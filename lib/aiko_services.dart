@@ -19,6 +19,7 @@ export 'src/service/service_topic_path.dart';
 export 'src/service/process_identity.dart';
 export 'src/service/registrar_election.dart';
 export 'src/service/registrar_process.dart';
+export 'src/service/service_roster.dart';
 export 'src/service/services_cache.dart';
 export 'src/share/ec_consumer.dart';
 export 'src/share/share_event.dart';
