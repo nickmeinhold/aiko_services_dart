@@ -89,6 +89,20 @@ final class LastWill {
   final String payload;
   final bool retain;
 
+  // Value equality, because a will is COMPARED before it is acted on.
+  // Changing one costs a reconnect (see [MessageBus.setWill]); with identity
+  // equality a driver that re-asserted the will it already holds would drop the
+  // socket — and every subscription with it — for no change at all.
+  @override
+  bool operator ==(Object other) =>
+      other is LastWill &&
+      other.topic == topic &&
+      other.payload == payload &&
+      other.retain == retain;
+
+  @override
+  int get hashCode => Object.hash(topic, payload, retain);
+
   @override
   String toString() =>
       'LastWill($topic: $payload${retain ? ', retained' : ''})';
@@ -122,8 +136,56 @@ abstract interface class MessageBus {
 
   void unsubscribe(String topic);
 
+  /// What the broker announces if this process dies without saying goodbye,
+  /// or null if nothing is watching for us.
+  LastWill? get will;
+
   /// Publish a function call as an S-expression.
-  void send(String topic, String command, Object? params);
+  ///
+  /// [retain] asks the broker to KEEP this payload and hand it to every future
+  /// subscriber of [topic]. It is not a delivery guarantee — that is QoS — it
+  /// is a claim that the message describes a lasting STATE rather than an
+  /// event. Aiko retains exactly one thing, `(primary found ...)` on the boot
+  /// topic, and retains it precisely so a process joining an hour later learns
+  /// who the registrar is without asking anybody.
+  void send(
+    String topic,
+    String command,
+    Object? params, {
+    bool retain = false,
+  });
+
+  /// Delete the retained payload on [topic].
+  ///
+  /// A zero-length retained publish is MQTT's *only* way to say this
+  /// (3.1.1 SS3.3.1.3), which is why it needs a member of its own instead of
+  /// falling out of [send]: [send] runs `generate`, and no command name encodes
+  /// to no bytes.
+  ///
+  /// `registrar.py:186` does this on promotion and its comment says why —
+  /// *"Clear LWT, so this registrar doesn't receive another LWT on reconnect"*.
+  /// A predecessor's retained `(primary absent)` is still sitting on the topic,
+  /// and a new primary that does not clear it reads its own predecessor's death
+  /// as news about itself.
+  void clearRetained(String topic);
+
+  /// Change what the broker will announce if this process dies.
+  ///
+  /// **This RECONNECTS.** MQTT carries the will in the CONNECT packet and
+  /// nowhere else, so assignment on a live connection is silently ignored. The
+  /// registrar is the reason this exists at all: it connects holding the
+  /// per-process `(absent)`, and must already be holding a retained
+  /// `(primary absent)` at the moment it announces itself primary.
+  /// `message/mqtt.py:200-209` is the same three steps for the same reason.
+  ///
+  /// **The reconnect must be invisible to subscriptions.** An implementation
+  /// restores every topic it held. That is load-bearing rather than tidy: a
+  /// registrar deafened by its own promotion would never hear the
+  /// `(primary absent)` that is supposed to stand it back down.
+  ///
+  /// A no-op when the will is already [will], so a driver may assert it
+  /// defensively without paying for a socket.
+  Future<void> setWill(LastWill? will);
 
   Future<void> disconnect();
 }
@@ -139,9 +201,15 @@ class AikoClient implements MessageBus {
     this.host = 'localhost',
     this.port = 1883,
     String? clientId,
-    this.will,
+    LastWill? will,
   }) : clientId =
-           clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}';
+           clientId ?? 'aiko_dart_${DateTime.now().microsecondsSinceEpoch}' {
+    // In the body rather than the initializer list: the field is private and
+    // the parameter is not, because a PUBLIC settable `will` would invite
+    // exactly the bug this class documents — an assignment that reads back as
+    // though it took and is silently ignored by the wire.
+    _will = will;
+  }
 
   final String host;
   final int port;
@@ -190,9 +258,29 @@ class AikoClient implements MessageBus {
   /// wire message the Python side does not send, and this transport has no
   /// registration to re-push yet. Named so the registrar increment inherits the
   /// hazard rather than rediscovering it.
-  final LastWill? will;
+  /// Mutable through [setWill] only, which reconnects — see there for why a
+  /// plain assignment cannot do the job.
+  @override
+  LastWill? get will => _will;
+  LastWill? _will;
 
-  late final MqttServerClient _mqtt;
+  /// Null until [connect], and REPLACED by [setWill] — a will change builds a
+  /// new socket rather than mutating the old one, because `disconnect()` nulls
+  /// the client's connection handler, publishing manager and event bus on the
+  /// way out. Reusing the corpse would depend on `connect()` rebuilding every
+  /// one of them; a fresh client depends on nothing.
+  MqttServerClient? _client;
+  MqttServerClient get _mqtt => _client!;
+  StreamSubscription<List<MqttReceivedMessage<MqttMessage>>>? _updates;
+
+  /// Every topic currently subscribed, so a will change can restore them.
+  ///
+  /// The broker cannot tell us what we were interested in, and a reconnect with
+  /// `startClean` throws the session away — so this set IS the memory. It lives
+  /// at the socket because the socket is the only layer that knows it was
+  /// replaced.
+  final Set<String> _subscriptions = {};
+
   final _controller = StreamController<AikoMessage>.broadcast();
   final _transport = StreamController<bool>.broadcast();
 
@@ -209,7 +297,16 @@ class AikoClient implements MessageBus {
 
   @override
   Future<void> connect() async {
-    _mqtt = MqttServerClient.withPort(host, clientId, port)
+    await _open();
+    _reportTransport(up: true);
+  }
+
+  /// Build a socket carrying the CURRENT will, and restore what we were hearing.
+  ///
+  /// Split out of [connect] for [setWill], which needs exactly this and must
+  /// not re-run what [connect] does around it.
+  Future<void> _open() async {
+    final client = MqttServerClient.withPort(host, clientId, port)
       ..logging(on: false)
       ..keepAlivePeriod = 60
       ..autoReconnect = true
@@ -258,8 +355,11 @@ class AikoClient implements MessageBus {
       ..onDisconnected = (() => _reportTransport(up: false))
       ..onAutoReconnected = (() => _reportTransport(up: true))
       ..onConnected = (() => _reportTransport(up: true));
+    // Assigned BEFORE the will block below, which reaches the client through
+    // the `_mqtt` getter.
+    _client = client;
 
-    final will = this.will;
+    final will = _will;
     if (will != null) {
       // Supplying our own connect message REPLACES the package default —
       // `mqtt_client.dart:414` is `connectionMessage ??= …` — and that default
@@ -288,9 +388,15 @@ class AikoClient implements MessageBus {
       }
     }
 
-    await _mqtt.connect();
-    _mqtt.updates?.listen(_onData);
-    _reportTransport(up: true);
+    await client.connect();
+    _updates = client.updates?.listen(_onData);
+    // A fresh CONNECT with `startClean` opens an EMPTY session, so every
+    // subscription this client held is gone as far as the broker is concerned.
+    // On a first [connect] the set is empty and this loop does nothing; after a
+    // [setWill] it is the entire reason the process can still hear the island.
+    for (final topic in _subscriptions) {
+      client.subscribe(topic, MqttQos.atMostOnce);
+    }
   }
 
   void _onData(List<MqttReceivedMessage<MqttMessage>> events) {
@@ -313,24 +419,81 @@ class AikoClient implements MessageBus {
   /// Subscribe to an MQTT topic (Aiko topics look like
   /// `{namespace}/{host}/{pid}/{service_id}/{in|out}`).
   @override
-  void subscribe(String topic) => _mqtt.subscribe(topic, MqttQos.atMostOnce);
+  void subscribe(String topic) {
+    _subscriptions.add(topic);
+    _mqtt.subscribe(topic, MqttQos.atMostOnce);
+  }
 
   /// Stop receiving [topic]. Paired with [subscribe] by `TopicRouter`, which
   /// owns the reference counting — the broker has no notion of "one of my
   /// several interests", so unsubscribing while another handler still wants the
   /// topic silently blinds it.
   @override
-  void unsubscribe(String topic) => _mqtt.unsubscribe(topic);
+  void unsubscribe(String topic) {
+    _subscriptions.remove(topic);
+    _mqtt.unsubscribe(topic);
+  }
 
   /// Publish a function call as an Aiko S-expression to [topic].
   ///
   /// [params] is a `List` of positional args or a `Map` of keyword args; `null`
   /// is treated as an empty argument list.
   @override
-  void send(String topic, String command, Object? params) {
+  void send(
+    String topic,
+    String command,
+    Object? params, {
+    bool retain = false,
+  }) {
     final payload = generate(command, params ?? const <Object?>[]);
     final builder = MqttClientPayloadBuilder()..addString(payload);
-    _mqtt.publishMessage(topic, MqttQos.atMostOnce, builder.payload!);
+    _mqtt.publishMessage(
+      topic,
+      MqttQos.atMostOnce,
+      builder.payload!,
+      retain: retain,
+    );
+  }
+
+  @override
+  void clearRetained(String topic) {
+    // An empty builder's payload is a zero-length buffer, which is the exact
+    // wire form that DELETES a retained message. Going through `generate` with
+    // an empty command would not do it: that produces `()`, two bytes, which
+    // replaces the retained payload with a new one rather than removing it.
+    _mqtt.publishMessage(
+      topic,
+      MqttQos.atMostOnce,
+      MqttClientPayloadBuilder().payload!,
+      retain: true,
+    );
+  }
+
+  @override
+  Future<void> setWill(LastWill? next) async {
+    if (next == _will) return;
+    _will = next;
+    final live = _client;
+    // Not connected yet: the new will is what [connect] will carry, and there
+    // is no socket to pay for.
+    if (live == null) return;
+
+    // Say the link went down, because it DID. A layer keyed on `transportUp`
+    // would otherwise see an unbroken wire across a window in which nothing
+    // could be published or received — the same lying-rung failure the ladder
+    // above was built to avoid.
+    _reportTransport(up: false);
+    // This drop is our own doing, and it has already been announced once on the
+    // line above. Leaving the callbacks armed would announce it again, as
+    // though the island had gone.
+    live.onDisconnected = null;
+    live.onAutoReconnect = null;
+    live.onAutoReconnected = null;
+    await _updates?.cancel();
+    _updates = null;
+    live.disconnect();
+    await _open();
+    _reportTransport(up: true);
   }
 
   @override
@@ -338,6 +501,8 @@ class AikoClient implements MessageBus {
     // Stop reporting BEFORE disconnecting: the disconnect callback would
     // otherwise announce a drop that is our own doing, and the ladder above
     // would react to its own shutdown as though the island had gone.
+    await _updates?.cancel();
+    _updates = null;
     _mqtt.onDisconnected = null;
     _mqtt.disconnect();
     await _controller.close();

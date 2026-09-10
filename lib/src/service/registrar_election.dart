@@ -286,6 +286,27 @@ class RegistrarElection {
     return _enterPrimary();
   }
 
+  /// Promotion could not be completed.
+  ///
+  /// `registrar.py:198-200`: `on_enter_primary` wraps the will-and-announce
+  /// sequence in `try/except SystemError` — its own comment guesses *"Probably
+  /// MQTT server not running"* — and transitions `primary_failed`. The
+  /// transition table carries that edge from BOTH `primary` and `secondary`
+  /// (`:151-155`), which is why this accepts either.
+  ///
+  /// Without this input a driver whose will-change throws is left holding the
+  /// role `primary` while having announced nothing. That is the one role that
+  /// is a LIE rather than a stage: every layer above reads it to decide whether
+  /// this process is serving the island, and an unannounced primary serves an
+  /// island that cannot see it.
+  List<ElectionEffect> onPrimaryFailed() => switch (_role) {
+    RegistrarRole.primary || RegistrarRole.secondary => _enterPrimarySearch(),
+    // `start` and `primary_search` have no such edge upstream, and inventing
+    // one would restart a search that is already running — re-arming the timer
+    // under a new epoch and orphaning the one in flight.
+    RegistrarRole.start || RegistrarRole.primarySearch => const [],
+  };
+
   List<ElectionEffect> _latch(RegistrarAnnouncement announcement) {
     _seenPrimaryBeforeStart = announcement == RegistrarAnnouncement.found;
     return const [];
