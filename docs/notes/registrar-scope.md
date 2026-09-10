@@ -39,7 +39,7 @@
 >
 > **One risk below is now a number.** "The 2-second election timeout is a race with
 > reality" was named and unmeasured. Measured: the live island's retained announcement
-> reaches a joining process **47-54 ms** after it subscribes, against a 2000 ms promotion
+> reaches a joining process **6-54 ms** after it subscribes, against a 2000 ms promotion
 > timer. Roughly 40x of margin on this broker. Still a race; no longer a guess.
 >
 > **A signal the reference does not have, forced by the port.** Upstream's
@@ -587,7 +587,7 @@ decide it silently.
 * **The 2-second election timeout is a race with reality**, not a constant to tune.
   Upstream's own TODO (`:167`) asks for jitter to avoid collisions and does not implement
   it. Two Dart registrars started together would collide identically.
-  **MEASURED 2026-09-11:** the retained announcement arrives 47-54 ms after subscribe on
+  **MEASURED 2026-09-11:** the retained announcement arrives 6-54 ms after subscribe on
   the live rig (`LATENCY_MS` in arm 1). The margin is ~40x, and the probe reports the
   number rather than asserting a threshold — a threshold would turn a measurement into a
   flaky gate, and the number is more use to the next reader than a boolean.
