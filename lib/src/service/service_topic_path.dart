@@ -57,6 +57,25 @@ final class ServiceTopicPath {
   /// The path itself — what appears in a payload field.
   String get path => '$namespace/$host/$processId/$serviceId';
 
+  /// The owning process, without the service id (`service.py:350`).
+  ///
+  /// A process, not a service, is the unit that dies: the Last Will and
+  /// Testament is published on this process's `0` path, and the registrar
+  /// answers it by removing *every* service belonging to the process
+  /// (`registrar.py:381-386`). So a roster needs to look services up by
+  /// process, not only by their own path.
+  String get processPath => '$namespace/$host/$processId';
+
+  /// Whether this path addresses the process itself rather than one of its
+  /// services.
+  ///
+  /// Service id `0` is the process (`registrar.py:381`, `# Process
+  /// terminated`). Named because the reference spells the comparison inline
+  /// against a bare `"0"`, and the same magic value decides two unrelated
+  /// things: which `/state` topic carries the process LWT, and whether a
+  /// `(remove ...)` means one service or all of them.
+  bool get isProcess => serviceId == '0';
+
   /// Commands addressed to this service (`actor.py:_topic_in_handler`).
   String get topicIn => '$path/in';
 

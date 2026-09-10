@@ -58,7 +58,7 @@ other's premise, not reality. The actual defect only appeared by reading the sou
 isolate as application handlers, so a BUSY process gets declared DEAD.** *Tesla alone.*
 This is the strike's most consequential finding because it inverts a decision the ADR presented
 as pure gain. With no background network thread, a slow handler — a fat S-expression parse, a
-long `await` — blocks MQTT keepalive pings. The broker then fires the retained last will
+long `await` — blocks MQTT keepalive pings. The broker then fires the last will
 `(absent)` on `{ns}/{host}/{pid}/0/state` (the very row added to §1 this session), and **the
 fleet fails over a process that was only busy.** Tesla: *"Python's two-thread hop was ugly; it
 also kept the heart beating while the actor thought."*

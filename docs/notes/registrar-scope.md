@@ -1,12 +1,29 @@
 # Scope — a Dart registrar (increment 2)
 
-> **Status, 2026-09-10: scoped, nothing built.** This note is step 0. Nothing in
-> `lib/` has changed. Everything below was read against a pinned ref, not recalled.
+> **Status, 2026-09-10: scoped; step 1 landed.** This note began as step 0, written
+> before any code. Everything below was read against a pinned ref, not recalled.
+>
+> **Step 1 is partly done and this note is no longer ahead of the tree.** Confirming the
+> "reusable" set found two gaps: `ServiceTopicPath.processPath` / `isProcess` did not
+> exist and now do, and `ServicesCache` accepted a negative `(item_count …)` that wedged
+> it permanently, which is now refused.
+>
+> **Two step-1 items remain open, for different reasons.** `ServiceFilter`'s tag matching
+> is simply unwritten. Snapshot ADMISSION is harder: a cage-match established over three
+> rounds that a consumer cannot tell the registrar's frame from a peer's on ADR-023's
+> unauthenticated bus, and that no arrangement of local flags fixes it — each guard
+> closed one instance and opened another. That is a design question, tracked separately,
+> and deliberately NOT patched further here. See *"Snapshot admission"* below.
 >
 > **One thing here was measured rather than read, and it found a live defect:** running
 > the existing acceptance suite to establish a baseline failed, because the island had
 > been serving a roster that did not contain its own ChatServer for 23 hours. See
 > *"The island was found broken"* below. Baseline is now green, 14/14.
+>
+> **Corrected 2026-09-10 (same day):** the LWT section originally claimed Dart could skip
+> upstream's disconnect-reconnect. That is wrong *for a registrar* — there are two wills
+> with different retain flags and MQTT allows one per connection, so the will must change
+> at promotion. Corrected in place, with the reasoning kept rather than deleted.
 
 Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).
 
@@ -211,7 +228,7 @@ mistake ADR-0003 made and was dissolved for.
 
 ---
 
-## LWT: our transport can be better than the reference, and still be at parity
+## LWT: the registrar must reconnect, and this section previously said otherwise
 
 `mqtt_transport.dart` sets no will (grep for `will`/`lwt` returns only a prose match).
 `MessageBus` exposes `connect / subscribe / unsubscribe / send / disconnect` and no way
@@ -233,23 +250,49 @@ every time. That file's own header (`mqtt.py:15-23`) documents the resulting dea
 `set_last_will_and_testament()`, which causes a `wait_disconnected()` whilst on the MQTT
 thread"* — and names the registrar path by name.
 
-Dart does not have to inherit this. `mqtt_client` takes the will on the connect message,
-and our registrar knows its will topic and payload before it connects, so it can set it
-once and never reconnect.
+> **CORRECTED 2026-09-10, same day, before any code was written against it.** The
+> paragraph that stood here said Dart does not have to inherit the reconnect, because
+> `mqtt_client` takes the will on the connect message and "our registrar knows its will
+> topic and payload before it connects". **The second half is false, and it is false
+> specifically for a registrar.** The claim was written after reading `registrar.py` and
+> `mqtt.py` and before reading `process.py` — it generalised from the one will it had
+> seen.
 
-**Is skipping the reconnect a wire divergence?** No. A clean MQTT `DISCONNECT` does not
-publish the will, so no peer observes anything on `TOPIC_REGISTRAR_BOOT` from the cycle;
-what an observer sees is a broker-side connect/disconnect pair and a brief subscription
-gap. It is invisible at the protocol layer we claim parity at. **Record it as a
-deliberate, additive divergence with a named reason**, the way `RosterReleased` was —
-not as a silent improvement.
+**There are TWO wills with different topics, different payloads and different retain
+flags, and MQTT permits exactly one per connection.**
+
+| | topic | payload | retain |
+|---|---|---|---|
+| every process, set at startup | `{ns}/{host}/{pid}/0/state` | `(absent)` | **False** (`process.py:169`, position 5 of `mqtt.py:66-74`) |
+| a registrar, set on **promotion** | `{ns}/service/registrar` | `(primary absent)` | **True** (`registrar.py:189-190`) |
+
+A registrar starts as an ordinary process holding the first will. It only learns it is
+primary later — after the election, which is either a 2-second timeout or an `absent` on
+the boot topic. At that moment its will must **change**. `mqtt_client` cannot do that:
+assigning `connectionMessage` after `connect()` is silently ignored by the reconnect path
+while reading back as though it took (measured). **So the Dart registrar must reconnect at
+promotion, exactly as Python does.** Python is not being clumsy; it is doing the only
+thing MQTT allows.
+
+**Setting the retained `(primary absent)` will up front, at connect, is not a shortcut —
+it is a bug.** A registrar that does so and then loses the election becomes a *secondary*
+holding a retained will that says the primary is gone. When that secondary dies, it wipes
+a live primary's announcement and blinds every joining peer on the island.
+
+What Dart genuinely does get for free, and should still be recorded: the will **survives
+auto-reconnect** without any work, because the connection handler retains the same
+`MqttConnectMessage` instance and re-serialises it on each attempt (verified against a
+live broker). That property is invisible in the code and would be silently destroyed by
+anyone who later moved the configuration after `connect()`, so it wants an acceptance test
+that can fail — kill the process *after* a reconnect and assert the will still fires.
 
 The ordering inside `on_enter_primary` (`:185-197`) is not incidental and must be
 reproduced:
 
 1. publish `""` retained to `TOPIC_REGISTRAR_BOOT` — clears the *previous* primary's
    retained announcement so this process does not immediately re-read a stale one;
-2. set the will to `(primary absent)`, retained;
+2. set the will to `(primary absent)`, **retained** — which in Dart means tearing down
+   the connection and reconnecting with the new will, per the correction above;
 3. publish `(primary found <topic_path> <version> <time_started>)`, retained.
 
 Doing 3 before 2 leaves a window where a crash strands a retained `found` naming a dead
@@ -264,7 +307,7 @@ Verified by reading, not by remembering. `lib/` is 2180 lines across 13 files.
 
 | Need | Status |
 |---|---|
-| `ServiceTopicPath` parse/format, `service_id == "0"` process rule | **exists** (`service_topic_path.dart`, 82 lines) — confirm the process-expansion helper exists too |
+| `ServiceTopicPath` parse/format, `service_id == "0"` process rule | **exists** — and the process-expansion helper was MISSING; `processPath` + `isProcess` added in step 1 |
 | `ConnectionState` machine | **exists** (`connection_state.dart`) — the *client* ladder; the registrar's election is a **different** state machine, not this one |
 | `TopicRouter` (dispatch by topic) | **exists** (`topic_router.dart`) — needed for `/in`, the boot topic, and the `+/+/+/state` wildcard |
 | `ServiceDetails` / `ServiceFilter` | **exists** (`service_details.dart`) — confirm `filter_by_attributes` semantics match `registrar.py:333` |
@@ -304,6 +347,40 @@ service that re-registers after a registrar restart therefore gets nothing back.
 says copy it; note it and move on.
 
 ---
+
+## Snapshot admission — a design question, not a bug to patch
+
+Established by cage-match rounds 1-3 against PR #18, and recorded here because the next
+session will otherwise re-derive it.
+
+`ServicesCache` receives its snapshot on `{our path}/registrar_share`. That topic is not
+secret: it is derived from our own topic path, and the registrar BROADCASTS it in
+`(sync <topic_response>)` on its own `/out`. On ADR-023's unauthenticated bus, any peer
+can publish a frame onto it.
+
+Three guards were tried and each closed one instance while opening another:
+
+| guard | closed | opened |
+|---|---|---|
+| refuse a negative count | the permanent wedge | `(item_count 999999)` wedges identically |
+| accept a frame only while a request is outstanding | the unsolicited frame | a raced `(item_count 0)` completes instantly, marks the cache confidently-EMPTY, and locks out the real reply |
+| close the window on `ready` rather than `loaded` | that lock-out | `(sync …)` is deliberately LATCHED for cross-topic reordering, so a sync arriving first promotes whichever frame completes first |
+
+**Only the first landed.** It is strictly narrowing and adds no new capability. The
+others were reverted out of the step-1 PR, because making a frame REPLACE — which the
+protocol genuinely requires, since one `(share …)` can draw several snapshots and a
+merging consumer keeps keys that have vanished — simultaneously hands an unauthenticated
+peer a 20-byte roster wipe that the pre-existing merging code did not have.
+
+**REPLACE is protocol-correct and weaponisable at the same time, and that does not
+resolve inside this class.** What closes it lives on the wire: an authenticated sender,
+or a reply bound to its request by a correlation token. That is the same gap as the
+registrar's unvalidated `topic_response`
+([`registrar-findings-for-upstream.md`](registrar-findings-for-upstream.md)) and the same
+argument as the HandlerContext ADR — answer it once, across all three.
+
+Until then the consumer merges, exactly as it did before, and the duplicate-snapshot
+hazard stays a known, documented divergence rather than a silently-traded one.
 
 ## The falsifier — and the inherited acceptance criterion has a hole
 

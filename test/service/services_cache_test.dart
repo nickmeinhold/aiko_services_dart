@@ -146,6 +146,50 @@ void main() {
       },
     );
 
+    // `int.tryParse('-1')` is `-1`, not null, so a guard that only asks "does
+    // this parse" admits a negative frame — and a negative one never recovers,
+    // because every `add` decrements away from the `== 0` that completes the
+    // snapshot. Our share topic is reachable: the registrar broadcasts
+    // `(sync <topic_response>)` on its `/out`, naming it to the whole island.
+    //
+    // The positive control matters as much as the arm: without it, a cache
+    // that ignored EVERY item_count would pass the first two expectations.
+    test('a negative item_count is refused, and does not wedge the frame', () async {
+      cache.attach();
+
+      await bus.deliver(cache.shareTopic, 'item_count', ['-1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(
+        cache.state,
+        ServicesCacheState.share,
+        reason: 'still awaiting a valid snapshot — no frame was opened',
+      );
+      expect(cache.services, isEmpty);
+
+      // Positive control, on the same cache: a good frame still lands, so the
+      // rejection above is about the value and not about the cache being inert.
+      await bus.deliver(cache.shareTopic, 'item_count', ['1']);
+      await bus.deliver(cache.shareTopic, 'add', _chatRecord);
+      expect(cache.state, ServicesCacheState.loaded);
+      expect(cache.services.map((s) => s.name), ['chat_server']);
+    });
+
+    // Zero is a legal frame — an island with no matching services — and is the
+    // boundary the fix must not overshoot into.
+    test(
+      'a zero item_count is a legal empty snapshot, not a rejection',
+      () async {
+        cache.attach();
+        final changes = <ServiceChange>[];
+        cache.changes.listen(changes.add);
+
+        await bus.deliver(cache.shareTopic, 'item_count', ['0']);
+        expect(cache.state, ServicesCacheState.loaded);
+        expect(cache.services, isEmpty);
+        expect(changes.whereType<ServicesLoaded>(), isNotEmpty);
+      },
+    );
+
     test('the snapshot loads, then the registrar confirms it', () async {
       cache.attach();
       final changes = <ServiceChange>[];
