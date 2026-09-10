@@ -97,6 +97,7 @@ sleep 1
 # have the observer watching broker A while the ECConsumer sang to broker B.
 # TAKES=0 and a false red, or a hang in connect() that nothing wraps.
 dart run spike/lease/probe_lease.dart "$CONTROL" "$LEASE" "$HOST" "$PORT" > "$PROBE_OUT" 2>&1
+PROBE_RC=$?
 sleep 2
 kill "$SUB" 2>/dev/null; wait "$SUB" 2>/dev/null
 

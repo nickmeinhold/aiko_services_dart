@@ -19,6 +19,7 @@
 // asserts fired-then-silent. Exiting without `disconnect()` closes the socket
 // with no DISCONNECT packet, which is what makes the broker fire the will —
 // the same thing a crash does, without needing to be signalled from outside.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:aiko_services/aiko_services.dart';
@@ -31,6 +32,8 @@ Future<void> main(List<String> args) async {
   final runId = args.first;
   final clean = args.contains('bye');
   final topic = 'aiko/probe/will/$runId/0/state';
+
+  _armWatchdog(const Duration(seconds: 45), 'the will probe');
 
   final client = AikoClient(
     host: '127.0.0.1',
@@ -56,4 +59,24 @@ Future<void> main(List<String> args) async {
     print('exiting WITHOUT disconnect — the broker should publish the will');
   }
   exit(0);
+}
+
+/// Refuse to hang.
+///
+/// A probe with no upper bound turns a sick broker into CI entropy: `verify.sh`
+/// waits forever instead of reporting a named failure, and nobody can Ctrl-C a
+/// gate running at 3am. Bounded HERE rather than with a `timeout` wrapper
+/// because `timeout` is absent on a default macOS host — the same reason it was
+/// removed from this probe's own discovery step.
+///
+/// Exit 75 (EX_TEMPFAIL), distinct from an assertion failure, so the driver can
+/// say "the harness stalled" rather than "the protocol is broken".
+void _armWatchdog(Duration budget, String what) {
+  Timer(budget, () {
+    stderr.writeln(
+      'WATCHDOG: $what did not finish within ${budget.inSeconds}s — '
+      'refusing to hang a gate on a sick broker',
+    );
+    exit(75);
+  });
 }
