@@ -105,8 +105,24 @@ printf '  our registrar: %s\n' \
   "$(grep -oE '^TOPIC_PATH=.*' "$WORK/registrar.log" | head -1 | cut -d= -f2-)"
 
 # The whole gate, in one line: somebody else's suite, unchanged.
-tool/observer_acceptance.sh
-ACCEPTANCE_RC=$?
+#
+# BOUNDED, and the bound lives HERE rather than in the caller for one reason:
+# a watchdog above this script would kill it, the restore trap would never run,
+# and the island would be left with no registrar and a corpse on its boot topic.
+# Measured, not hypothetical — an unbounded call hung inside `docker exec` for
+# 13 minutes with the island's registrar stopped the whole time, and nothing
+# would have noticed on its own.
+#
+# 480s is generous against a suite that takes about two minutes and deliberately
+# restarts containers. A stall is exit 75, which is a DIFFERENT fact from an
+# assertion failing, and the caller must be able to say which.
+# Settable so the watchdog itself can be exercised — a bound nobody has ever
+# seen trip is indistinguishable from one that cannot. Also the escape hatch for
+# a slower machine.
+GATE_A_BUDGET=${GATE_A_BUDGET:-480}
+ACCEPTANCE_OUT="$WORK/acceptance.log"
+ACCEPTANCE_RC=$(probe_run_bounded "$GATE_A_BUDGET" "$ACCEPTANCE_OUT" tool/observer_acceptance.sh)
+cat "$ACCEPTANCE_OUT"
 
 # A registrar that CRASHED while serving fails this gate even if the assertions
 # passed — a process that dies at the end of a run would have died in the
@@ -118,6 +134,11 @@ if ! kill -0 "$DART_PID" 2>/dev/null; then
 fi
 
 case "$ACCEPTANCE_RC" in
+  75)
+    printf '  \033[31mFAIL\033[0m the acceptance suite STALLED — the harness could not complete,\n'
+    printf '       which is not the same fact as the island rejecting a Dart registrar\n'
+    exit 75
+    ;;
   0)
     printf '\n  \033[32mPASS\033[0m the island'"'"'s own acceptance suite passes against a Dart registrar\n'
     exit 0
