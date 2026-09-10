@@ -78,10 +78,11 @@ void main() {
     // rather than on one path is what makes the test able to fail if the
     // getter ever included the service id.
     test('siblings of one process agree on the process path', () {
-      final siblings = ['aiko/h/9/0', 'aiko/h/9/1', 'aiko/h/9/2']
-          .map(ServiceTopicPath.parse)
-          .map((p) => p.processPath)
-          .toSet();
+      final siblings = [
+        'aiko/h/9/0',
+        'aiko/h/9/1',
+        'aiko/h/9/2',
+      ].map(ServiceTopicPath.parse).map((p) => p.processPath).toSet();
       expect(siblings, hasLength(1));
       expect(siblings.single, 'aiko/h/9');
     });
