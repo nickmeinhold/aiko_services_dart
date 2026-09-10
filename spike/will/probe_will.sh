@@ -28,10 +28,16 @@ bad() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 # broker", and skip a check while the island it depends on was demonstrably up.
 #   2 = no mosquitto_sub on this machine (a tooling gap here)
 #   3 = no broker reachable (the rig is down)
-command -v mosquitto_sub >/dev/null || {
-  echo "mosquitto_sub not found — cannot observe the broker. A skip is NOT a pass." >&2
-  exit 2
-}
+for _bin in mosquitto_sub mosquitto_pub; do
+  # BOTH, not just mosquitto_sub. The reachability fallback below publishes, so
+  # checking only the subscriber let a machine with sub-but-not-pub report
+  # "no broker reachable" for a broker that was fine — and verify.sh would then
+  # record the wrong failed condition. A measurement defect, not a message one.
+  command -v "$_bin" >/dev/null || {
+    echo "$_bin not found — cannot observe the broker. A skip is NOT a pass." >&2
+    exit 2
+  }
+done
 if ! timeout 3 mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t '$SYS/#' -C 1 -W 2 >/dev/null 2>&1; then
   # $SYS may be disabled; fall back to proving we can connect at all.
   if ! timeout 3 mosquitto_pub -h "$BROKER_HOST" -p "$BROKER_PORT" -t 'aiko/probe/will/ping' -m x 2>/dev/null; then
@@ -41,7 +47,15 @@ if ! timeout 3 mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t '$SYS/#' -C 
 fi
 
 run_arm() {  # $1 = die|bye ; echoes the observed will payload (empty if none)
-  local arm=$1 out sub_log sub_pid
+  local arm=$1 out sub_log sub_pid run_id topic
+  # A run id chosen HERE, so the will topic is known before the subscriber
+  # starts. The earlier version watched `aiko/probe/will/+/0/state` because the
+  # topic carried the Dart process's pid and could not be known in advance --
+  # and that wildcard makes concurrent runs read each other: a clean `bye` arm
+  # fails on somebody else's `die`, and a `die` arm passes on somebody else's
+  # will. Either way the result is about the wrong process.
+  run_id="$$_${arm}_$(od -An -N2 -tu2 < /dev/urandom | tr -d ' ')"
+  topic="aiko/probe/will/${run_id}/0/state"
   out=$(mktemp); sub_log=$(mktemp)
   # Cleanup on EVERY exit from this function, including the early return below.
   # A `return` that skips its own `rm` leaks a temp file per arm, quietly.
@@ -54,15 +68,14 @@ run_arm() {  # $1 = die|bye ; echoes the observed will payload (empty if none)
   # un-retained will that is gone the moment it is published), and reading the
   # log while mosquitto_sub still held it (grepping a userspace buffer rather
   # than what the broker actually said).
-  mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" \
-    -t 'aiko/probe/will/+/0/state' -v > "$sub_log" 2>&1 &
+  mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$topic" -v > "$sub_log" 2>&1 &
   sub_pid=$!
   # Give the SUBSCRIBE a moment to be established at the broker. An un-retained
   # will published before this lands is unobservable, forever.
   sleep 1
 
   # Unbounded on purpose: a cold compile is slow and that is not a failure.
-  dart run spike/will/probe_will.dart "$arm" > "$out" 2>&1
+  dart run spike/will/probe_will.dart "$run_id" "$arm" > "$out" 2>&1
   # Let a will published at exit reach the broker and the subscriber.
   sleep 4
 
