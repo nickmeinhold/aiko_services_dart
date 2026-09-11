@@ -144,3 +144,160 @@ Wu disabled. Bundle 63KB, under Carnot's validated point; sentinel-confirmed
 **RECAST.** Fold all eight into the design and re-strike (round 2 of ≤3). The two that change
 the document's shape rather than its prose are the first two: the fifth situation is still
 collapsed, and the test double cannot be held to a contract the compiler cannot see.
+
+---
+
+# ROUND 2 — the same shape, a third time
+
+**Overall verdict: RECAST.** Zero DISSOLVE, four RECAST, again.
+**Struck:** dt-1789108118, 2026-09-11. Four families seated (Kelvin on `gemini-2.5-pro`, the
+primary model). Bundle 69KB; `LAUNCHER_DONE` sentinel, three RCs of 0, verdict markers in all
+three payloads. No dark seats.
+
+Round 2's panel was asked a different question: **not "is this design sound" but "is each of
+round 1's eight folds REAL, or prose that names the finding without closing it?"** — because
+round 1's §9 was precisely that failure.
+
+## Fold audit (consensus across four families)
+
+| round-1 finding | verdict |
+|---|---|
+| fifth state / `Dipped` | **REAL** — unanimous |
+| `connect()` / `_reopen()` written | **REAL** — unanimous |
+| §6 RP-1 demoted from law to invariant | **REAL as honesty**, not as safety (see below) |
+| §5 overclaim split | **REAL** — Kelvin conceded his own round-1 fold-back was wrong |
+| §3 call-site table | **PARTIAL** — the design commits, the code still catches `on Object` |
+| §5c recovery triggers | **REAL** — unanimous |
+| §0 lifecycle gate | **PARTIAL** — mechanism present, justification circular |
+| §9 FakeBus parity | **NOT REAL, second time** — 3 of 4 families |
+
+## Per-family verdicts
+
+| Family | Verdict | One-line |
+|---|---|---|
+| Maxwell (Claude) | RECAST | Four folds real; §9 now fails on a *type error* rather than a vow, and §0 closed a race by converting it into a hang. |
+| Kelvin (Gemini, primary) | RECAST | Every fold real — and the design now achieves local correctness by outsourcing its critical invariant to a layer that admits it cannot enforce it. |
+| Carnot (GPT) | RECAST | More precise, still spending machinery defending an ownership model it has not minted; and the intent/mechanism split *lies* about the will. |
+| Tesla (Grok) | RECAST | Dipped is the right name for the fifth frequency and the wrong home for the will — round 3 rings one beat later. |
+
+## THE finding: the same defect, a third time, in the fix for the second
+
+**Tesla and Carnot, independently.** Verified at the package source before being accepted.
+
+`setWill` on `Dipped` writes `_will = next` and throws. But `autoReconnect` does not read
+`_will` — `MqttConnectionHandlerBase.autoReconnect` calls
+`connect(server!, port!, connectionMessage)` with the **stored** CONNECT message
+(saved at `:104`, *"Save the parameters for auto reconnect"*), old will inside. So:
+
+1. dip, then `setWill(B)` records B and throws transient
+2. `autoReconnect` republishes the CONNECT carrying will **A**
+3. the bus returns as `Attached`, socket armed with **A**, `_will == B`
+4. next promotion takes the `Attached` arm, `next == _will` holds, it **returns without reopening**
+
+The registrar believes it holds a retained `(primary absent)` on the boot topic. The broker
+holds the per-process `(absent)`. On an unclean death the island is never told its primary is
+gone. Tesla: *"Round 3 was `_will == next` while `_client == null`. This is `_will == next`
+while `_client` is connected and armed with someone else."*
+
+And the comment I wrote beside it says **"already armed AND the socket carries it"** — the
+correct spec, in prose, next to code that tests only the first conjunct.
+
+### The class, named at last
+
+Three consecutive fixes, each generating the next round's worst finding, are **one defect**:
+
+| what was compared | what it was standing in for |
+|---|---|
+| `_client == null` | is this bus reachable |
+| `_client != null` (rev 1's `Attached`) | is the socket *connected* |
+| `_will == next` (rev 2's short-circuit) | does the socket *carry* this will |
+
+Every one is **a locally-held value used as a proxy for a state of the wire.** That is this
+session's inherited crux — ARTIFACT != STATE — committed three times inside the design written
+to cure it. `Dipped` fixed instance 2 by reading `connectionStatus` instead of inferring from
+`_client`; the same move cures instance 3.
+
+**The rule, which is the round-3 fold:** *a MECHANISM fact is recorded by the mechanism at the
+moment it becomes true, never inferred from INTENT.* `_willOnWire` is written inside `_open()`
+on success, sits on the mechanism side beside `_client`, and the `Attached` short-circuit tests
+`next == _willOnWire`. `_will` stays pure intent. One field, and it closes the class rather
+than the instance.
+
+## Also fatal, deduped
+
+- **RP-1 is a precondition, not a mechanism — and the trade is a regression.** — **Kelvin AND
+  Carnot**, both as their headline. Kelvin: *"removes a noisy failure (oscillation) and in
+  exchange makes a silent, catastrophic failure (dual primary) more likely… a design that
+  requires a law of physics must first prove that law exists."* Checked against today's
+  behaviour and they are right that it is a REGRESSION, not merely an unclosed gap: **today**,
+  two registrars sharing a path give you one primary (B reads A's `found` and stands down);
+  **after §6**, both read it as own-residue and both promote.
+  — DISPOSITION: fold, and it is cheap. Own-residue requires `path == topicPath.path` **AND**
+  that we actually published an announcement. A replica that never announced treats a matching
+  `found` as real news and stands down, exactly as today. One bool, and Kelvin's dual-primary
+  is closed without needing RP-1 to hold.
+- **`connect()` is dishonest about `Dipped`.** — **Maxwell, Tesla AND Carnot.** It returns void
+  over a down wire *and then calls `_reportTransport(up: true)`* (Carnot caught the second half;
+  I wrote it and missed it). The revision made `send` honest about `Dipped` and left `connect()`
+  lying about it in the same pass. Tesla: *"The prose says these are the same rule. They are
+  opposite rules."*
+  — DISPOSITION: fold. `connect()` on `Dipped` throws `TransportUnavailable`; transport-up
+  reporting derives from connection state, never from caller intent.
+- **The shared `Reach` is a type the fake cannot construct.** — **Maxwell, Tesla AND Carnot.**
+  `Attached(this.client)` carries an `MqttServerClient`; `FakeBus` has none, so
+  `alreadyAttached()` has nothing to put in the field. Round 1's §9 promised parity the fake did
+  not have; round 2 promised parity **the type system forbids**.
+  — DISPOSITION: fold. `Reach` carries no payload; `AikoClient` reads the handle through a
+  private accessor. The exhaustiveness force is in the arms, not the cargo. And §9 ships an
+  actual fake *sketch*, not a shopping list — three families called the prose insufficient.
+- **§0's two mechanisms justify each other circularly, and the gate's cost is unpriced.** —
+  **Maxwell AND Carnot.** Rule 2's epoch is justified as fencing an `_open()` whose world
+  changed mid-await, but under rule 1 nothing can change it — `disconnect()` is queued behind
+  the gate. Carnot: *"the insight wanted here is one owner of lifecycle mutation, not a mutex
+  plus a generation charm."* Unpriced cost: a `disconnect()` during `_reopen` now blocks for up
+  to 3 connect attempts against a dead broker — a race traded for a hang.
+  — DISPOSITION: fold. Name the escape routes (package callbacks, stream listeners,
+  `_reportTransport` re-entering election work) or drop the epoch. Write the happens-before
+  boundary, and price the shutdown latency.
+- **§10's own must-fail arm is unreachable.** — **Maxwell.** *"`disconnect()` during `setWill`'s
+  reopen window"* cannot be constructed under a single-entrant gate. A must-fail arm that cannot
+  go red is the T7 defect this repo already shipped once.
+  — DISPOSITION: fold. Drive `_open()` beneath the gate, or replace it with a serialisation
+  assertion — and add Tesla's sequel: dip, `setWill(B)` refuses, autoReconnect, then `setWill(B)`
+  must reopen rather than return.
+- **`TransportUnavailable` wrapping is incomplete, so §3's election arm is dead.** — **Tesla AND
+  Carnot.** §7 rethrows a `StateError` for stale epochs and post-connect failures in their
+  original types, and the election's explicit transient catch misses them.
+  — DISPOSITION: fold. Define the wrapping boundary around *every* failed mechanism-open path.
+- **`_client` is installed before the candidate is fully armed.** — **Carnot, alone.**
+  `_client = client` precedes `_updates.listen` and the subscription restore, so for a window
+  the bus is externally `Attached` with no listener. The gate serialises lifecycle callers, not
+  arbitrary publishers.
+  — DISPOSITION: fold. Install last, after all setup succeeds.
+- **Nothing takes `Dipped` to `Detached`.** — **Tesla, alone.** No writer nulls `_client` when
+  `connectionStatus` goes `faulted`/`disconnected`. *"If the package is infinite, `Dipped` waits
+  forever for a daemon; if it is not, `Dipped` is `Broken` in a new robe."*
+  — DISPOSITION: fold. Name the writer, or write down that `autoReconnect` is unbounded (§5b
+  establishes it is) so that row provably has no other door.
+
+## What holds, round 2
+
+- **The decomposition, unanimous for the second time.** All four families re-endorsed
+  INTENT / MECHANISM / OBSERVATION / AUTHORITY and sealing the observation.
+- **`Dipped` is a real repair, not a relocation.** Test applied: a state that shares every
+  answer with its neighbour is a row, not a state. `Dipped` and `Detached` agree in §3 and
+  diverge in §4. Tesla, who raised the original: *"`_publishable` is repaired."*
+- **Six of eight round-1 folds are real**, by adversary audit rather than self-assessment.
+- **Kelvin conceded §5b.** *"My own proposal is refuted with a superior argument. I concede the
+  point; the thermodynamics are correct."* A reviewer fold-back argued with rather than obeyed.
+- **Three of Tesla's six constraints MET by his own scoreboard**: one home for the will
+  (*"the home can now lie about the wire, which is a different crime"*),
+  reopen-as-election-input (*"the sermon about pid-as-law is dead"*), identity-at-close.
+- **§7's catch-and-kill, §6's `ownResidue`, §5b/§5c's honesty** — all re-endorsed.
+
+## Disposition
+
+**RECAST, round 3 — the last under this skill's cap.** The round-3 fold is not a fourth guard:
+`_willOnWire` closes a CLASS that three consecutive rounds each closed one instance of, and the
+`_hasAnnounced` conjunct closes Kelvin's dual-primary regression without requiring RP-1 to hold.
+The remaining seven are mechanical.
