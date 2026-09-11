@@ -176,10 +176,24 @@ class FakeBus implements MessageBus {
     final failure = failSetWillWith;
     if (failure != null) {
       failSetWillWith = null;
+      // MODEL THE REAL SEQUENCE, not a convenient one. AikoClient assigns the
+      // new will, tears the old socket down, and only THEN tries to reopen — so
+      // a failure leaves the will ALREADY SET and the connection GONE. This fake
+      // used to throw with `connected` still true and `_will` untouched, which
+      // is a failure state the real client cannot produce, and it is why the
+      // round-2 "stands back down" test stayed green over a defect that left a
+      // live registrar permanently deaf (Tesla, round 3). Third time a fake
+      // being kinder than the API hid a real bug in this PR.
+      _will = next;
+      connected = false;
       throw failure;
     }
     if (setWillDelay > Duration.zero) await Future<void>.delayed(setWillDelay);
-    if (next == _will) return;
+    // Mirrors AikoClient exactly: the short-circuit is about not paying a
+    // reconnect for an ALREADY-ARMED will, so it may only fire when something is
+    // armed. Keeping the fake's rule looser than the real one is how the driver
+    // test passed over a defect that leaves a live registrar deaf forever.
+    if (next == _will && connected) return;
     _will = next;
     actions.add(WillChanged(next));
   }

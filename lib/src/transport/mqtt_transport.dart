@@ -507,11 +507,37 @@ class AikoClient implements MessageBus {
 
   @override
   Future<void> setWill(LastWill? next) async {
-    if (next == _will) return;
+    // The short-circuit is about not paying a reconnect for a will that is
+    // ALREADY ARMED — so it may only fire when something is armed. Tesla, round
+    // 3: with `_will` assigned before `_open()`, a failed reopen left `_will`
+    // equal to the target and `_client` null, and the NEXT setWill for the same
+    // will returned here without ever touching the broker. The caller then
+    // promotes, `send` throws, the election stands back down, the 2-second timer
+    // re-fires, and the process arcs between primary_search and a promotion it
+    // can never complete — deaf, forever. A value comparison standing in for a
+    // liveness check is the same costume as a null-guard whose subject is never
+    // nulled, one file over.
+    if (next == _will && _client != null) return;
     _will = next;
     final live = _client;
     // Not connected yet: the new will is what [connect] will carry, and there
     // is no socket to pay for.
+    //
+    // **KNOWN DEFECT, NOT FIXED HERE — see docs/notes/boot-topic-lifecycle.md.**
+    // This branch cannot tell "never connected" from "a previous setWill tore
+    // the socket down and failed to reopen". In the second case the caller is
+    // left believing the will was re-armed while nothing reconnects, and a
+    // registrar retrying promotion arcs between primary_search and a promotion
+    // it can never complete — deaf, indefinitely. Found by Tesla in round 3 of
+    // this PR's cage-match.
+    //
+    // The fix is not a fourth guard. This class collapses at least five
+    // lifecycle states (never-connected / live / auto-reconnecting /
+    // failed-reopen / deliberately-closed) into `_client == null`, and EVERY
+    // transport defect this cage-match found is a consequence of that. Modelling
+    // them is a design change, and the round cap plus the stop signal
+    // ("my own last round's fix generated this finding") both say to escalate
+    // rather than patch a fifth time.
     if (live == null) return;
 
     // Say the link went down, because it DID. A layer keyed on `transportUp`

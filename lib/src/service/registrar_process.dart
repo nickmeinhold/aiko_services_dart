@@ -259,6 +259,12 @@ class RegistrarProcess {
   /// unauthenticated bus, and a malformed announcement must not move an
   /// election.
   void _onAnnouncement(AikoMessage message) {
+    // Refuse the INPUT, not just its effects. Tesla, round 3: `_apply` dropping
+    // effects while leaving still let the election ADVANCE, so the machine's
+    // role moved on a process that had gone — the exact lie `onPrimaryFailed`
+    // exists to prevent, and invisible to a test that sniffs `bus.actions`
+    // rather than `role`.
+    if (_leaving) return;
     if (message.command != 'primary') return;
     final parameters = switch (message.arguments) {
       PositionalArguments(:final values) => values,
@@ -317,6 +323,10 @@ class RegistrarProcess {
         _timer?.cancel();
         _timer = Timer(timeout, () {
           _timer = null;
+          // Same rule as [_onAnnouncement]: a timer that fires on a process
+          // which has begun leaving must not move the election either. Checked
+          // BEFORE `onSearchTimeout`, because that call is what enters `primary`.
+          if (_leaving) return;
           // The epoch goes back exactly as it came. A timer that cannot name
           // its own search cannot be honoured — see [StartSearchTimer.epoch].
           unawaited(_apply(_election.onSearchTimeout(epoch)));
@@ -384,6 +394,13 @@ class RegistrarProcess {
     _timer?.cancel();
     _timer = null;
     await _drain;
+    // AGAIN, after the drain. The drain can PERFORM a `StartSearchTimer` queued
+    // before we set `_leaving` — from a failed in-flight promotion's
+    // `onPrimaryFailed`, or a re-search — which arms a timer after the cancel
+    // above already ran. Cancelling once is cancelling the timer that existed
+    // when we decided to leave, not the one leaving produced.
+    _timer?.cancel();
+    _timer = null;
     await router.dispose();
     await bus.disconnect();
     await _lifecycle.close();

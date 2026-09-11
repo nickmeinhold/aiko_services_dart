@@ -345,6 +345,38 @@ void main() {
     });
   });
 
+  group('leaving is a filter on INPUTS, not only effects', () {
+    test(
+      'a timer armed BY the drain does not move the election after we leave',
+      () async {
+        // Tesla, round 3: disconnect cancels the timer, then awaits the drain —
+        // and the drain can PERFORM a StartSearchTimer queued before we left. That
+        // timer fires on a departed process and `onSearchTimeout` enters `primary`.
+        // The old test could not see it: it asserted on bus.actions, and a leaving
+        // process publishes nothing either way. Assert the ROLE.
+        final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 60);
+        final process = _process(
+          bus,
+          searchTimeout: const Duration(milliseconds: 40),
+        );
+        await process.connect();
+        unawaited(_deliverAbsent(bus));
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        await process.disconnect();
+        final roleOnLeaving = process.role;
+
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await settle();
+
+        expect(
+          process.role,
+          roleOnLeaving,
+          reason: 'the election must not advance on a process that has left',
+        );
+      },
+    );
+  });
+
   group('a promotion that fails', () {
     test('stands back down instead of holding a role it never announced', () async {
       final bus = FakeBus()..failSetWillWith = StateError('broker gone');
