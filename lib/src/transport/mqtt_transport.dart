@@ -270,33 +270,7 @@ class AikoClient implements MessageBus {
   /// way out. Reusing the corpse would depend on `connect()` rebuilding every
   /// one of them; a fresh client depends on nothing.
   MqttServerClient? _client;
-  // There WAS a `_mqtt => _client!` accessor here. Once the last two callers
-  // (send, clearRetained) learned `_client`, it had no references left — which
-  // is the tidiest possible proof that Tesla's "same costume" finding was about
-  // a real inconsistency rather than a style preference. Deleted rather than
-  // kept for convenience: an unchecked `!` accessor sitting in the file is an
-  // invitation, and the bug class is now unrepresentable instead of guarded.
-
-  /// The live client, or a refusal that says which state we are actually in.
-  ///
-  /// Tesla, round 2: `send` and `clearRetained` still reached through `_mqtt`
-  /// while subscribe/unsubscribe/disconnect learned `_client` — so a publish
-  /// before connect (or after disconnect) died as
-  /// `Null check operator used on a null value`, the exact costume the teardown
-  /// path just took off. Publishing without a socket is a CALLER error, unlike a
-  /// publish during an auto-reconnect, so this throws rather than returning
-  /// quietly — but it throws something that names the state.
-  MqttServerClient _requirePublishable(String what) {
-    final live = _client;
-    if (live == null) {
-      throw StateError(
-        'cannot $what: this bus has no connection — connect() has not '
-        'succeeded, or disconnect() has already run',
-      );
-    }
-    return live;
-  }
-
+  MqttServerClient get _mqtt => _client!;
   StreamSubscription<List<MqttReceivedMessage<MqttMessage>>>? _updates;
 
   /// Every topic currently subscribed, so a will change can restore them.
@@ -421,12 +395,8 @@ class AikoClient implements MessageBus {
     _updates = client.updates?.listen(_onData);
     // A fresh CONNECT with `startClean` opens an EMPTY session, so every
     // subscription this client held is gone as far as the broker is concerned.
-    // This restores them — after a [setWill], AND on a first [connect], because
-    // [subscribe] records a topic whether or not a socket exists yet. (Tesla,
-    // round 2: this sentence used to say the set is empty on a first connect and
-    // the loop does nothing. That stopped being true in this same diff, and a
-    // comment teaching the opposite of the code is how the next hand deletes a
-    // wire that is load-bearing.)
+    // On a first [connect] the set is empty and this loop does nothing; after a
+    // [setWill] it is the entire reason the process can still hear the island.
     for (final topic in _subscriptions) {
       client.subscribe(topic, MqttQos.atMostOnce);
     }
@@ -480,10 +450,9 @@ class AikoClient implements MessageBus {
     Object? params, {
     bool retain = false,
   }) {
-    final client = _requirePublishable('send to $topic');
     final payload = generate(command, params ?? const <Object?>[]);
     final builder = MqttClientPayloadBuilder()..addString(payload);
-    client.publishMessage(
+    _mqtt.publishMessage(
       topic,
       MqttQos.atMostOnce,
       builder.payload!,
@@ -497,7 +466,7 @@ class AikoClient implements MessageBus {
     // wire form that DELETES a retained message. Going through `generate` with
     // an empty command would not do it: that produces `()`, two bytes, which
     // replaces the retained payload with a new one rather than removing it.
-    _requirePublishable('clear the retained payload on $topic').publishMessage(
+    _mqtt.publishMessage(
       topic,
       MqttQos.atMostOnce,
       MqttClientPayloadBuilder().payload!,
@@ -560,15 +529,7 @@ class AikoClient implements MessageBus {
     // from it. A teardown path may not assume its setup ran.
     final live = _client;
     if (live != null) {
-      // Disarm ALL THREE, matching [setWill]. Tesla, round 2: this path silenced
-      // only `onDisconnected`, so if `autoReconnect` ever read a solicited
-      // disconnect as a dip rather than a grave, the client would climb back out
-      // still carrying its will — a retained `(primary absent)` published after a
-      // clean goodbye. The asymmetry between two teardown paths in one file is
-      // the defect; whether the reconnect fires today is not the question.
       live.onDisconnected = null;
-      live.onAutoReconnect = null;
-      live.onAutoReconnected = null;
       live.disconnect();
     }
     // NULLED, not merely disconnected. Round 1 of this PR's cage-match guarded
