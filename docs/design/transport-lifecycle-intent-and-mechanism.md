@@ -1,5 +1,27 @@
 # The socket is a handle; the intent is the state
 
+> ## ⚠️ SUPERSEDED IN PREMISE — read this first
+>
+> A round-5 strike (2026-09-11) put the premise every prior round was handed —
+> **`autoReconnect = true`, so the package owns socket recovery** — up for
+> demolition, and **all four families chose to remove it**
+> (`TEMPER-intent-and-mechanism.md`, round 5). This document is written against
+> the premise that lost.
+>
+> It is kept rather than rewritten-in-place because **most of it survives**: the
+> INTENT / MECHANISM / OBSERVATION / AUTHORITY frame, the payload-free sealed
+> `Reach`, `_retire`, install-last, the `disconnect` gate bypass, and §6's
+> `(path, timeStarted)` residue filter are all independent of the choice. What a
+> revision 4 must change: **`Dipped` deletes** (four reaches, not five),
+> **`_willOnWire` becomes unnecessary** (no auto-reconnect can replay a stale
+> CONNECT), **§3b's two-list reconcile deletes** (`_open()` is the only install
+> site again — which is also the Python reference's shape), **§5a's disjointness
+> becomes trivial** (one policy, ours), and **§5c gains a supervisor and loses
+> its caller-owned `Detached` row**, because caller-driven recovery is not idle
+> liveness.
+>
+> Do not build from this document without reading round 5.
+>
 > **Status: RECAST round 3, untempered at this revision.** Round 1: 0 DISSOLVE / 4
 > RECAST. Round 2: 0 DISSOLVE / 4 RECAST, with six of eight round-1 folds audited
 > REAL by the adversaries. All sixteen findings are folded here.

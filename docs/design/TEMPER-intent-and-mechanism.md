@@ -552,3 +552,140 @@ Tesla's structural observation is the one to carry forward: **every instance of
 the class since round 1 has been inside `Dipped` or adjacent to it.** The fifth
 situation is where this design's complexity concentrates, and the next strike —
 if there is one — should be aimed there rather than spread evenly.
+
+---
+
+# ROUND 5 — the aimed strike: should `Dipped` exist at all?
+
+**Not a design review. One priced fork, with the premise no prior round could
+interrogate because every round was HANDED it:**
+
+> `AikoClient` sets `autoReconnect = true`, so the MQTT package owns socket
+> recovery. Nobody chose that. It is the package default.
+
+**Struck:** dt-1789111197, 2026-09-11, at Nick's direction after round 4.
+**Result: UNANIMOUS — 4 of 4 for OPTION B**, set `autoReconnect = false` and
+supervise reconnection ourselves.
+
+> **Carnot was DARK on the first attempt** — `ERROR: Selected model is at
+> capacity`, rc=1, no output file. Re-run once; seated on the retry. Recorded
+> because a dark seat read as a silent vote is this repo's own documented
+> failure, and the dark seat here was the reviewer whose bias most favours B.
+
+## The verdict
+
+| Family | Choice | The sentence that earns it |
+|---|---|---|
+| Maxwell | **B** | The parity argument reverses: paho backs off 1s→120s, `mqtt_client` cannot back off at all — so **A is already the divergence**. |
+| Kelvin | **B** | *"Option A makes us a slave to the library's state machine."* |
+| Carnot | **B** | *"`Dipped` is a state whose owner and observer are different machines. A thermodynamic leak: work crosses the boundary, but accountability does not."* |
+| Tesla | **B** | *"Two oscillators on one cavity make the beat called `Dipped`; you do not tune a beat — you stop driving it with a loop you cannot pace."* |
+
+## Two corrections the panel made to the case FOR its own answer
+
+**1. Tesla ruled against his own diagnosis, unprompted and first.** The fork
+existed because of his round-4 line about the cavity. Asked whether it was
+evidence or a selection effect, he answered: ***"selection effect, wearing my
+bell as a proof. I named the cavity; then 'or adjacent to it' drew the circle
+after the points."*** His breakdown and Maxwell's, reached independently, agree:
+**3 of the 5 instances are not `Dipped`'s children.** Instances 1 and 2 are
+`Dipped` *being missing* and argue the state is real; instance 4 is boot-topic
+authorship and orthogonal. Only 3 and 5 are caused by it — and neither by the
+*state*, both by **autoReconnect doing something unmodelled**: replaying a stale
+stored CONNECT, and owning a subscription list we cannot see.
+
+So the case for B is **not** "the bugs cluster there". It is Carnot's: *"`Dipped`
+is not just where the bugs were found; it is the condition that manufactures
+their shape."*
+
+**2. Tesla refuted the parity argument Kelvin leaned on, and he is right.**
+Kelvin: *"The parity objection is nullified by the upstream author's own TODO
+(Fact 9)… Option B is not a divergence; it is the completion of a stated
+intent."* Tesla: ***"A port that 'finishes' Andy's TODO unilaterally is exactly
+the divergence a second implementation must not make — then a difference is a fix
+we invented, not a finding."***
+
+**Adopted: fact 9 is NOT the licence.** The licence is **fact 7** — the
+reference's invariant is *one install site, the application's list, on every
+connect including reconnects* (`_on_connect` → `_subscribe_if_connected`). Dart's
+`autoReconnect` cannot carry that invariant, so **parity of mechanism is already
+broken by the dependency.** Port the invariant. Tesla: *"Mechanism-matching a
+package that is not paho is costume."*
+
+## B does NOT delete the class — Tesla and Carnot both, against Maxwell
+
+Maxwell claimed the class "loses its precondition" because a supervised loop's
+state describes our own loop. **Overclaimed.** Tesla names the new proxies
+concretely: `_client != null` after `_open()` returns, standing for *the socket
+is still up* (the anonymous window before `onDisconnected`); supervisor phase
+standing for *the broker is down*; `_subscriptions` standing for *SUBACK will
+come* inside `_open()`. And `_hasAnnounced` and `_will == next` survive untouched.
+
+Carnot draws the line that makes B still correct: *"Reconnecting must not mean
+'we have a socket that might secretly become valid.' It should mean 'we have no
+client handle; we have a desired connection and a scheduled attempt.' That is an
+owned control state, not a wire-state proxy."* Tesla: *"Keep it a model of us."*
+
+**So the claim B earns is narrower than the one Maxwell made:** B removes the
+*ungovernable* form of the class — a handle we hold while recovery runs in a
+process we cannot pace — and leaves the rest to discipline.
+
+## The premise that was unmeasured, and now is not
+
+Tesla: *"`onDisconnected` with `autoReconnect = false` is still unmeasured — fact
+2 only probed the `true` path."* Correct, and it was the one thing Option B rests
+on that four rounds never checked.
+
+**Measured** (`spike/autoreconnect-off/probe_disconnect_signal.dart`, throwaway
+broker on 18831, the island untouched):
+
+```
+17:24:57.933  onConnected
+17:24:57.937  stopping the broker
+17:24:57.998  onDisconnected          <-- 65ms
+17:25:18.108  final state=disconnected
+onAutoReconnect fired: false
+```
+
+Both arms. The callback that is **dead** under `autoReconnect = true` is **alive**
+under false; the one that fires under true correctly stays silent under false;
+and the client stays down rather than resurrecting.
+
+## What B costs — the panel's list, which is longer than the brief's
+
+- **IDLE LIVENESS, and it is the big one (Tesla).** paho's background thread
+  restores reachability with **no application poll**. "Caller-driven `connect()`
+  / `setWill()`" is not that: broker dies while the actor is quiet and Python
+  returns while Dart stays down until the next API call. **§5c's exit table is
+  wrong under B** — `Detached` cannot be caller-owned. B *requires* a
+  `loop_start` equivalent: a timer that runs regardless of callers, with an owner
+  for cancelling it on `Retired`.
+- **Political time (Tesla).** Our backoff *lengthens* the disconnect the will
+  needs and *widens* the election window the boot-topic re-read must close.
+  *"A may fail to fire a will because it reconnects too fast; B may fire wills
+  and split leadership on a clock Python does not keep."*
+- **Cancellation and generation discipline (Carnot).** A stale retry must not
+  resurrect a retired client or overwrite a newer will/subscription snapshot —
+  §0's epoch generalises to the supervisor.
+- **Flapping is no longer shielded (Carnot).** Layers that rode through package
+  reconnects now see explicit disconnected intervals.
+- **Session semantics (Tesla).** Null-and-recreate may be a new MQTT session
+  where package auto-reconnect was a resume.
+- **Subscription storms at scale (Kelvin).** Every reconnect replays every topic.
+- **Resurrection hazard (Tesla).** Hardened `Dipped` tests become a licence for
+  the state to come back *"the first time someone constructs it for coverage."*
+  Delete them with the state.
+
+## Disposition
+
+**The design needs a revision 4 against Option B.** Four reaches, not five;
+`_willOnWire` becomes unnecessary; §3b's two-list reconcile deletes; §5a's
+disjointness becomes trivial; §5c gains a supervisor and loses its
+caller-owned-`Detached` row. The frame, the payload-free `Reach`, `_retire`,
+install-last, the disconnect bypass and the `(path, timeStarted)` residue filter
+all survive unchanged.
+
+**Nothing has been implemented.** That is the fact that makes this the cheapest
+moment this decision will ever have — and it was missing from the brief, which is
+the same priority inversion this session has committed repeatedly: instrument the
+dependency, under-describe the state of your own work.
