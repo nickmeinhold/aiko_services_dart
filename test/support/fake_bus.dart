@@ -173,6 +173,11 @@ class FakeBus implements MessageBus {
   /// the fake is to produce states a live island will not give on demand.
   @override
   Future<void> setWill(LastWill? next) async {
+    // The DELAY applies to a failing change too: a real reopen takes time and
+    // THEN fails, and throwing instantly makes the mid-promotion window
+    // unreachable — which is why a test written against the old fake could not
+    // construct the state it claimed to cover.
+    if (setWillDelay > Duration.zero) await Future<void>.delayed(setWillDelay);
     final failure = failSetWillWith;
     if (failure != null) {
       failSetWillWith = null;
@@ -188,7 +193,6 @@ class FakeBus implements MessageBus {
       connected = false;
       throw failure;
     }
-    if (setWillDelay > Duration.zero) await Future<void>.delayed(setWillDelay);
     // Mirrors AikoClient exactly: the short-circuit is about not paying a
     // reconnect for an ALREADY-ARMED will, so it may only fire when something is
     // armed. Keeping the fake's rule looser than the real one is how the driver

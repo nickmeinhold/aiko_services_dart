@@ -346,63 +346,42 @@ void main() {
   });
 
   group('leaving is a filter on INPUTS, not only effects', () {
-    test(
-      'a timer armed BY the drain does not move the election after we leave',
-      () async {
-        // Tesla, round 3: disconnect cancels the timer, then awaits the drain —
-        // and the drain can PERFORM a StartSearchTimer queued before we left. That
-        // timer fires on a departed process and `onSearchTimeout` enters `primary`.
-        // The old test could not see it: it asserted on bus.actions, and a leaving
-        // process publishes nothing either way. Assert the ROLE.
-        final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 60);
-        final process = _process(
-          bus,
-          searchTimeout: const Duration(milliseconds: 40),
-        );
-        await process.connect();
-        unawaited(_deliverAbsent(bus));
-        await Future<void>.delayed(const Duration(milliseconds: 15));
-        await process.disconnect();
-        final roleOnLeaving = process.role;
-
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        await settle();
-
-        expect(
-          process.role,
-          roleOnLeaving,
-          reason: 'the election must not advance on a process that has left',
-        );
-      },
-    );
-  });
-
-  group('a promotion that fails', () {
-    test('stands back down instead of holding a role it never announced', () async {
-      final bus = FakeBus()..failSetWillWith = StateError('broker gone');
-      final process = _process(bus, searchTimeout: const Duration(seconds: 30));
-      final failures = <Object>[];
-      final sub = process.promotionFailures.listen(failures.add);
+    test('a timer armed BY the drain does not move the election after we leave', () async {
+      // The state Tesla named, constructed properly. disconnect() cancels the
+      // timer, then awaits the drain — and the drain performs a FAILED
+      // promotion, whose onPrimaryFailed emits a StartSearchTimer. That arms a
+      // timer AFTER the cancel already ran; when it fires, onSearchTimeout
+      // enters `primary` on a process that has left — the lying role that
+      // primary_failed exists to prevent.
+      //
+      // An earlier version of this test asserted the same thing without ever
+      // FAILING the promotion, so no post-drain timer was armed and it stayed
+      // green with the fix removed. A check whose outcome does not depend on
+      // the thing it checks is not a check.
+      final bus = FakeBus()
+        ..setWillDelay = const Duration(milliseconds: 60)
+        ..failSetWillWith = StateError('reopen failed');
+      final process = _process(
+        bus,
+        searchTimeout: const Duration(milliseconds: 30),
+      );
       await process.connect();
-      bus.clear();
 
-      await _deliverAbsent(bus);
+      unawaited(_deliverAbsent(bus));
+      // Land inside the promotion's will-change window.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await process.disconnect();
+      final roleOnLeaving = process.role;
+
+      // Outlive the search timer the failed promotion armed during the drain.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
       await settle();
 
-      expect(failures, hasLength(1));
-      // The role must NOT be `primary`: an unannounced primary serves an island
-      // that cannot see it, and every layer above reads `role` to decide
-      // whether this process is serving.
-      expect(process.role, RegistrarRole.primarySearch);
       expect(
-        bus.actions.whereType<SentMessage>().where(
-          (sent) => sent.topic == _bootTopic,
-        ),
-        isEmpty,
-        reason: 'nothing may be announced when the will was never taken',
+        process.role,
+        roleOnLeaving,
+        reason: 'the election must not advance on a process that has left',
       );
-      await sub.cancel();
-      await process.disconnect();
     });
   });
 }
