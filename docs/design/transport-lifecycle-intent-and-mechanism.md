@@ -1,318 +1,210 @@
 # The socket is a handle; the intent is the state
 
-> ## ⚠️ SUPERSEDED IN PREMISE — read this first
+> **Status: REVISION 4, written against Option B. Untempered at this revision.**
 >
-> A round-5 strike (2026-09-11) put the premise every prior round was handed —
-> **`autoReconnect = true`, so the package owns socket recovery** — up for
-> demolition, and **all four families chose to remove it**
-> (`TEMPER-intent-and-mechanism.md`, round 5). This document is written against
-> the premise that lost.
+> Rounds 1–4 hardened a five-state model on a premise nobody had chosen:
+> `autoReconnect = true`, so the MQTT package owns socket recovery. Round 5 put
+> that premise up for demolition and **all four families voted to remove it**
+> (`TEMPER-intent-and-mechanism.md`, round 5). This revision is the result.
 >
-> It is kept rather than rewritten-in-place because **most of it survives**: the
-> INTENT / MECHANISM / OBSERVATION / AUTHORITY frame, the payload-free sealed
-> `Reach`, `_retire`, install-last, the `disconnect` gate bypass, and §6's
-> `(path, timeStarted)` residue filter are all independent of the choice. What a
-> revision 4 must change: **`Dipped` deletes** (four reaches, not five),
-> **`_willOnWire` becomes unnecessary** (no auto-reconnect can replay a stale
-> CONNECT), **§3b's two-list reconcile deletes** (`_open()` is the only install
-> site again — which is also the Python reference's shape), **§5a's disjointness
-> becomes trivial** (one policy, ours), and **§5c gains a supervisor and loses
-> its caller-owned `Detached` row**, because caller-driven recovery is not idle
-> liveness.
->
-> Do not build from this document without reading round 5.
->
-> **Status: RECAST round 3, untempered at this revision.** Round 1: 0 DISSOLVE / 4
-> RECAST. Round 2: 0 DISSOLVE / 4 RECAST, with six of eight round-1 folds audited
-> REAL by the adversaries. All sixteen findings are folded here.
-> Record: `TEMPER-intent-and-mechanism.md`.
->
-> Replaces `transport-connection-lifecycle.md`, DISSOLVED 2026-09-11 at two
-> families. That document may not be re-cast.
+> **It is SHORTER than revision 3, and that is the point.** Four reaches instead
+> of five; `_willOnWire` gone; §3b's two-list reconcile gone; §5's disjointness
+> argument gone; two competing retry loops collapsed into one. Nothing was added
+> to get here except a supervisor the design already owed.
 >
 > **Scope of the claim.** This closes the four transport defects PR #24's
-> cage-match found and removes the self-demotion oscillator that made the
-> transport fix unshippable alone. It does **not** give the boot topic an owner:
-> faces 1 and 2 of `notes/boot-topic-lifecycle.md` survive untouched and remain
-> Andy's. It does **not** bound the island's promotion-retry cadence (§5b).
+> cage-match found and removes the self-demotion oscillator. It does **not** give
+> the boot topic an owner — faces 1 and 2 of `notes/boot-topic-lifecycle.md`
+> remain Andy's. It does **not** close the same-`timeStarted` residual (§6).
 
-## The defect — and the reason it took three rounds
+## What changed, and why the change deletes rather than adds
 
-`AikoClient` encodes its connection lifecycle as `_client == null`, and at least
-five distinct situations share that encoding. Every family accepted that
-diagnosis under every verdict.
+The port kept `autoReconnect = true` because it is the `mqtt_client` default and
+because the reference uses paho's `loop_start()`, which reconnects. That looked
+like parity. **It was the opposite**, and the fact that settles it was measured
+rather than argued:
 
-What took three rounds is that **each fix committed the same error one level in**:
+> **paho backs off. `mqtt_client` does not.** `_reconnect_wait` doubles from
+> `_reconnect_min_delay = 1` to `_reconnect_max_delay = 120` seconds, by default
+> (`paho/mqtt/client.py:3593-3605`, `:576-577`). The Dart package's
+> `autoReconnect` re-fires `AutoReconnect()` with no wait at all
+> (`mqtt_connection_handler_base.dart:172-174`).
 
-| round | what was compared | what it was standing in for | found by |
-|---|---|---|---|
-| cage-match r3 | `_client == null` | is this bus reachable | Tesla |
-| temper r1 | `_client != null` | is the socket *connected* | Tesla |
-| temper r2 | `_will == next` | does the socket *carry* this will | Tesla + Carnot |
+So the status quo diverged from the reference on the one axis where the reference
+has a considered answer and the package offers no knob. And the **parity licence
+is the reference's INVARIANT, not its mechanism** — `_on_connect` fires on every
+paho connect including reconnects and calls
+`_subscribe_if_connected(self.topics_subscribe)` (`mqtt.py:160`), replaying the
+**application's** list. One install site, the app's memory, every connect. Dart's
+`autoReconnect` cannot carry that invariant, because it replays the *package's*
+maps. Matching a mechanism that is not paho's, while breaking the invariant that
+is, is costume.
 
-Every one is **a locally-held value used as a proxy for a state of the wire** —
-and the third was committed inside the design written to cure the first two, with
-a comment beside it stating the correct rule in prose.
-
-So this revision is governed by a rule rather than a patch:
-
-> **A MECHANISM fact is recorded by the MECHANISM, at the moment it becomes
-> true. It is never inferred from INTENT.**
-
-`Dipped` (§1) obeys it by reading `connectionStatus` instead of inferring from
-`_client`. `_willOnWire` (§1) obeys it by recording, inside `_open()`, which will
-the CONNECT packet actually carried. Both are the same move, and between them
-they close the class rather than its third instance.
+**A note on what does NOT license this.** The reference's own TODO at `mqtt.py:37`
+says reconnection is unfinished. That is **not** grounds for us to finish it. A
+port that unilaterally completes an upstream TODO turns a difference into a fix
+we invented rather than a finding we can report. The licence is fact 7, not the
+TODO.
 
 ## The frame
 
-Carnot's crux, which is the same sentence at two scales:
-
-> *"Until we distinguish INTENT, MECHANISM, OBSERVATION and AUTHORITY, every
-> local success is at risk of being a polished measurement of the wrong thing."*
+Carnot's crux, unchanged and now applied with one fewer moving part:
 
 | | lives as | who writes it |
 |---|---|---|
-| **INTENT** | `_will`, `_started`, `_closed` | the lifecycle methods, nobody else |
-| **MECHANISM** | `_client`, `_willOnWire`, `connectionStatus` | `_open` and the teardowns, at the moment each becomes true |
-| **OBSERVATION** | a sealed `Reach`, one getter, no payload | every caller, exhaustively |
+| **INTENT** | `_will`, `_started`, `_closed` | the lifecycle methods |
+| **MECHANISM** | `_client`, `connectionStatus` | `_open` and the teardowns |
+| **OBSERVATION** | a sealed, payload-free `Reach` | every caller, exhaustively |
 | **AUTHORITY** | "is this announcement ours?" | the election (§6) |
+| **POLICY** | `_retry`, `_backoff` | the supervisor (§5) — **and it models US, not the wire** |
 
-Round 2 put will-on-wire on the INTENT side. That single misfiling is the whole
-of finding 3 — which is the frame catching its own violation, and the reason to
-keep it.
+The fifth row is new and it carries round 5's sharpest warning. Tesla and Carnot
+both refused the claim that Option B *deletes* the defect class:
 
-## 0. Lifecycle ordering — and why `disconnect` deliberately escapes the gate
+> *"Reconnecting must not mean 'we have a socket that might secretly become
+> valid.' It should mean 'we have no client handle; we have a desired connection
+> and a scheduled attempt.' That is an owned control state, not a wire-state
+> proxy."* — Carnot
+>
+> *"Keep it a model of us."* — Tesla
 
-Round 2 proposed a single-entrant gate **plus** an epoch and asserted both were
-needed without naming what bypassed the gate. Maxwell and Carnot both struck the
-circularity; Maxwell added that the gate turned a race into a **hang** (a
-`disconnect()` during `_reopen` waits out up to 3 connect attempts on a dead
-broker) and, worse, made §10's own must-fail arm **unreachable** — the
-interleaving it tests cannot be constructed under a total gate.
+What Option B removes is the **ungovernable** form of the class: a handle held
+while recovery runs in a process we cannot pace, cancel, or observe. Supervisor
+state is still local state — it is safe only because it describes our own policy,
+which cannot diverge from itself.
 
-One decision resolves all three:
-
-1. **`connect()` and `setWill()` are serialised** by one `Future` chain. They are
-   the two methods that may *mint* a socket, and two mints on one client id is
-   §7's flap.
-2. **`disconnect()` does NOT queue.** It sets `_closed = true` and increments
-   `_epoch` **synchronously, before any await**, then tears down. A teardown
-   whose whole purpose is promptness must never wait on a connect to a broker
-   that is not answering.
-3. **The epoch is therefore load-bearing, not a charm.** `_open()` captures
-   `_epoch` before its first await and may install its candidate only if the
-   epoch is unchanged and `_closed` is still false. `disconnect` is *exactly* the
-   bypass Carnot asked us to name, and it is a bypass on purpose.
-
-**The boundary is about WRITERS of `_client`, not readers of it** — round 3's
-first draft said *"nothing else reaches `_client`"*, which Carnot and Maxwell both
-falsified from code in the same bundle. Stated correctly:
-
-- **Only** gated `connect`/`setWill` and bypassing `disconnect` may CHANGE
-  `_client`, `_willOnWire` or `_closed`. That list is exhaustive.
-- Everyone else — `send`, `clearRetained`, `subscribe`, `unsubscribe`, `_onData`
-  — may only OBSERVE, through `reach`, and use the handle through `_live` inside
-  an arm `reach` has already proved.
-- `_reportTransport` publishes to a broadcast controller, which delivers
-  asynchronously, so a listener that calls `setWill` *queues* on the gate rather
-  than re-entering it. Its downstream is election work, which is exactly why that
-  asynchrony is load-bearing rather than incidental (Tesla flagged the stack:
-  `unawaited(_apply(...))` can reach `await setWill` on the same trace).
-
-## 1. The state
+## 1. The state — four reaches
 
 ```dart
 // INTENT
-LastWill? _will;             // durable; the ONE home for what we WANT announced
-bool _started = false;       // a caller asked for a connection and has not retired the bus
-bool _closed  = false;       // disconnect() has run; retired, permanently
+LastWill? _will;
+bool _started = false;
+bool _closed  = false;
 
 // MECHANISM
-MqttServerClient? _client;   // the CURRENT socket handle, or none
-LastWill? _willOnWire;       // the will the CURRENT socket's CONNECT actually carried
-int _epoch = 0;              // fences an _open() whose await outlived its world
+MqttServerClient? _client;
+int _epoch = 0;
+
+// POLICY (§5)
+Timer? _retry;
+Duration _backoff = _backoffMin;
 ```
 
-`_willOnWire` is written **only** inside `_open()`, immediately after a
-successful `connect()`, from the value that was put in the CONNECT packet. It is
-cleared wherever `_client` is cleared. It is never written by `setWill`.
+| `_closed` | `_started` | usable socket? | reach | what a caller should do |
+|---|---|---|---|---|
+| F | F | — | `NotStarted` | call `connect()` |
+| F | T | yes | `Attached` | publish |
+| F | T | no | `Detached` | **nothing — the supervisor owns recovery** |
+| T | — | — | `Retired` | nothing, ever |
 
-Five reachable situations:
+**`Dipped` is gone.** It existed to name a live handle whose wire was down while
+the package repaired it behind us. With no package recovery, a non-connected
+handle is not a state — it is a corpse we have not swept yet, and the sweep is a
+cleanup detail, not something callers must model.
 
-| `_closed` | `_started` | `_client` | `state` | reach | what a caller should do |
-|---|---|---|---|---|---|
-| F | F | null | — | `NotStarted` | call `connect()` |
-| F | T | non-null | `connected` | `Attached` | publish |
-| F | T | non-null | ≠ `connected` | `Dipped` | wait — `autoReconnect` owns this |
-| F | T | null | — | `Detached` | retry — you own this |
-| T | — | null | — | `Retired` | nothing, ever |
+**`_willOnWire` is gone too**, and this is the satisfying part: it existed only
+because auto-reconnect could replay a stale stored CONNECT and put a will on the
+wire we did not choose. Under Option B **`_open()` is the only thing that ever
+connects**, and it always builds its CONNECT from `_will`. So on `Attached` the
+socket necessarily carries `_will`, and `next == _will` is sound again. *The fix
+for defect instance 3 is unnecessary once its cause is removed.*
 
-**Who takes `Dipped` to `Detached`: nobody, and that is a property with
-evidence, not an oversight** (Tesla asked; §5b establishes it).
-`MqttClient.internalDisconnect` fires an auto-reconnect whenever
-`autoReconnect && initialConnectionComplete`, and `autoReconnect()` re-arms
-itself on failure forever (`mqtt_connection_handler_base.dart:172-174`). Both
-conditions hold for any client that ever connected. So a `Dipped` bus stays
-`Dipped` until the broker returns — which is the **wanted** behaviour for an
-island process, and is why §5b argues against Kelvin's ceiling. The cost is that
-`Dipped` has exactly one door, and it is the broker's.
-
-## 2. The observation — and why it carries nothing
+## 2. The observation
 
 ```dart
 sealed class Reach {
-  // A const super: without it the const leaves below all fail
-  // `const_constructor_with_non_const_super`. Found by compiling, not reading.
-  const Reach();
+  const Reach();     // a const super, or the const leaves below fail to compile
 }
-
 final class Attached   extends Reach { const Attached(); }
-final class Dipped     extends Reach { const Dipped(); }
 final class Detached   extends Reach { const Detached(); }
 final class NotStarted extends Reach { const NotStarted(); }
 final class Retired    extends Reach { const Retired(); }
-```
 
-Round 2 made `Reach` public so the compiler could hold `FakeBus` to the same
-contract, and then gave `Attached` an `MqttServerClient` field — **a type the
-fake cannot construct.** Round 1's §9 promised parity the fake did not have;
-round 2 promised parity the type system forbade. Three families struck it.
-
-So the observation carries **no payload**. The exhaustiveness force is in the
-arms, not the cargo, and `AikoClient` fetches its handle separately:
-
-```dart
 Reach get reach {
   if (_closed) return const Retired();
   final client = _client;
-  if (client == null) return _started ? const Detached() : const NotStarted();
-  return client.connectionStatus?.state == MqttConnectionState.connected
-      ? const Attached()
-      : const Dipped();
+  // BOTH conditions. `_client != null` alone is defect instance 2 — a handle
+  // standing in for a wire. The status is the mechanism's own report.
+  if (client != null &&
+      client.connectionStatus?.state == MqttConnectionState.connected) {
+    return const Attached();
+  }
+  return _started ? const Detached() : const NotStarted();
 }
 
-/// Only legal in an `Attached` arm; `reach` is what proves that.
+/// Only legal inside an `Attached` arm; `reach` is what proves that. The one
+/// `!` in this class.
 MqttServerClient get _live => _client!;
 ```
 
-The `!` is confined to one line whose precondition the sealed switch has already
-established — and it is the *only* one in the class, which is checkable.
+Payload-free, so `FakeBus` can inhabit every arm including `Attached` — round 2
+gave `Attached` an `MqttServerClient` field and made parity a type error.
 
-## 3. Publish legality, and who catches what
+**The window Tesla named remains, and it is named rather than modelled.** Between
+a socket dying and the mechanism noticing, `reach` reports `Attached` and a
+publish fails at the broker. `connectionStatus` narrows it — it flips before our
+callback runs — but cannot close it, and no client can: detection is bounded by
+`keepAlivePeriod` (60s, so 90s worst case for a half-open TCP). **This is a
+property of MQTT, not of either option**, and a `send` that fails there is
+wrapped as transient like any other (§3).
+
+## 3. Publish legality
 
 ```dart
-void send(...) {
+void send(String topic, String command, Object? params, {bool retain = false}) {
   switch (reach) {
-    case Attached():   _live.publishMessage(...);
-    case Dipped():     throw TransportUnavailable('send to $topic');
-    case Detached():   throw TransportUnavailable('send to $topic');
+    case Attached():   _live.publishMessage(/* … */);
+    case Detached():   throw TransportUnavailable('send to $topic');   // TRANSIENT
     case NotStarted(): throw StateError('cannot send: connect() has not run');
     case Retired():    throw StateError('cannot send: this bus is retired');
   }
 }
 ```
 
-`Dipped` and `Detached` agree here and diverge in §4 — which is the test for
-whether a state is a state or merely a row.
-
-**Every mechanism-open failure is wrapped** (Tesla, Carnot: §3's election arm was
-dead in front of `on Object`). `_open`, `_reopen`, `connect` and `setWill` wrap
-raw connect failures, stale-epoch disposals and post-connect setup failures in
-`TransportUnavailable`. A caller-error stays a `StateError`. There is no third
-shape.
-
-**Call-site disposition:**
+Every **mechanism-open** failure is wrapped in `TransportUnavailable` — raw
+connect failures, stale-epoch disposals, post-connect setup failures. A caller
+error stays a `StateError`. There is no third shape, so the election can tell a
+bug from weather.
 
 | call site | after | why |
 |---|---|---|
-| `registrar_process` `AnnouncePrimary` (`:350-370`) | `on TransportUnavailable` arm **before** `on Object` | this is the election instrument §3 claims to be |
-| `registrar_process` `ClearBootTopic` (`:347`) | uncaught, documented | outside the try; a transient here fails the promotion at the next step regardless |
-| `services_cache`, `ec_consumer`, `bus_process` | uncaught, type changed only | both crashed before; the new type is better news in the stack trace |
+| `registrar_process` `AnnouncePrimary` (`:350-370`) | `on TransportUnavailable` **before** `on Object` | the election instrument this type exists for |
+| `registrar_process` `ClearBootTopic` (`:347`) | uncaught, documented | outside the try; a transient fails the promotion one step later anyway |
+| `services_cache`, `ec_consumer`, `bus_process` | uncaught, type changed only | all crashed before; the new type reads better in a stack trace |
 
-## 3b. `subscribe` / `unsubscribe` — two lists, and the site that reconciles them
+## 3b. `subscribe` / `unsubscribe` — one list again
 
-Round 3 found these were still `_client?.subscribe(topic, …)` — the
-null-guard-whose-subject-is-never-nulled that was round 1 of the original
-cage-match, untouched while five other members got specified across five reaches.
+Revision 3 discovered these were still `_client?.subscribe(…)`; its fix then
+became defect instance 5, because `resubscribeOnAutoReconnect` replays the
+**package's** maps and not ours — two lists, and a topic recorded while the link
+was down reached neither.
 
-**Round 3's fix was itself the fifth instance of the class** (Maxwell and Tesla,
-independently, both from the package source). It said: *"On `Dipped` the record
-alone is correct: `resubscribeOnAutoReconnect` carries it when the link returns."*
-**That is false. There are two lists.**
-
-- `_subscriptions` is ours. `_open()` walks it.
-- `SubscriptionsManager.subscriptions` / `.pendingSubscriptions` are the
-  package's. `_resubscribe` walks **those**
-  (`mqtt_client_subscriptions_manager.dart:465-485`).
-
-Auto-reconnect does not call `_open()` — it keeps the same handle. So a topic
-recorded while `Dipped` and deliberately withheld from the client is in *neither*
-package map, and nothing ever carries it. **The process goes silently deaf on
-that topic.** Tesla: *"§3b withholds the package write on `Dipped` and then
-asserts the package feature will carry `_subscriptions` when the link returns.
-Those are two lists."*
-
-And the inverse pole, which Maxwell missed and Tesla named: **`unsubscribe` while
-`Dipped` forgets an interest the returning socket still holds** — the package
-replays a subscription we have already dropped, and messages arrive for a topic
-nothing wants.
-
-**Correcting the record of what was replaced.** Round 3's strike said
-`_client?.subscribe` on `Dipped` *"returns normally"*. It does not:
-`MqttClient.subscribe` throws `ConnectionException` when
-`connectionStatus.state != connected` (`mqtt_client.dart:448-452`). So the
-original crashes **loudly**, and round 3's fix converted that into a **silent
-loss** — the wrong direction, in a repo whose own doctrine is that silence reads
-as success.
-
-### The fix: name both install sites, and reconcile at each
+**Option B deletes the second list.** `_open()` is the only thing that ever
+connects, so it is the only subscription install site, and it walks
+`_subscriptions`. That is the reference's invariant exactly (`mqtt.py:160`).
 
 ```dart
 void subscribe(String topic) {
-  if (reach case Retired()) {
-    throw StateError('cannot subscribe: this bus is retired');
-  }
-  _subscriptions.add(topic);          // INTENT — an interest, not an act
+  if (reach case Retired()) throw StateError('cannot subscribe: bus is retired');
+  _subscriptions.add(topic);                                    // INTENT
   if (reach case Attached()) _live.subscribe(topic, MqttQos.atMostOnce);
-}
-
-/// The TWO sites where a live client is made to match our interests.
-/// `_open` is one. This is the other, and round 3 had only the first.
-void _reconcileSubscriptions(MqttServerClient client) {
-  for (final topic in _subscriptions) {
-    client.subscribe(topic, MqttQos.atMostOnce);       // add what it lacks
-  }
-  for (final topic in _packageHeld(client).difference(_subscriptions)) {
-    client.unsubscribe(topic);                          // drop what we retired
-  }
 }
 ```
 
-`onAutoReconnected` calls `_reconcileSubscriptions` **before**
-`_reportTransport(up: true)`, because a bus that announces itself up while deaf
-on a topic is the lying rung one layer in. That is the MECHANISM writer the
-record was missing: the moment the mechanism becomes *able* to make the intent
-true is the moment it must.
+On `Detached` or `NotStarted` the record alone is correct **and this time that
+sentence is true**, because the supervisor's next `_open()` walks the set. No
+reconcile, no second install site, no `_packageHeld`.
 
-`_packageHeld` is implementable rather than wished for — checked before the
-sketch was written. `MqttClient.subscriptionsManager` is public
-(`mqtt_client.dart:169`), `SubscriptionsManager.subscriptions` is a public map
-(`:22`) in a `part` of the exported library, and the package's own `resubscribe`
-reads `subscription.topic.rawTopic` off it (`:299`), which is the same access
-this needs.
+`resubscribeOnAutoReconnect` is set **`false`** explicitly. With `autoReconnect`
+off nothing fires `Resubscribe` today, so it is already moot — stated anyway,
+because a default nobody chose is exactly what this revision exists to correct.
 
-**Why a reconcile and not a replay.** Replay closes the `subscribe` pole and
-leaves the `unsubscribe` pole open. The two lists can differ in both directions,
-so the operation that makes them agree is set reconciliation, once, at both
-install sites — not two patches aimed at two symptoms.
+`subscribe` on a down link must not call the client at all: `MqttClient.subscribe`
+throws `ConnectionException` when not connected (`mqtt_client.dart:448-452`).
+Recording without calling is the reason the guard is on `Attached` and not on
+`_client != null`.
 
-**And the must-fail arm must run on `AikoClient`, not only the fake** (Tesla):
-*"a one-list `FakeBus` cannot go red for a two-list bug — the kinder-API prophet,
-wearing a must-fail."* `FakeBus.setTransport(up: true)` performs the same
-reconcile, or it hides exactly this.
-
-## 4. `setWill` — the short-circuit tests the wire, not the wish
+## 4. `setWill`
 
 ```dart
 Future<void> setWill(LastWill? next) => _gate(() async {
@@ -320,155 +212,140 @@ Future<void> setWill(LastWill? next) => _gate(() async {
     case Retired():
       throw StateError('cannot set a will: this bus is retired');
     case NotStarted():
-      _will = next;                       // connect() will carry it
+      _will = next;                      // connect() will carry it
     case Detached():
-      _will = next;                       // intent survives failed mechanism
-      await _open();                      // ONE attempt; wraps and throws
-    case Dipped():
-      _will = next;                       // recorded; _willOnWire stays A, truthfully
+      _will = next;                      // the supervisor's next _open carries it
       throw TransportUnavailable('set a will while the link is down');
     case Attached():
-      _will = next;                       // intent lands FIRST, even when the
-                                          // socket already carries it (Tesla, r3)
-      if (next == _willOnWire) return;    // the SOCKET carries it — the real conjunct
+      if (next == _will) return;         // the socket was built from _will (§1)
+      _will = next;
       await _reopen(_live);
   }
 });
 ```
 
-**The one-token change that closes the class.** Round 2 tested `next == _will`
-and its own comment said *"already armed AND the socket carries it"*. Those are
-different propositions, and the package makes them diverge:
-`MqttConnectionHandlerBase.autoReconnect` calls
-`connect(server!, port!, connectionMessage)` with the **stored** CONNECT message
-(saved at `:104`, *"Save the parameters for auto reconnect"*). So after
-dip → `setWill(B)` → auto-reconnect, the socket carries **A** while `_will` is
-**B**, and `next == _will` short-circuits a promotion that must reopen. The
-registrar then believes it holds a retained `(primary absent)` while the broker
-holds the per-process `(absent)` — and on an unclean death the island is never
-told its primary is gone.
+The `Detached` arm **records and refuses; it does not open.** That is §5's single
+rule and the reason two retry loops became one.
 
-Testing `_willOnWire` cannot diverge, because only `_open()` writes it and only
-from what it actually put in the packet. **Tesla's sequel is now a must-fail arm**
-(§10): dip → `setWill(B)` refuses → auto-reconnect → `setWill(B)` must *reopen*,
-not return.
-
-`_will` is written before the socket work and never rolled back. Intent does not
+`_will` is written before any socket work and never rolled back: intent does not
 become false because a socket failed to carry it.
 
-## 4b. `connect()` and `_reopen()` — every writer of `_client`
+## 4b. `connect()` and `_reopen()`
 
 ```dart
 Future<void> connect() => _gate(() async {
   switch (reach) {
     case Retired():
-      throw StateError('cannot connect: this bus is retired — construct a new one');
+      throw StateError('cannot connect: retired — construct a new AikoClient');
     case Attached():
-      return;                             // you already have what you asked for
-    case Dipped():
-      throw TransportUnavailable('connect');   // the wire is DOWN; saying otherwise
-                                               // is the lying rung
-    case NotStarted():
+      return;                            // you already have what you asked for
     case Detached():
-      _started = true;                    // BEFORE _open: a failed first connect
-      await _open();                      // is Detached, not NotStarted (§8)
+      throw TransportUnavailable('connect');   // the supervisor owns this
+    case NotStarted():
+      _started = true;                   // BEFORE _open: a failed first connect
+      await _open();                     // is Detached, not NotStarted (§8)
   }
 });
 
 Future<void> _reopen(MqttServerClient live) async {
-  _retire(live);                          // disarm, disconnect, clear mechanism
-  await _open();                          // ONE attempt; wraps and throws
+  _retire(live);
+  await _open();                         // ONE attempt; on failure the supervisor takes over
 }
 
 void _retire(MqttServerClient live) {
-  live.autoReconnect = false;             // disarm BEFORE disconnect, or the package
-  live.onDisconnected = null;             // may already have queued reconnect work
-  live.onAutoReconnect = null;
-  live.onAutoReconnected = null;
+  live.onDisconnected = null;            // disarm before disconnect, or our own
+  live.onConnected = null;               // teardown reports as an island event
   live.disconnect();
   _client = null;
-  _willOnWire = null;                     // cleared WITH the socket it describes
 }
 ```
 
-Round 2 had `connect()` on `Dipped` return void over a down wire *and then call
-`_reportTransport(up: true)`*. Three families struck it; Carnot caught the second
-half. This repo already has a name for that — the lying rung, the failure
-`transportUp` exists to prevent. `send` was made honest about `Dipped` in the
-same revision that left `connect()` dishonest about it.
+`connect()` on `Detached` **throws** rather than opening. Revision 3 had it open,
+which under Option B would be a second opener racing the supervisor. It is the
+same rule as `setWill`: **callers state intent; the supervisor performs.**
 
-**`_reportTransport` is now callback-driven only.** No lifecycle method asserts
-`up: true`; the link's own `onConnected` / `onAutoReconnected` do. A caller's
-intent is not evidence about a wire (Carnot).
+## 5. The supervisor — one loop, and it is ours
 
-`_retire` is shared by `_reopen` and `disconnect`, which is what stops the two
-teardown paths drifting apart — the asymmetry between them was two of PR #24's
-four defects.
+> **THE SINGLE RULE: `_open()` is called from exactly two places — the first
+> `connect()`, and the supervisor. Nothing else ever opens a socket.**
 
-## 5. Retry
+Revision 3's §5a proved two reconnect policies were disjoint. That argument is
+deleted, not weakened: **there is one policy.**
 
-### 5a. What is provable
+```dart
+static const _backoffMin = Duration(seconds: 1);
+static const _backoffMax = Duration(seconds: 120);
 
-**`AikoClient` performs at most one `connect()` per caller call. It never loops,
-never schedules, never backs off.** Two reconnection policies exist and are
-disjoint *by construction*:
+void _onLinkLost() {                     // wired to onDisconnected
+  final live = _client;
+  if (live != null) _retire(live);
+  _scheduleReconnect();
+}
 
-- `autoReconnect`, inside a live client, owns `Dipped` — and only `Dipped`.
-- the caller owns `Detached` — and only `Detached`.
+void _scheduleReconnect() {
+  if (_closed || _retry != null) return;
+  _retry = Timer(_backoff, () async {
+    _retry = null;
+    if (_closed) return;
+    try {
+      await _gate(_open);
+      _backoff = _backoffMin;            // reset ONLY on success
+    } on Object {
+      _backoff = _backoff * 2 > _backoffMax ? _backoffMax : _backoff * 2;
+      _scheduleReconnect();
+    }
+  });
+}
+```
 
-`Attached` needs neither. The partition is a property of the sketch, because §4
-and §4b are now written for all five reaches: no caller-driven path mints a
-socket while `autoReconnect` holds one. Round 1 asserted this while `setWill` on
-a dipped client still reopened; round 2 wrote the `Dipped` arms that made it true.
+**1s doubling to 120s, because that is the number the reference already chose**
+(`paho/mqtt/client.py:576-577`). Not a number we invented.
 
-### 5b. What is open, with a named owner
+**No jitter, deliberately.** N registrars reconnecting in lockstep after a broker
+restart is a real thundering herd, and paho does not jitter either. Adding it
+would be a silent divergence on timing — so it is **filed as an upstream finding
+for Andy** rather than taken. That is the discipline this revision's own parity
+argument demands of it.
 
-**This design does not bound the island's promotion-retry cadence.** Traced
-against the real code: `AnnouncePrimary` (`registrar_process.dart:350`) calls
-`setWill`, catches, runs `onPrimaryFailed()` → at role `primary`,
-`_enterPrimarySearch()` → `_epoch++` and a fresh `StartSearchTimer` → fires →
-re-promotes → `setWill` again. Against a down broker: one `_open()` — up to 3
-CONNECTs — **every ~2 seconds, per registrar, indefinitely, no backoff.**
+**IDLE LIVENESS — the cost round 5 named and the brief missed.** Tesla: paho's
+background thread restores reachability *with no application poll*, and
+"caller-driven `connect()`/`setWill()`" is not that. A broker dying while the
+actor is quiet leaves Python recovering and Dart down until the next API call.
+**The timer above is the answer, and it is why it must be a timer rather than a
+retry-on-next-call.** Revision 3's §5c table said `Detached` was caller-owned.
+That row was wrong and is deleted.
 
-> **OWNER:** the election's `StartSearchTimer`, not the transport.
-> **COST:** ~0.5 CONNECT/s per registrar while a broker is down. Noise at island
-> scale; not noise at fleet scale, and not noise if a broker is *up and
-> rejecting* — which is what `feat/mtls-transport-spike` introduces.
-> **MITIGATION, not taken here:** backoff belongs on the election timer, where
-> the period is chosen. Changing it is an election-semantics decision wanting
-> Andy's parity view. Filed.
+### What one opener buys, beyond correctness
 
-**Where this disagrees with Kelvin, deliberately** — and he conceded it in round
-2 (*"my own proposal is refuted with a superior argument"*). Bounding
-`maxConnectionAttempts` conflates a **ceiling** with **backoff**. Unbounded
-reconnection is what we want: a broker restarting overnight must not need a
-human. A lower ceiling shortens each round and makes the storm *faster*.
-Disabling `autoReconnect` moves resubscription onto us, and
-`resubscribeOnAutoReconnect` is load-bearing for the election ladder. What
-Kelvin's finding correctly establishes is that naming is not containment — so the
-containment taken is narrow and real: `_retire` disarms `autoReconnect` on any
-client we abandon, before disconnecting it.
+Revision 3's §5b named an open storm: `AnnouncePrimary` fails → `onPrimaryFailed`
+→ `_enterPrimarySearch` → a fresh 2-second timer → re-promote → `setWill` →
+another `_open()`. Against a down broker that was **one `_open()` (up to 3
+CONNECTs) every ~2 seconds, per registrar, forever.**
 
-### 5c. Who leaves each state
+Under §5's rule, `setWill` on `Detached` **refuses without opening**. So the
+election's 2-second retry now produces a cheap local throw and **no CONNECT at
+all**; the only CONNECTs on the wire are the supervisor's, on a 1→120s backoff.
+**The storm is not mitigated, it is structurally absent** — and claude-tasks #6,
+which exists to decide whether the election timer needs backoff, is answered:
+it does not, because it no longer reaches the broker.
 
-| reach | exit | owner | covered? |
-|---|---|---|---|
-| `NotStarted` | `connect()` | caller | yes |
-| `Detached` | `connect()` or `setWill()` | caller | registrar yes; observer / `ECConsumer` / `ServicesCache` **NO** |
-| `Dipped` | the broker returning | `autoReconnect` | yes, unboundedly (§1) |
-| `Retired` | — | — | terminal by design (§8) |
+### Exit table
 
-The third row is the one round 2 omitted (Tesla). The second row's gap is real
-and named: an observer that lands in `Detached` on a first `connect()` against a
-down broker stays there. Kelvin's bounded-internal-retry is the candidate fix and
-is **not** adopted here, because it would be a second scheduler racing §5b's. It
-is priced and filed so the choice is made once, for both.
+| reach | exit | owner |
+|---|---|---|
+| `NotStarted` | `connect()` | caller |
+| `Attached` | link loss → `onDisconnected` | mechanism |
+| `Detached` | the supervisor's next successful `_open()` | **the supervisor, always** |
+| `Retired` | — | terminal (§8) |
 
-## 6. Reopen is an election input — and the residue filter needs two conjuncts
+Every row has an owner. Revision 3's uncovered-observer gap is closed: an
+observer that lands in `Detached` on a first failed `connect()` is recovered by
+the same timer as everything else, without knowing it exists.
 
-`setWill` on a detached bus reopens, a reopen re-subscribes, and the broker
-redelivers our own retained `(primary found <us>)` — face 3 of the boot-topic
-note. In `primary_search` that stands us down to `secondary`, deaf.
+## 6. Reopen is an election input
+
+Unchanged from revision 3 and independent of this fork. `registrar_process.dart`
+discards the announced path and timestamp at `:274`; both are published at `:360`:
 
 ```dart
 ['found', final String path, _, final String started] =>
@@ -477,103 +354,41 @@ note. In `primary_search` that stands us down to `secondary`, deaf.
         : RegistrarAnnouncement.found,
 ```
 
-**Round 3's first attempt was a fourth instance of the class, and all three
-adversaries said so.** It filtered on `path == ours && _hasAnnounced` — and
-`_hasAnnounced` is a **local boolean proxying a state of the wire**: it records
-that we called `send`, at QoS 0 with no ack, and is then read as though it meant
-*we are the author of the retained value*. Carnot's scenario, which does not drop
-the conjunct: B announces, stands down, keeps the flag; A — sharing B's path —
-announces; B reads A's `found` as its own residue and both promote. Kelvin's
-verdict was the same, and his prescription was the right instinct — *"the fix is
-not another layer of local state; it is a measurement of the wire itself."*
-
-**The measurement already exists.** `timeStarted` is parameter 3 of the
-announcement, published at `registrar_process.dart:360` and discarded on read at
-`:274`. It is microsecond-resolution (`:206`). So `(path, timeStarted)` is an
-**incarnation identity**, carried on the wire today, requiring no new message, no
-wire change, and no cooperation from anyone:
-
-- an announcement matching both fields was published **by this incarnation**, and
-  by nothing else — a colliding path with a different start time is a different
-  process, and a same-microsecond collision on the same path is not reachable;
-- a process that never announced has never published its pair, so nothing can
-  match it. **`_hasAnnounced` is therefore deleted, not fixed.** Subtract the
-  coupling rather than guard the window.
-
-| | today | round 3 first attempt (`_hasAnnounced`) | round 3 final (`timeStarted`) |
-|---|---|---|---|
-| the oscillator (our own residue after a demotion) | stands us down — **the bug** | closed | closed |
-| two registrars share a path, neither announced | one primary | one primary | one primary |
-| two registrars share a path, both announced | one primary | **both promote, silently** | one primary |
-
-### It is a DISCRIMINATOR, not AUTHORITY — and the resolution is per-target
-
-Carnot, round 4: *"`timeStarted` is a wall-clock-derived local value, not
-authority from the broker, not an ack, not a lease, and not a minted unguessable
-incarnation token. It proves only: this message contains the same path and
-timestamp I believe are mine. That is a discriminator, not ownership."*
-
-He is right, and the previous sentence here — *"RP-1 is no longer load-bearing
-for safety in any arm"* — was the **third time this design stated a platform
-property as a law** (pid uniqueness in round 2 was the first). So it is
-retracted, and replaced with a measurement.
-
-> **PROPERTY RI-1 (incarnation discrimination).** Own-residue detection is exact
-> whenever two registrars sharing a `topicPath` have distinct `timeStarted`. It
-> is a collision-resistant discriminator, **not** an authority token: nothing in
-> the broker, the session or a lease backs it.
+> **PROPERTY RI-1.** Own-residue detection is exact whenever two registrars
+> sharing a `topicPath` have distinct `timeStarted`. It is a **collision-resistant
+> discriminator, not an authority token** — nothing in the broker, the session or
+> a lease backs it (Carnot).
 >
-> **Resolution is PER TARGET, measured rather than assumed** — two consecutive
-> `DateTime.now().microsecondsSinceEpoch` calls:
+> **Resolution is per target, measured:** two consecutive
+> `DateTime.now().microsecondsSinceEpoch` give `…702114`/`…702143` on the Dart VM
+> and **`…496000`/`…496000` on dart2js** — millisecond-granular, ~1000× weaker.
+> claude-tasks **#3240** and **#3497** both put this code in a browser.
 >
-> | target | reading | reading | distinct? |
-> |---|---|---|---|
-> | Dart VM | `…702114` | `…702143` | **yes** — true microseconds |
-> | dart2js | `…496000` | `…496000` | **no** — millisecond-granular |
->
-> So on the **web target the guarantee is probabilistic and ~1000× weaker**, and
-> two same-path registrars starting in the same millisecond share an incarnation
-> identity. That matters here and not hypothetically: claude-tasks **#3240**
-> (web-compat transport split) and **#3497** (the SharedWorker route) are both
-> open and both about running this code in a browser. The web work inherits RI-1
-> rather than rediscovering it.
->
-> **Residual:** same path AND same `timeStarted` still gives a silent dual
-> primary. The real fix is a minted per-incarnation token in the `found` payload
-> — Carnot's fold-back, and candidate 2 of `notes/boot-topic-lifecycle.md`. That
-> changes the announcement's arity, so it is **Andy's**, and it is filed rather
-> than taken unilaterally.
+> **Residual:** same path AND same `timeStarted` is still a silent dual primary.
+> The real fix is a minted per-incarnation token in the `found` payload, which
+> changes the announcement's arity and is therefore **Andy's** (claude-tasks #7).
 
-What is now true in every arm is narrower and checkable: **RP-1 is no longer
-load-bearing where incarnations differ**, which is every arm the port can create
-on the VM and almost every arm on the web.
+`ownResidue` is its own case, not `null` beside malformed, so the filter's success
+is observable. Faces 1 and 2 of the boot-topic note are untouched.
 
-`ownResidue` is its own case rather than `null` beside malformed, so the filter's
-success is observable instead of silent.
+**This fork does interact with the election in one way worth naming (Tesla):
+political time.** A 120s backoff means an island can be without a primary for up
+to two minutes. That is not new — paho's backoff reaches 120s too — but it is now
+*ours*, and the will is not armed while `Detached`, because a will lives in a
+CONNECT packet and there is no connection. During a long backoff a registrar is
+indistinguishable from a dead one, which is honest and is what the island already
+assumes.
 
-**What this does not close, plainly.** `(primary absent)` is arity-1 and carries
-no path, so face 2 has nothing to compare. Face 1 is untouched. Both need a wire
-change — a session token, or a lease — and both remain Andy's. The claim is
-exactly: *the transport rule no longer creates an oscillator, and does not create
-a dual primary either.*
-
-## 7. `_open` owns its client, and installs it last
-
-Found by reading `mqtt_client` while checking the storm claim; both Carnot and
-Tesla accepted it as a real missing failure mode.
-
-A thrown `connect()` leaves an inert orphan: `initialConnectionComplete` is set at
-the very end of `internalConnect` and a thrown `NoConnectionException` never
-reaches it. But a **successful** `connect()` followed by any later throw drops a
-fully-live client — `autoReconnect` armed, holding our will and our client id —
-unreferenced. The next `_open()` connects with the same id, the broker evicts the
-orphan, and the orphan fights back: two objects flapping over one MQTT identity.
+## 7. `_open` owns its client, installs last, and is the only opener
 
 ```dart
 Future<void> _open() async {
-  final epoch = _epoch;                   // §0 rule 3: captured before any await
-  final will = _will;                     // the value that will go IN the packet
-  final client = _build(will);
+  final epoch = _epoch;                       // captured before any await
+  final will = _will;
+  final client = _build(will)                 // 3.1.1, startClean, keepAlive 60
+    ..autoReconnect = false                   // THE CHANGE
+    ..resubscribeOnAutoReconnect = false      // moot, stated anyway
+    ..onDisconnected = _onLinkLost;           // the live signal, measured
   try {
     await client.connect();
     if (epoch != _epoch || _closed) {
@@ -581,17 +396,13 @@ Future<void> _open() async {
     }
     final updates = client.updates?.listen(_onData);
     for (final topic in _subscriptions) {
-      client.subscribe(topic, MqttQos.atMostOnce);
+      client.subscribe(topic, MqttQos.atMostOnce);   // the ONE install site
     }
-    // INSTALLED LAST, once the candidate is fully armed. Carnot: assigning
-    // _client before the listener and the subscriptions are up leaves a window
-    // in which the bus reports Attached with nothing listening — and the gate
-    // serialises lifecycle callers, not arbitrary publishers.
     _updates = updates;
-    _client = client;
-    _willOnWire = will;                   // MECHANISM records what MECHANISM did
+    _client = client;                         // installed LAST, fully armed
+    _reportTransport(up: true);
   } on Object catch (error) {
-    _retire(client);                      // same teardown as everywhere else
+    _retire(client);
     throw error is TransportUnavailable
         ? error
         : TransportUnavailable('open: $error');
@@ -599,191 +410,121 @@ Future<void> _open() async {
 }
 ```
 
-`_willOnWire = will` sits on the line after `_client = client` and describes the
-same socket, so the two cannot disagree. `_retire` clears both.
+`_client` is installed after the listener and the subscriptions, so the bus is
+never externally `Attached` with nothing listening (Carnot, round 2).
+
+The orphan hazard revision 3 found stays closed: a thrown `connect()` leaves an
+inert client (`initialConnectionComplete` is never reached), and a post-connect
+throw goes through `_retire`. With `autoReconnect = false` an abandoned client
+cannot storm at all, which is strictly safer than the version that needed
+disarming.
 
 ## 8. Identity at close
 
-**A retired bus is never reopened.** `connect()` on `Retired` throws.
-`disconnect()` is idempotent, sets `_closed` and bumps `_epoch` synchronously
-before any await (§0 rule 2), then `_retire`s any client and closes the streams.
+`disconnect()` does **not** queue behind the gate. It sets `_closed`, increments
+`_epoch` and cancels `_retry` **synchronously before any await**, then retires any
+client and closes the streams. A teardown whose purpose is promptness must never
+wait on a connect to a broker that is not answering; the epoch is what fences an
+`_open()` whose await outlives that decision.
 
-The client id is the island's notion of *who we are* — what the broker fences
-sessions on and what our will is attached to. Silently re-minting an identity
-inside a method called `connect()` would make a process's wire identity depend on
-which method a caller reached for. A caller wanting a connection again constructs
-a new `AikoClient`. If reuse is ever wanted it gets a named constructor and a
-written reason.
+The escape-route boundary is about **writers**: only gated `connect`/`setWill`,
+the supervisor, and bypassing `disconnect` may change `_client`, `_closed` or
+`_epoch`. Everyone else observes through `reach` and uses `_live` inside an arm
+`reach` has proved.
 
-A failed *first* `connect()` lands in `Detached`, not `NotStarted`: a failed first
-connect and a failed reopen have the same truth and the same recovery. So `send`
-after a failed `connect()` reports transient rather than caller error — honest,
-since the caller did ask.
+**A retired bus is never reopened.** `connect()` on `Retired` throws; a caller
+wanting a connection again constructs a new `AikoClient`, minting a new client id.
+The client id is the island's notion of who we are and what our will is attached
+to; re-minting it inside a method called `connect()` would make wire identity
+depend on which method a caller reached for.
 
-## 9. `FakeBus` — the sketch, because two rounds of prose failed
+A failed *first* `connect()` lands in `Detached` and starts the supervisor, so
+`send` reports transient rather than caller error — honest, since the caller did
+ask, and now something is actually working on it.
 
-Round 1 promised parity the fake did not have. Round 2 promised parity the type
-system forbade. Three families struck it both times, and Tesla's line stands:
-*"A fold that describes a fix is not a fix."* So here is the double, not a
-shopping list. With `Reach` carrying no payload (§2) it is expressible:
+**Session semantics are unchanged by this fork** (Tesla asked). Our
+`connectionMessage` has always carried `startClean()`, so a package auto-reconnect
+opened a clean session too. Null-and-recreate is the same session behaviour with
+a visible owner.
 
-```dart
-class FakeBus implements MessageBus {
-  bool _started = false, _closed = false;
-  bool _socket = false;                   // MECHANISM: is there a handle
-  bool _wireUp = true;                    // MECHANISM: is that handle carrying
-  LastWill? _will, _willOnWire;
+## 9. `FakeBus`
 
-  /// Default is NotStarted. Round 1's fake started LIVE, which is what let a
-  /// promotion keep publishing at a torn-down bus.
-  FakeBus();
+Four reaches, payload-free `Reach`, the same refusals, `connect()` after
+`disconnect()` refused, default `NotStarted`, and `FakeBus.alreadyAttached()` as a
+named constructor for the fourteen tests that are handed a live wire.
 
-  /// The fourteen ECConsumer/registrar tests that are handed a connected wire.
-  /// A NAMED constructor with a written reason, the same medicine §8 prescribes
-  /// for identity reuse — the shortcut is visible in the test, not baked in.
-  FakeBus.alreadyAttached() { _started = true; _socket = true; }
+**The fake models the supervisor as a method, not a timer:** `setTransport(up:
+false)` lands it in `Detached`; `restoreLink()` performs what `_open()` would —
+walk `_subscriptions`, arm `_will`. A test drives recovery explicitly instead of
+waiting on wall-clock backoff.
 
-  @override
-  Reach get reach {
-    if (_closed) return const Retired();
-    if (!_socket) return _started ? const Detached() : const NotStarted();
-    return _wireUp ? const Attached() : const Dipped();
-  }
-
-  /// Drops or restores the link as a broker outage would — and now actually
-  /// produces `Dipped`, so `send` refuses. Round 2's version flipped a stream
-  /// and left `connected == true`: more forgiving than the API on the exact row
-  /// the design had just minted.
-  Future<void> setTransport({required bool up}) async { _wireUp = up; ... }
-
-  @override
-  Future<void> setWill(LastWill? next) async {
-    switch (reach) {
-      case Retired():    throw StateError('...');
-      case NotStarted(): _will = next;
-      case Detached():   _will = next; await _openOrFail();
-      case Dipped():     _will = next; throw TransportUnavailable('...');
-      case Attached():
-        if (next == _willOnWire) return;
-        _will = next;
-        await _openOrFail();              // failSetWillWith lands in DETACHED
-    }
-  }
-}
-```
-
-`failSetWillWith` leaves `_started = true, _socket = false` with `_will` already
-written — which is `Detached`, what the real client produces.
-
-**The enforcement is a shared contract suite**, not this sketch: one
-parameterised test taking a `MessageBus` factory and asserting every §3/§4/§4b/§8
-refusal, run against both implementations. Both switch over the same public
-`Reach`, so both take the exhaustiveness error when a state is added. That is the
-fold; the prose is not.
+**The enforcement is one shared contract suite** run against both implementations,
+asserting every §3/§4/§4b/§8 refusal. Both switch over the same public `Reach`, so
+both take the exhaustiveness error when a state is added. Two revisions promised
+parity in prose and were struck for it; the suite is the fold.
 
 ## 10. Done-test
 
-1. A fresh strike scores **0 DISSOLVE** from ≥3 seated families and **≤1 RECAST**.
-2. **Must-fail arms**, each watched red before green, each run **through the
-   contract suite so it exercises the fake too** — round 3 hid in the fake:
-   - the cage-match round-3 deadlock: failed reopen, then a promotion retry;
-   - **Tesla's sequel**: dip → `setWill(B)` refuses → auto-reconnect → `setWill(B)`
-     must **reopen**, not return. This is the arm round 2 could not see, and it is
-     the one that proves `_willOnWire` rather than `_will`;
-   - **`disconnect()` during `setWill`'s reopen** — reachable *because* §0 rule 2
-     lets `disconnect` bypass the gate. Must not leave `_closed` with a live
-     client, and must not block on the connect;
-   - **a post-`connect()` subscription failure** — must leave `Detached`, no
-     orphan, and throw `TransportUnavailable`;
-   - **a promotion while `Dipped`** — must refuse, not reopen;
-   - **two registrars sharing a topic path, NEITHER having announced** — exactly
-     one primary;
-   - **two registrars sharing a topic path, BOTH having announced** — exactly one
-     primary. This is the arm round 3's first attempt failed, and it is the one
-     that proves `timeStarted` rather than a local flag. It must be watched red
-     with the `started == timeStarted` conjunct removed;
-   - **`subscribe` while `Dipped`, then the link returns** — a message on that
-     topic must arrive. Watched red with `_reconcileSubscriptions` deleted, and
-     **run on `AikoClient`**, because a one-list fake cannot go red for a
-     two-list bug (§3b);
-   - **`unsubscribe` while `Dipped`, then the link returns** — the opposite pole:
-     no message on that topic may arrive;
-   - **two registrars sharing BOTH `path` and `timeStarted`** — documents the
-     residual rather than asserting it away. If the answer is "not reachable",
-     the arm names the construction that makes it so, rather than resting on
-     clock folklore (Carnot).
+1. A `/design-temper` strike on **this** revision scores 0 DISSOLVE from ≥3
+   families and ≤1 RECAST.
+2. **Must-fail arms**, each watched red before green, each run on `AikoClient`
+   and through the contract suite:
+   - **idle liveness** — broker dies with no caller activity, nothing calls
+     `connect()`, and the bus is `Attached` again after the backoff. Red with the
+     supervisor timer deleted. *This is the arm for the cost round 5 named.*
+   - **one opener** — broker down, drive the election's promotion retry N times,
+     and assert **zero** CONNECTs beyond the supervisor's schedule. Red if
+     `setWill`/`connect` on `Detached` open instead of refusing.
+   - **backoff shape** — successive failures at 1, 2, 4, 8… capped at 120s, and
+     **reset to 1s only on success**.
+   - **subscribe while `Detached`, then the link returns** — a message on that
+     topic arrives. Red with `_open()`'s restore loop deleted.
+   - **`disconnect()` during an in-flight `_open()`** — reachable because
+     `disconnect` bypasses the gate; must not leave `_closed` with a live client,
+     and must not block on the connect.
+   - **two registrars sharing `path` and `timeStarted`** — documents the §6
+     residual rather than asserting it away.
 
 ### Verified at design time
 
-The mechanism is a claim about a compiler, so it was compiled. Dart 3.13.0:
-
-- **Null arm.** The §2/§3 sketches analyze clean and run. This caught a real
-  defect in the first draft: a bare `sealed class Reach {}` gives the `const`
-  leaves a non-const super and none of them compile.
-- **Must-fail arms.** Deleting the `Dipped()` arm is rejected by name in **both**
-  forms the design uses — `non_exhaustive_switch_expression` and
-  `non_exhaustive_switch_statement`. The statement form matters on its own: §3,
-  §4, §4b and §9 are statements.
-- **The fifth situation is observable**, checked before being relied on:
-  `MqttClient.connectionStatus` is public and `MqttConnectionState` has a distinct
-  `connected` member (`mqtt_client.dart:211`,
-  `mqtt_client_connection_state.dart:25-36`).
-- **The will-divergence is real**, checked before being accepted: auto-reconnect
-  calls `connect(server!, port!, connectionMessage)` with the stored packet
-  (`mqtt_connection_handler_base.dart:104`, `:156`).
-- **§9's fold is DEMONSTRATED, not promised** — the failure mode of rounds 1 and
-  2. A scratch harness declares the payload-free `Reach`, implements it in *both*
-  an `AikoClient` holding a real client handle and a `FakeBus` holding none, and
-  runs one contract function over both. Both compile, both inhabit `Attached()`,
-  and both refuse `send` identically on a fresh bus. That is the claim §9 makes,
-  executed rather than asserted.
-- **§10 arm 2 (Tesla's sequel) has a RED/GREEN pair, at design time.** Driven
-  through the fake: `Attached` with will A on the wire → dip → `setWill(B)`
-  refuses → the wire returns carrying A (auto-reconnect's stored packet) →
-  `setWill(B)`.
-  - with round 3's `next == _willOnWire`: **`willOnWire = B`** — it reopened.
-  - with round 2's `next == _will` restored: **`willOnWire = A`** — it
-    short-circuited, and the socket is still armed with the old testament.
-
-  The arm goes red for exactly the proposition it names, which is the difference
-  between a test and a decoration. It was built before the implementation, so the
-  implementation cannot be written to fit it.
-
-An analyzer passing is equally consistent with an analyzer not checking; the
-must-fail arms separate those, and name the missing state.
-
-- **§6's incarnation filter has a red/green pair plus a positive control.**
-  Carnot's exact scenario, built as a harness: two registrars sharing a topic
-  path (RP-1 violated), different start times, **both having announced**, B
-  reading A's retained `found`.
-  - with `path && _hasAnnounced`: **2 primaries** — the regression, reproduced.
-  - with `path && started == timeStarted`: **1 primary** — closed.
-
-  And the positive control, because "1 primary" is also what a filter that never
-  fires would produce: our own residue after a demotion is still classified
-  `ownResidue` and still ignored. The filter fires where it must and not where it
-  must not, which is two propositions and needed two arms.
+- **`onDisconnected` is a live signal under `autoReconnect = false`** — the one
+  premise Option B rests on that four rounds never checked. Measured both arms
+  (`spike/autoreconnect-off/probe_disconnect_signal.dart`): fires 65ms after the
+  broker stops, `onAutoReconnect` correctly silent, client stays down rather than
+  resurrecting.
+- **paho backs off 1→120s and `mqtt_client` does not** — read from both sources,
+  and the number in §5 is taken from the reference rather than invented.
+- **The four-reach model compiles and behaves**, re-run against THIS revision
+  rather than cited from the five-reach one — evidence does not transfer across a
+  type change. `NotStarted` → `record` / `start+open`; `Detached` →
+  `record+refuse` / `refuse-transient`; and **a handle that exists but is not
+  connected reads `Detached`, not `Attached`.**
+- **Two must-fail arms, both red:**
+  - deleting the `Detached()` arm is rejected by name —
+    `non_exhaustive_switch_statement … doesn't match the pattern 'Detached()'`;
+  - **reverting `reach` to `_client != null` alone makes the corpse handle read
+    `Attached`** — defect instance 2, reproduced on demand. That is what proves
+    the `connectionStatus` conjunct is load-bearing rather than decoration.
+- **The backoff produces the reference's shape**, run rather than reasoned:
+  `[1, 2, 4, 8, 16, 32, 64, 120, 120, 120]` seconds — identical to paho's
+  `min(delay * 2, max)` from 1 to 120.
+- **§6's filter has a red/green pair plus a positive control**: `_hasAnnounced`
+  → 2 primaries, `(path, timeStarted)` → 1, and own-residue after a demotion is
+  still ignored, so the green is not a filter that never fires.
 
 ## Appendix: considered and not taken
 
-**Two MQTT connections per registrar** (recorded in `TEMPER.md`): a process-level
-connection carrying the process will, a primary-level one opened on promotion, so
-no will ever mutates and no socket is rebuilt under live subscriptions. Not
-taken — once intent is separated from mechanism you do not need a second socket —
-but it is **parked, not subsumed**, and Carnot raised it again in round 2 as the
-thing that dissolves `_reopen`'s will-change-costs-an-outage entirely. If this
-design leaks a fourth time, price it before shipping rather than after.
+**`autoReconnect = true`** (revisions 1–3). Removed by unanimous round-5 verdict;
+the full argument is in `TEMPER-intent-and-mechanism.md` round 5.
 
-**A backoff constant inside `AikoClient`** — a second scheduler racing §5b's.
+**Jitter on the backoff.** Correct for a thundering herd, absent from paho, and
+therefore a silent timing divergence. Filed for Andy instead.
 
-**Bounding `maxConnectionAttempts`** (Kelvin, round 1; conceded round 2) — a
-ceiling is not backoff, and a lower one makes the storm faster.
+**Two MQTT connections per registrar.** Round 5 noted this fork *changes its
+price* — if we own reconnection, the objection that it means two reconnect
+policies on two sockets largely evaporates. Still not proposed; recorded a third
+time as parked rather than subsumed.
 
-**Invariant RP-1 as a safety mechanism** (rounds 1–2), and **`_hasAnnounced`**
-(round 3, first attempt). Both superseded by reading `timeStarted` off the wire.
-RP-1 was an unenforced invariant the design leaned on; `_hasAnnounced` was a
-local boolean proxying authorship of a remote retained value — the fourth
-instance of this document's own named class, caught by all three adversaries.
-The replacement adds nothing: `(path, timeStarted)` is already in the payload.
-Carnot's fold-back asked for an owner token in the message; the token was
-already there.
+**A ceiling on retries.** Unbounded reconnection is wanted: a broker restarting
+overnight must not need a human. The defect was never the absence of a ceiling,
+it was the absence of backoff — and §5 has it.
