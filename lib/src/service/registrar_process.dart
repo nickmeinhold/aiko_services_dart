@@ -360,6 +360,31 @@ class RegistrarProcess {
           // peer joining afterwards is told a corpse is primary.
           bus.clearRetained(bootTopic);
           await bus.setWill(primaryWill);
+          // RE-READ THE AUTHORITY AFTER THE AWAIT. `setWill` reconnects, and
+          // `_onAnnouncement` mutates the election SYNCHRONOUSLY while we are
+          // suspended in it — so the decision that sent us here can be revoked
+          // mid-transaction. Measured: a predecessor's retained
+          // `(primary absent)` delivered during the will change stands us down
+          // to `primarySearch`, and without this guard we then published a
+          // RETAINED `(primary found <us>)` anyway. Final state: not primary,
+          // and the boot topic tells every future joiner that we are — the
+          // corpse-primary failure the will exists to prevent, reached without
+          // anybody dying.
+          //
+          // Not a failure, so NOT `onPrimaryFailed`: the election already moved
+          // and standing it down again would be a second demotion for one
+          // event. We simply abandon the publish. The boot topic is left
+          // CLEARED, which is the honest state — no primary is claimed, and a
+          // joiner asks rather than believing a corpse.
+          // SCOPED TO WHAT WAS PROVEN: the ELECTION's authority, not `_leaving`.
+          // An earlier draft of this guard also refused while leaving, which
+          // silently reversed a separate decision that has its own test and its
+          // own rationale ("leaving mid-promotion lets it finish"): a promotion
+          // cut in half leaves the retained will armed with nothing announced.
+          // That question is live — Carnot's cage-match finding is that a clean
+          // shutdown never retracts the `found` either (claude-tasks #4319) —
+          // but it is an upstream-parity decision, not this fix's to take.
+          if (role != RegistrarRole.primary) return;
           bus.send(bootTopic, 'primary', [
             'found',
             topicPath.path,

@@ -71,8 +71,20 @@ class FakeBus implements MessageBus {
     sent.clear();
   }
 
-  /// Topics currently subscribed, in registration order.
+  /// Topics the BROKER currently holds for us, in registration order.
+  ///
+  /// Distinct from [_intended] on purpose. Every CONNECT this port makes carries
+  /// `startClean`, so a dropped link throws the broker-side session away while
+  /// the application's memory survives — and `_open()`'s restore loop is what
+  /// puts them back. A fake with ONE list cannot lose a subscription, so a test
+  /// asserting "a subscription survives a reconnect" passes against it even with
+  /// the real restore loop deleted: a check whose success value equals its
+  /// disabled value.
   final List<String> subscribed = [];
+
+  /// The application's memory — what we WANT subscribed, surviving any outage.
+  /// Mirrors `AikoClient._subscriptions`.
+  final Set<String> _intended = {};
 
   /// Topics that were unsubscribed.
   final List<String> unsubscribed = [];
@@ -115,6 +127,8 @@ class FakeBus implements MessageBus {
       await restoreLink();
     } else {
       _reach = const Detached();
+      // The broker-side session goes with the link. The memory does not.
+      subscribed.clear();
       _report(up: false);
       await Future<void>.delayed(Duration.zero);
     }
@@ -124,6 +138,16 @@ class FakeBus implements MessageBus {
   /// current will, with every recorded subscription restored.
   Future<void> restoreLink() async {
     _reach = const Attached();
+    // PERFORM WHAT `_open()` WOULD: walk the memory and reinstall every topic.
+    // Deleting this loop must break a test, which is the whole reason the two
+    // lists are separate.
+    subscribed
+      ..clear()
+      ..addAll(_intended);
+    for (final topic in _intended) {
+      final waiter = _awaited.remove(topic);
+      if (waiter != null && !waiter.isCompleted) waiter.complete();
+    }
     _report(up: true);
     await Future<void>.delayed(Duration.zero);
   }
@@ -152,7 +176,10 @@ class FakeBus implements MessageBus {
     if (_reach case Retired()) {
       throw StateError('cannot subscribe: this bus is retired');
     }
-    subscribed.add(topic);
+    _intended.add(topic);
+    // Recorded but NOT live while the link is down, exactly as the real bus
+    // does: the record alone is correct because [restoreLink] walks the set.
+    if (_reach case Attached()) subscribed.add(topic);
     final waiter = _awaited.remove(topic);
     if (waiter != null && !waiter.isCompleted) waiter.complete();
   }
@@ -173,6 +200,7 @@ class FakeBus implements MessageBus {
       throw StateError('cannot unsubscribe: this bus is retired');
     }
     unsubscribed.add(topic);
+    _intended.remove(topic);
     subscribed.remove(topic);
   }
 

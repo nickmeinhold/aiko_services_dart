@@ -481,9 +481,16 @@ class AikoClient implements MessageBus {
   /// topic silently blinds it.
   @override
   void unsubscribe(String topic) {
-    if (reach case Retired()) {
-      throw StateError('cannot unsubscribe: this bus is retired');
-    }
+    // DELIBERATELY ASYMMETRIC WITH [subscribe], which DOES refuse on Retired.
+    // `subscribe` on a retired bus asks for something it cannot have;
+    // `unsubscribe` asks us to FORGET, and forgetting is always satisfiable.
+    //
+    // The caller here is a teardown: `ECConsumer.terminate` reaches
+    // `TopicRouter.removeHandler`, which unsubscribes a topic when its last
+    // handler goes. An earlier draft of this class threw here for symmetry with
+    // `subscribe`, which turned an idempotent cleanup into an unhandled
+    // StateError out of an async drain — the same "a teardown path may not
+    // assume its setup ran" defect this file already carries a test for.
     _subscriptions.remove(topic);
     if (reach case Attached()) _live.unsubscribe(topic);
   }

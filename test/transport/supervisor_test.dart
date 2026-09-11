@@ -148,6 +148,25 @@ void main() {
       expect(client.reach, isA<Retired>());
     });
 
+    test('unsubscribe after disconnect does NOT throw — teardown is idempotent',
+        () async {
+      final timers = FakeTimers();
+      final client = _deadBroker(timers);
+      await expectLater(client.connect(), throwsA(isA<TransportUnavailable>()));
+      client.subscribe('aiko/x/1/1/out');
+      await client.disconnect();
+
+      // ECConsumer.terminate() reaches TopicRouter.removeHandler, which
+      // unsubscribes a topic when its last handler goes — and that can run after
+      // the bus is gone. `subscribe` refusing on Retired is right (it asks for
+      // something it cannot have); `unsubscribe` refusing is not, because
+      // forgetting is always satisfiable. An earlier draft threw here for
+      // symmetry and turned an idempotent cleanup into an unhandled StateError
+      // out of an async drain.
+      expect(() => client.unsubscribe('aiko/x/1/1/out'), returnsNormally);
+      expect(() => client.unsubscribe('never/subscribed'), returnsNormally);
+    });
+
     test('a retired bus is never reopened', () async {
       final timers = FakeTimers();
       final client = _deadBroker(timers);

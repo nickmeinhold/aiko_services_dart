@@ -341,6 +341,65 @@ void main() {
     });
   });
 
+  group('the promotion transaction spans an await', () {
+    // TESLA, /cage-match PR #24: "the await in AnnouncePrimary is a half-cycle
+    // the election already completed."
+    //
+    // `setWill` RECONNECTS, so it is the one effect that suspends. While it is
+    // suspended, `_onAnnouncement` mutates the election SYNCHRONOUSLY (the
+    // `_election.onAnnouncement(...)` argument is evaluated before `_apply` is
+    // even called, and `_apply` then only queues because a drain is running).
+    // So the decision that sent us into this effect can be REVOKED while we are
+    // in it, and the resumed effect used to publish anyway.
+    //
+    // Measured before the fix: role `primarySearch`, and a RETAINED
+    // `(primary found <us>)` on the boot topic. A process that is not serving,
+    // telling every future joiner in a retained message that it is — the
+    // corpse-primary state the will exists to prevent, with nobody dead.
+    test('a stand-down during the will change abandons the announcement',
+        () async {
+      final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 80);
+      final process = _process(
+        bus,
+        searchTimeout: const Duration(seconds: 30),
+      );
+      await process.connect();
+      bus.clear();
+
+      // Open the promotion: clear, setWill (80ms window), announce.
+      unawaited(_deliverAbsent(bus));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(process.role, RegistrarRole.primary, reason: 'promotion is open');
+
+      // The predecessor's retained tombstone lands INSIDE the window. The
+      // election acts on this one: primary -> primarySearch.
+      await _deliverAbsent(bus);
+      expect(process.role, RegistrarRole.primarySearch);
+
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await settle();
+
+      // The authority was revoked, so nothing may be published under it.
+      final ourFound = bus.actions
+          .whereType<SentMessage>()
+          .where(
+            (sent) =>
+                sent.topic == _bootTopic &&
+                (sent.params! as List).first == 'found',
+          );
+      expect(
+        ourFound,
+        isEmpty,
+        reason: 'a retained found from a process that is not primary is a '
+            'corpse the island cannot tell from a live registrar',
+      );
+      // And the boot topic is left CLEARED rather than claimed — the honest
+      // state. A joiner asks instead of believing us.
+      expect(bus.actions.whereType<RetainedCleared>(), isNotEmpty);
+      await process.disconnect();
+    });
+  });
+
   group('leaving', () {
     test('disconnect cancels a search still in flight', () async {
       final bus = FakeBus();
