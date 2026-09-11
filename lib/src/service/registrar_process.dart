@@ -376,6 +376,21 @@ class RegistrarProcess {
           // event. We simply abandon the publish. The boot topic is left
           // CLEARED, which is the honest state — no primary is claimed, and a
           // joiner asks rather than believing a corpse.
+          //
+          // WHAT THIS LEAVES BEHIND, stated rather than absorbed. We abandon
+          // still holding the PRIMARY will, because taking it is the step
+          // before this one. Two consequences, and only one of them is benign:
+          //   * a search timeout re-promotes us cheaply — `setWill`short-circuits
+          //     on `next == _will`, so there is no second reconnect;
+          //   * but if a PEER announces first we settle at `secondary` holding
+          //     a retained `(primary absent)` aimed at the boot topic, and an
+          //     unclean death then publishes it over that peer's healthy
+          //     `found`.
+          // That is claude-tasks #4319, reached by a route that did not exist
+          // before this guard. It is NOT covered by "upstream parity": upstream
+          // cannot abandon at all, because its `on_enter_primary` is
+          // synchronous. This window is ours, so the residual is ours to decide
+          // rather than to inherit.
           // SCOPED TO WHAT WAS PROVEN: the ELECTION's authority, not `_leaving`.
           // An earlier draft of this guard also refused while leaving, which
           // silently reversed a separate decision that has its own test and its

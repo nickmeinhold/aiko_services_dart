@@ -196,9 +196,12 @@ class FakeBus implements MessageBus {
 
   @override
   void unsubscribe(String topic) {
-    if (_reach case Retired()) {
-      throw StateError('cannot unsubscribe: this bus is retired');
-    }
+    // NO Retired guard, matching [AikoClient]: `subscribe` on a retired bus asks
+    // for something it cannot have, `unsubscribe` asks us to FORGET, and
+    // forgetting is always satisfiable. This fake carried the guard for one
+    // round AFTER production dropped it — a fake STRICTER than the real API,
+    // which is the same contract drift as a fake that is kinder, just pointing
+    // the other way. `bus_contract_test.dart` now runs one body against both.
     unsubscribed.add(topic);
     _intended.remove(topic);
     subscribed.remove(topic);
