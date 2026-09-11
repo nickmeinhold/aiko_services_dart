@@ -8,6 +8,7 @@
 /// disabled value.
 library;
 
+import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
 import 'fake_bus.dart';
@@ -43,6 +44,34 @@ void main() {
 
     await bus.restoreLink();
     expect(bus.subscribed, containsAll(['aiko/a/1/1/out', 'aiko/b/2/1/out']));
+  });
+
+  test('subscribe BEFORE connect reaches the broker on connect', () async {
+    final bus = FakeBus();
+    // A documented, load-bearing path in AikoClient: the set IS the memory, and
+    // `_open()` walks it on the FIRST connect as well as on a reopen.
+    bus.subscribe('aiko/a/1/1/out');
+    expect(bus.subscribed, isEmpty, reason: 'no socket yet');
+
+    await bus.connect();
+    expect(bus.subscribed, contains('aiko/a/1/1/out'));
+  });
+
+  test('a failing setWill does NOT un-retire a bus', () async {
+    final bus = FakeBus()
+      ..setWillDelay = const Duration(milliseconds: 30)
+      ..failSetWillWith = StateError('reopen failed');
+    await bus.connect();
+
+    // Leave while the will change is in flight. Terminal must stay terminal:
+    // the failure path used to overwrite Retired with Detached.
+    final inFlight = bus.setWill(
+      const LastWill(topic: 'a/b/0/state', payload: '(absent)'),
+    );
+    await bus.disconnect();
+    await expectLater(inFlight, throwsA(isA<Object>()));
+
+    expect(bus.reach, isA<Retired>(), reason: 'Retired is terminal');
   });
 
   test('unsubscribing while down means it is NOT replayed', () async {

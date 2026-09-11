@@ -30,7 +30,7 @@
 >
 > **The blocker was in the transport, not in the plan.** Of the five effects the election
 > emits, two could not be performed at all: `AnnouncePrimary` needs a RETAINED publish and
-> `MessageBus.send` had no `retain`; `ClearBootTopic` needs an EMPTY retained publish and
+> `MessageBus.send` had no `retain`; clearing the boot topic needs an EMPTY retained publish and
 > `send` runs `generate`, which cannot emit zero bytes. Promotion also CHANGES the will,
 > which MQTT carries only in a CONNECT packet. All three affordances landed with the
 > driver. That is why `RegistrarElection` sat merged and green with zero callers for a
@@ -47,7 +47,7 @@
 > that has already announced. Ours cannot be — taking the retained will means reconnecting,
 > and a reconnect is an await — so `role` reaches `primary` while the island has not been
 > told. Found by a probe killing itself on `role == primary` and catching a broker holding
-> the empty `ClearBootTopic` and nothing else. Hence `RegistrarProcess.announcements`,
+> the empty boot-topic clear and nothing else. Hence `RegistrarProcess.announcements`,
 > which fires when the announcement is actually on the wire.
 
 Scoped against `geekscape/aiko_services` at **`origin/master` = `3fa546f`** (2026-09-02).

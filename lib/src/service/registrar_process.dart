@@ -380,7 +380,7 @@ class RegistrarProcess {
           // WHAT THIS LEAVES BEHIND, stated rather than absorbed. We abandon
           // still holding the PRIMARY will, because taking it is the step
           // before this one. Two consequences, and only one of them is benign:
-          //   * a search timeout re-promotes us cheaply — `setWill`short-circuits
+          //   * a search timeout re-promotes us cheaply — `setWill` short-circuits
           //     on `next == _will`, so there is no second reconnect;
           //   * but if a PEER announces first we settle at `secondary` holding
           //     a retained `(primary absent)` aimed at the boot topic, and an
@@ -391,6 +391,15 @@ class RegistrarProcess {
           // cannot abandon at all, because its `on_enter_primary` is
           // synchronous. This window is ours, so the residual is ours to decide
           // rather than to inherit.
+          //
+          // AND IT IS A CLASS, NOT THIS INSTANCE. `setWill` appears exactly ONCE
+          // in this file — the line above — so the primary will is armed in one
+          // place and restored in none. THREE exits from `primary` leave it
+          // armed: this abandon, the `onPrimaryFailed` catch below, and an
+          // `(absent)` arriving while we are primary (`registrar_election.dart`
+          // `(RegistrarAnnouncement.absent, _)` → DropRoster + primary_search).
+          // Enumerated here rather than discovered one reviewer-round at a time;
+          // the count is greppable and belongs with the arming site.
           // SCOPED TO WHAT WAS PROVEN: the ELECTION's authority, not `_leaving`.
           // An earlier draft of this guard also refused while leaving, which
           // silently reversed a separate decision that has its own test and its
@@ -438,11 +447,8 @@ class RegistrarProcess {
     // Stop accepting NEW effects, then let anything already in flight finish
     // against a bus that is still up. The asymmetry is the point: a promotion
     // is HALF DONE between taking the retained will and publishing the
-    // announcement, and tearing the bus out from under it throws from
-    // `clearRetained` or `send` inside an async drain, where there is nobody to
-    // catch it. Only `AnnouncePrimary` sits in a try, so the throw would come
-    // from `ClearBootTopic` and surface as an unhandled async error rather than
-    // as a promotion failure.
+    // announcement, and tearing the bus out from under it turns a promotion
+    // into a half-write nobody can observe.
     _leaving = true;
     _timer?.cancel();
     _timer = null;

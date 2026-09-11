@@ -165,6 +165,14 @@ class FakeBus implements MessageBus {
         throw const TransportUnavailable('connect');
       case NotStarted():
         _reach = const Attached();
+        // Walk the memory, exactly as `_open()` does. `subscribe` before
+        // `connect` is a documented, load-bearing path in AikoClient — the set
+        // IS the memory — and a fake that attached with an empty broker list
+        // could not fail a test about it (Tesla, round 3; third instance of
+        // this fake's restore-loop class).
+        subscribed
+          ..clear()
+          ..addAll(_intended);
         _report(up: true);
     }
   }
@@ -284,8 +292,14 @@ class FakeBus implements MessageBus {
       // live registrar permanently deaf (Tesla, round 3). Third time a fake
       // being kinder than the API hid a real bug in this PR.
       _will = next;
-      _reach = const Detached();
-      _report(up: false);
+      // ASK RETIRED FIRST. A delayed failing setWill racing a `disconnect()`
+      // would otherwise overwrite `Retired` with `Detached` and UN-RETIRE the
+      // bus — a terminal state that is not terminal (Tesla, round 3).
+      if (_reach is! Retired) {
+        _reach = const Detached();
+        subscribed.clear();
+        _report(up: false);
+      }
       throw failure;
     }
     // Mirrors AikoClient exactly: the short-circuit is about not paying a

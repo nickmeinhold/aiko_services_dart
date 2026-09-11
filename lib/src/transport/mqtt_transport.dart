@@ -621,6 +621,21 @@ class AikoClient implements MessageBus {
       // Installed LAST, fully armed: the bus is never externally Attached with
       // nothing listening.
       _client = client;
+      // THE DUAL OF [_enterDetached], and the reason it is here rather than in
+      // the supervisor's timer body. That door makes `Detached` imply an armed
+      // recovery; this one makes `Attached` imply NO armed recovery. Without it
+      // the second half of the invariant held only because there happens to be
+      // no `await` between the subscribe loop and this install — a reachability
+      // argument, not a guarantee, and reachability arguments are what a future
+      // edit breaks silently. A stale timer firing against a live socket would
+      // open a SECOND connection under the same client id, and a broker takeover
+      // closes the first WITHOUT a DISCONNECT packet, which is precisely the
+      // condition that publishes our will. Tesla, /cage-match round 3: the
+      // mechanism was not reproducible on today's code and the invariant it
+      // names was genuinely open.
+      _retry?.cancel();
+      _retry = null;
+      _backoff = backoffMin;
       _reportTransport(up: true);
     } on Object catch (error) {
       await updates?.cancel();
