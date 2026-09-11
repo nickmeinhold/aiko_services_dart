@@ -163,3 +163,75 @@ hold the blanket line. Recorded as disputed rather than tie-broken.
 ## Disposition
 
 **RECAST, round 2 of ≤3.** Round 3 leads with role retirement and orders the wire work beneath it.
+
+---
+
+# Round 3 — RECAST. 4/4, 0 DISSOLVE. **CAP REACHED — STOP, do not recast again.**
+
+| Family | Verdict | One line |
+|---|---|---|
+| Maxwell | RECAST | Abdication can strand a LIVE process out of the election; "terminate" assumes the registrar owns its process |
+| Kelvin | RECAST | After three rounds the deliverable is a feature request, not a buildable artifact — say so |
+| Carnot | RECAST | "Terminate" is an exhaust port with no proof the heat left; no epoch on in-flight role work |
+| Tesla | RECAST | The identity field CANNOT close face 1, because face 1's victim is a JOINER with no memory to protect |
+
+## The finding that ends the loop
+
+Three rounds proposed three different local fixes for face 1, and each died to a different
+mechanism. Tesla's round-3 strike supplies the reason that covers all three:
+
+> **Face 1's victim is a JOINER.** The measured incident is a *replacement registrar* reading a
+> retained corpse (`FINAL_ROLE=secondary`, zero registrars on the island). A joiner has no prior
+> belief, so every fix that works by protecting what a reader already remembers — reader-ignore,
+> identity comparison, `ownResidue` — **cannot reach the victim.**
+
+And the retain flag has no third option: a retained `withdrawn X` reopens Carnot's overwrite (it
+lands on a healthy successor's `found`); a non-retained `withdrawn X` leaves the joiner reading
+`found X` and face 1 untouched. There is no third MQTT.
+
+**Therefore: only expiry closes face 1.** Round 3 filed face 1 under Ask 1 (identity) and called
+Ask 1 *"the ask we would take if only one lands"* — putting the one measured, island-down incident
+on the ask that provably cannot close it. `"All three dissolve with ONE field"` was numerology
+wearing a mechanism's coat.
+
+**Ask 2 (lease) is not the end state. It is the only thing that closes the measured incident.**
+Ask 1 is narrower than three rounds claimed: it is attribution for the WILL (face 2's wire half) —
+a demoted X's later tombstone must name X so it cannot un-elect Y. Faces 3 and 4 are `found`'s
+existing identity plus a real `ownResidue` arm. Stop bundling four faces onto one field.
+
+## Also unresolved at the cap
+
+- **No epoch on in-flight role work (Carnot).** "Retire first" stops NEW campaigning; it does not
+  stop promotion work that passed its checks *before* retirement. Own-echo is replaced by
+  stale-await resurrection. This is the same class as the `AnnouncePrimary` authority re-read
+  already fixed in code (`b31a338`) — the design failed to apply the port's own lesson.
+- **"Terminate" is unproven containment (Carnot) and mis-scoped (Maxwell).** A failed restore means
+  the socket path is untrustworthy, and a clean DISCONNECT rides that same path; killed or crashed,
+  the broker fires the armed will regardless. And a registrar is a SERVICE — `process.py` hosts
+  many — so exiting kills unrelated services to disarm one will.
+- **Abdication can strand a live process (Maxwell).** It runs on demotion and abandonment too,
+  where the process stays alive. Restore hangs → candidacy never resumes → no primary, forever,
+  caused by our own abdication. No timeout, no abort, no re-entry.
+- **§7 is disputed 2-2 and stays unresolved.** Maxwell struck it (the key is `(path, timeStarted)`,
+  which the design itself documents as collision-prone on dart2js — so the predicate CAN be wrong,
+  so it IS a guess). Carnot endorsed it. Kelvin struck it ("the Partition of Theseus"). Tesla
+  endorsed the CUT while rejecting its evidence, and adds a check: **`ownResidue` is cited as
+  already-shipped — verify that against the tree before it is used as partition-evidence.**
+
+## Verdict at the cap
+
+**RECAST, unresolved after 3 rounds. DO NOT BUILD.**
+
+Kelvin's reframe is accepted as the honest description of what this document actually is:
+**an upstream proposal supported by a local mitigation, not a self-contained design.** Three
+rounds of striking a proposal that was presenting itself as a design is what produced that clarity,
+and it is worth the rounds.
+
+**What survived all three rounds untouched by every family:** the six-face forensics; the root
+(`found` names a writer, `absent` names nobody); face 5 as ours alone for a structural reason;
+local abdication as an ORDER rather than two wire patches; face 6 correctly refused; the §3 phase
+rule; and "a fence is not a lease".
+
+**What must change before any further work:** face 1 moves to Ask 2 and Ask 2 leads. The local
+abdication needs an epoch, a bounded failure path, and a containment action that is neither a
+process exit nor a log line — and it is the only part of this that is buildable today.
