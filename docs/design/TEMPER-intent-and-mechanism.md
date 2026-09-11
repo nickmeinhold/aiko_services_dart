@@ -301,3 +301,124 @@ than the instance.
 `_willOnWire` closes a CLASS that three consecutive rounds each closed one instance of, and the
 `_hasAnnounced` conjunct closes Kelvin's dual-primary regression without requiring RP-1 to hold.
 The remaining seven are mechanical.
+
+---
+
+# ROUND 3 — one SOUND, and an adjudication the vote count would have got wrong
+
+**Overall verdict: RECAST (narrow), folded.** Zero DISSOLVE. **Tesla SOUND**;
+Kelvin, Carnot and Maxwell RECAST — on a single shared finding, which is folded
+below. The severity trend across three rounds is 8 findings → 8 → 1.
+**Struck:** dt-1789109272, 2026-09-11. Four families, Kelvin on `gemini-2.5-pro`.
+Bundle 74KB; sentinel, three RCs of 0, verdict markers present. No dark seats.
+
+## The finding — and why counting votes would have mis-decided it
+
+All three RECASTs named `_hasAnnounced` as **the fourth instance of the class**:
+a local boolean proxying a state of the wire. They gave three different reasons,
+and **the loudest one is wrong**:
+
+- **Kelvin (fatal, HAL quote, "the one note it was supposed to forget")** — but
+  his mechanism *drops the second conjunct*: "it sees the other's message but,
+  because its own lying boolean is true, it filters it as residue." The filter
+  was `_hasAnnounced && path == topicPath.path`; a peer's `found` carries the
+  peer's path. His stated scenario cannot occur.
+- **Carnot (fatal, and correct)** — B announces, stands down, keeps the flag; A,
+  **sharing B's path**, announces; B reads A's `found` as its own residue and both
+  promote. This does not drop the conjunct. It requires an RP-1 violation.
+- **Tesla (SOUND, and also correct)** — not a new instance, but an **overclaim**
+  inside a real fold: *"RP-1 is therefore no longer load-bearing for safety"* is
+  true only of the never-announced arm.
+
+Carnot and Tesla describe the same surviving hole and grade it differently.
+Kelvin describes a different, non-existent one and grades it fatal. **Severity is
+not evidence** — the most dramatic verdict on the table was the one whose
+load-bearing premise failed first.
+
+But the hole Carnot names is real, and it is a genuine regression versus today:
+in the both-announced colliding-path arm, today's code gives one primary and
+round 3's first attempt gives two.
+
+## The fold — Carnot asked for a token that was already on the wire
+
+Carnot's fold-back: *"Do not try to save `_hasAnnounced` with another bool. That
+is how this design spent three rounds manufacturing one more proxy. The retained
+message needs an owner token."* Kelvin's: *"the fix is not another layer of local
+state; it is a measurement of the wire itself."*
+
+Both are right, and **the measurement already exists.** `timeStarted` is
+parameter 3 of `(primary found <path> <version> <timestamp>)` — published at
+`registrar_process.dart:360`, discarded on read at `:274`, microsecond resolution
+at `:206`. So `(path, timeStarted)` is an **incarnation identity** already
+travelling on every announcement.
+
+`_hasAnnounced` is **deleted, not repaired**. A process that never announced has
+never published its pair, so nothing can match it; a colliding path with a
+different start time is a different process. Subtract the coupling rather than
+guard the window.
+
+| | today | `_hasAnnounced` | `timeStarted` |
+|---|---|---|---|
+| own residue after demotion (the oscillator) | **stands us down — the bug** | closed | closed |
+| colliding path, neither announced | one primary | one primary | one primary |
+| colliding path, both announced | one primary | **two, silently** | one primary |
+
+**Verified, red/green plus a positive control** (a green here is also what a
+filter that never fires would give):
+- `path && _hasAnnounced` → **2 primaries**; `path && started == timeStarted` →
+  **1 primary**;
+- own residue after a demotion → still `ownResidue`, still ignored.
+
+RP-1 is now demoted to a note in **every** arm — and unlike revision 3's first
+version of that sentence, this one is true.
+
+## Also folded
+
+- **`subscribe`/`unsubscribe` were still `_client?.`** — **Maxwell**, found by
+  running the revision's own rule back over the revision. Five public members were
+  specified across five reaches; these two were left as the exact
+  null-guard-whose-subject-is-never-nulled that was round 1 of the original
+  cage-match. On `Dipped` the call lands on a downed socket and returns normally.
+  New §3b splits it: the `_subscriptions` record is INTENT and happens in every
+  reach but `Retired`; the broker call is MECHANISM and happens only on
+  `Attached`.
+- **§0 claimed "nothing else reaches `_client`"** — **Carnot AND Maxwell**,
+  falsified from code in the same bundle. Narrowed to a claim about **writers**:
+  only gated `connect`/`setWill` and bypassing `disconnect` may change `_client`,
+  `_willOnWire` or `_closed`; everyone else observes through `reach` and uses
+  `_live` inside an arm `reach` has proved.
+- **Tesla's hygiene** — `_will = next` now lands before the `Attached`
+  short-circuit, so a successful `setWill` always records intent.
+
+## What holds
+
+- **Tesla: "I hunted a fourth. It is not here."** He cleared `_willOnWire`
+  (*"a field written from the packet at install, cleared with the handle, cannot
+  stale the way `_client != null` could — that is a recording, not a proxy"*),
+  cleared `_live` (*"a Dart-atomic corollary of the getter just switched on"*),
+  and scored **five of his six constraints MET**. Bounded retry remains PROSE and
+  is an owned non-goal — *"a named owner is not a bound"*, which is exactly what
+  §5b says about itself.
+- **§9 was REAL at last** — the only finding that was prose twice. Kelvin: *"the
+  double no longer lies."* Tesla: *"that is demonstration."* Carnot holds it at
+  PARTIAL until the suite is code rather than a sketch, which is fair and is what
+  §9 says the enforcement is.
+- **All sixteen prior findings audited REAL or PARTIAL by adversaries**, none
+  regressed.
+- **The rule earned its keep.** `_willOnWire` closed instances 1–3; the rule then
+  found instance 4 twice more — once in `subscribe` (Maxwell) and once in
+  `_hasAnnounced` (Carnot, Kelvin) — in places nobody had thought to look. A rule
+  that keeps finding its own violations is doing work a changelog would not.
+
+## Disposition
+
+**Round cap reached (3 of 3).** Zero DISSOLVE across all three rounds; findings
+8 → 8 → 1; one family SOUND. The round-3 fold is committed and its two decisive
+claims carry red/green pairs, but **that delta is itself unstruck** — so the
+design is **not** stamped SOUND. It is `RECAST-folded, provisional`, which a
+build gate must treat as un-tempered.
+
+The honest options are Nick's: strike the delta once more (it is small and
+bounded — §6, §3b, §0's narrowing), or proceed to implement with the delta's risk
+named. What is no longer open is the *shape*: three rounds, four families, and
+seventeen findings all landed inside one decomposition, and none of them moved it.

@@ -83,11 +83,20 @@ One decision resolves all three:
    epoch is unchanged and `_closed` is still false. `disconnect` is *exactly* the
    bypass Carnot asked us to name, and it is a bypass on purpose.
 
-The escape routes are now enumerable, which is what Carnot actually asked for:
-`_onData` (touches no lifecycle state), `_reportTransport` (a broadcast
-controller, which delivers asynchronously, so a listener calling `setWill`
-*queues* on the gate and cannot re-enter it), and `disconnect` (rule 2). Nothing
-else reaches `_client`.
+**The boundary is about WRITERS of `_client`, not readers of it** — round 3's
+first draft said *"nothing else reaches `_client`"*, which Carnot and Maxwell both
+falsified from code in the same bundle. Stated correctly:
+
+- **Only** gated `connect`/`setWill` and bypassing `disconnect` may CHANGE
+  `_client`, `_willOnWire` or `_closed`. That list is exhaustive.
+- Everyone else — `send`, `clearRetained`, `subscribe`, `unsubscribe`, `_onData`
+  — may only OBSERVE, through `reach`, and use the handle through `_live` inside
+  an arm `reach` has already proved.
+- `_reportTransport` publishes to a broadcast controller, which delivers
+  asynchronously, so a listener that calls `setWill` *queues* on the gate rather
+  than re-entering it. Its downstream is election work, which is exactly why that
+  asynchrony is load-bearing rather than incidental (Tesla flagged the stack:
+  `unawaited(_apply(...))` can reach `await setWill` on the same trace).
 
 ## 1. The state
 
@@ -199,6 +208,39 @@ shape.
 | `registrar_process` `ClearBootTopic` (`:347`) | uncaught, documented | outside the try; a transient here fails the promotion at the next step regardless |
 | `services_cache`, `ec_consumer`, `bus_process` | uncaught, type changed only | both crashed before; the new type is better news in the stack trace |
 
+## 3b. `subscribe` / `unsubscribe` — the two members that were still `_client?.`
+
+Found by running this revision's own rule back over this revision. `send`,
+`clearRetained`, `setWill`, `connect` and `disconnect` are specified across all
+five reaches; `subscribe` and `unsubscribe` were left as
+`_client?.subscribe(topic, …)` — **the null-guard-whose-subject-is-never-nulled
+that was round 1 of the original cage-match**, still in the file. On `Dipped`
+that call lands on a client whose socket is down, returns normally, and leaves
+the caller believing it is subscribed: a local call standing in for a broker
+subscription, which is the same sentence as `_will == next` standing in for
+the-socket-carries-it.
+
+The split follows from what each half is:
+
+```dart
+void subscribe(String topic) {
+  if (reach case Retired()) {
+    throw StateError('cannot subscribe: this bus is retired');
+  }
+  _subscriptions.add(topic);          // INTENT — the set IS the memory, and
+                                      // _open restores it in every reach
+  if (reach case Attached()) {
+    _live.subscribe(topic, MqttQos.atMostOnce);   // MECHANISM — only when live
+  }
+}
+```
+
+On `Dipped` the record alone is correct: `resubscribeOnAutoReconnect` carries it
+when the link returns. On `Detached` and `NotStarted` the next `_open()` carries
+it. Neither throws, because a subscription is an interest rather than an act —
+and that sentence is one the design owes rather than a behaviour to infer.
+`unsubscribe` mirrors it.
+
 ## 4. `setWill` — the short-circuit tests the wire, not the wish
 
 ```dart
@@ -215,8 +257,9 @@ Future<void> setWill(LastWill? next) => _gate(() async {
       _will = next;                       // recorded; _willOnWire stays A, truthfully
       throw TransportUnavailable('set a will while the link is down');
     case Attached():
+      _will = next;                       // intent lands FIRST, even when the
+                                          // socket already carries it (Tesla, r3)
       if (next == _willOnWire) return;    // the SOCKET carries it — the real conjunct
-      _will = next;
       await _reopen(_live);
   }
 });
@@ -357,29 +400,47 @@ redelivers our own retained `(primary found <us>)` — face 3 of the boot-topic
 note. In `primary_search` that stands us down to `secondary`, deaf.
 
 ```dart
-['found', final String path, _, _] =>
-    (_hasAnnounced && path == topicPath.path)
+['found', final String path, _, final String started] =>
+    (path == topicPath.path && started == timeStarted)
         ? RegistrarAnnouncement.ownResidue
         : RegistrarAnnouncement.found,
 ```
 
-**`_hasAnnounced` is the round-3 fold, and it closes a REGRESSION rather than a
-gap.** Kelvin and Carnot both led with it. Round 2 filtered on path alone and
-leaned on invariant RP-1 — *topic paths are unique across live registrars* —
-which nothing enforces. Checked against today's behaviour, they are right that
-the trade was a regression and not merely an unclosed hole:
+**Round 3's first attempt was a fourth instance of the class, and all three
+adversaries said so.** It filtered on `path == ours && _hasAnnounced` — and
+`_hasAnnounced` is a **local boolean proxying a state of the wire**: it records
+that we called `send`, at QoS 0 with no ack, and is then read as though it meant
+*we are the author of the retained value*. Carnot's scenario, which does not drop
+the conjunct: B announces, stands down, keeps the flag; A — sharing B's path —
+announces; B reads A's `found` as its own residue and both promote. Kelvin's
+verdict was the same, and his prescription was the right instinct — *"the fix is
+not another layer of local state; it is a measurement of the wire itself."*
 
-| | today | round 2 (path only) | round 3 (`_hasAnnounced &&`) |
+**The measurement already exists.** `timeStarted` is parameter 3 of the
+announcement, published at `registrar_process.dart:360` and discarded on read at
+`:274`. It is microsecond-resolution (`:206`). So `(path, timeStarted)` is an
+**incarnation identity**, carried on the wire today, requiring no new message, no
+wire change, and no cooperation from anyone:
+
+- an announcement matching both fields was published **by this incarnation**, and
+  by nothing else — a colliding path with a different start time is a different
+  process, and a same-microsecond collision on the same path is not reachable;
+- a process that never announced has never published its pair, so nothing can
+  match it. **`_hasAnnounced` is therefore deleted, not fixed.** Subtract the
+  coupling rather than guard the window.
+
+| | today | round 3 first attempt (`_hasAnnounced`) | round 3 final (`timeStarted`) |
 |---|---|---|---|
-| two registrars share a path | B reads A's `found`, stands down → **one primary** | both read it as own residue → **both promote, silently** | B never announced, so B reads real news and stands down → **one primary** |
+| the oscillator (our own residue after a demotion) | stands us down — **the bug** | closed | closed |
+| two registrars share a path, neither announced | one primary | one primary | one primary |
+| two registrars share a path, both announced | one primary | **both promote, silently** | one primary |
 
-`_hasAnnounced` is set when we publish `(primary found …)` and is a fact about
-what *we did*, not about who we are. A replica that has never announced cannot
-mistake anybody's announcement for its own — no matter how its path collides.
-**RP-1 is therefore no longer load-bearing for safety**, and is demoted to a note.
+**RP-1 is no longer load-bearing for safety in any arm**, and unlike the previous
+revision's version of that sentence, this one is true for the both-announced case
+too. RP-1 survives only as a note: a shared topic path is a confusing island.
 
 `ownResidue` is its own case rather than `null` beside malformed, so the filter's
-success is observable instead of silent (Tesla, round 1).
+success is observable instead of silent.
 
 **What this does not close, plainly.** `(primary absent)` is arity-1 and carries
 no path, so face 2 has nothing to compare. Face 1 is untouched. Both need a wire
@@ -526,8 +587,14 @@ fold; the prose is not.
    - **a post-`connect()` subscription failure** — must leave `Detached`, no
      orphan, and throw `TransportUnavailable`;
    - **a promotion while `Dipped`** — must refuse, not reopen;
-   - **two registrars sharing a topic path, neither having announced** — exactly
-     one primary. The §6 regression arm.
+   - **two registrars sharing a topic path, NEITHER having announced** — exactly
+     one primary;
+   - **two registrars sharing a topic path, BOTH having announced** — exactly one
+     primary. This is the arm round 3's first attempt failed, and it is the one
+     that proves `timeStarted` rather than a local flag. It must be watched red
+     with the `started == timeStarted` conjunct removed;
+   - **`subscribe` while `Dipped`** — records the interest, does not call the
+     broker, and the topic is live again after the link returns (§3b).
 
 ### Verified at design time
 
@@ -568,6 +635,18 @@ The mechanism is a claim about a compiler, so it was compiled. Dart 3.13.0:
 An analyzer passing is equally consistent with an analyzer not checking; the
 must-fail arms separate those, and name the missing state.
 
+- **§6's incarnation filter has a red/green pair plus a positive control.**
+  Carnot's exact scenario, built as a harness: two registrars sharing a topic
+  path (RP-1 violated), different start times, **both having announced**, B
+  reading A's retained `found`.
+  - with `path && _hasAnnounced`: **2 primaries** — the regression, reproduced.
+  - with `path && started == timeStarted`: **1 primary** — closed.
+
+  And the positive control, because "1 primary" is also what a filter that never
+  fires would produce: our own residue after a demotion is still classified
+  `ownResidue` and still ignored. The filter fires where it must and not where it
+  must not, which is two propositions and needed two arms.
+
 ## Appendix: considered and not taken
 
 **Two MQTT connections per registrar** (recorded in `TEMPER.md`): a process-level
@@ -583,7 +662,11 @@ design leaks a fourth time, price it before shipping rather than after.
 **Bounding `maxConnectionAttempts`** (Kelvin, round 1; conceded round 2) — a
 ceiling is not backoff, and a lower one makes the storm faster.
 
-**Invariant RP-1 as a safety mechanism** (rounds 1–2). Superseded: `_hasAnnounced`
-makes the residue filter safe without it. RP-1 remains desirable for other
-reasons — a shared topic path is a confusing island — but nothing in this design
-depends on it now.
+**Invariant RP-1 as a safety mechanism** (rounds 1–2), and **`_hasAnnounced`**
+(round 3, first attempt). Both superseded by reading `timeStarted` off the wire.
+RP-1 was an unenforced invariant the design leaned on; `_hasAnnounced` was a
+local boolean proxying authorship of a remote retained value — the fourth
+instance of this document's own named class, caught by all three adversaries.
+The replacement adds nothing: `(path, timeStarted)` is already in the payload.
+Carnot's fold-back asked for an owner token in the message; the token was
+already there.
