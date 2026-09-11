@@ -57,12 +57,32 @@ class FakeTimers {
   /// observable without any of it elapsing.
   final List<Duration> scheduled = [];
 
+  final Map<int, Completer<void>> _awaited = {};
+
   /// Pass as [CreateTimer].
   Timer create(Duration duration, void Function() callback) {
     scheduled.add(duration);
     final timer = FakeTimer(duration, callback, this);
     _pending.add(timer);
+    for (final count in _awaited.keys.toList()) {
+      if (scheduled.length >= count) {
+        _awaited.remove(count)?.complete();
+      }
+    }
     return timer;
+  }
+
+  /// Completes once [count] timers have been scheduled in total.
+  ///
+  /// Wait on the CONDITION, never on a number of event-loop turns. A subject
+  /// that really opens a socket does not finish in microtasks, so a turn count
+  /// is a margin — and a margin is the whole complaint in claude-tasks #1 about
+  /// gates that fail one time in three. This completes exactly when the thing
+  /// being waited for happens, and the suite's own timeout catches a genuine
+  /// hang.
+  Future<void> whenScheduled(int count) {
+    if (scheduled.length >= count) return Future.value();
+    return (_awaited[count] ??= Completer<void>()).future;
   }
 
   List<FakeTimer> get pending => List.unmodifiable(_pending);
