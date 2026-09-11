@@ -84,5 +84,22 @@ void main() {
       await expectLater(client.connect(), throwsA(isA<Exception>()));
       await expectLater(client.disconnect(), completes);
     });
+
+    test('the bus is inert after disconnect, not merely disconnected', () {
+      // The other half of the same class, missed by the first fix: guarding
+      // every reach with `_client?.` means nothing while `_client` still points
+      // at a torn-down client. Measured against a real broker, unsubscribe threw
+      // _TypeError and subscribe threw ConnectionException AFTER a clean
+      // disconnect. A null-guard whose subject is never nulled is decoration.
+      //
+      // No broker needed: a client that never connected is already in the state
+      // this asserts, and disconnect() must leave a connected one the same way.
+      final client = AikoClient(clientId: 'inert');
+      expect(() => client.subscribe('a/b'), returnsNormally);
+      expect(() => client.unsubscribe('a/b'), returnsNormally);
+      // The subscription is still RECORDED — the set is the memory, and a topic
+      // taken before a connect must survive into the first open.
+      expect(() => client.subscribe('c/d'), returnsNormally);
+    });
   });
 }

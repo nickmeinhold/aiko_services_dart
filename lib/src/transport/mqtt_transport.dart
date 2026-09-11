@@ -520,6 +520,14 @@ class AikoClient implements MessageBus {
       live.onDisconnected = null;
       live.disconnect();
     }
+    // NULLED, not merely disconnected. Round 1 of this PR's cage-match guarded
+    // every `_mqtt` reach with `_client?.` and called that "fixing the class" —
+    // while leaving `_client` pointing at a torn-down client, so the guard
+    // passed and the call landed anyway. Measured after a real disconnect:
+    // `unsubscribe` threw _TypeError (mqtt_client nulls its own
+    // subscriptionsManager) and `subscribe` threw ConnectionException. A
+    // null-guard whose subject is never nulled is decoration.
+    _client = null;
     await _controller.close();
     await _transport.close();
   }
