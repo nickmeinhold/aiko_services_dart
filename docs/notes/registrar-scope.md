@@ -548,6 +548,16 @@ decide it silently.
   `:332-337`, where it is stored into `aiko.registrar` and never read. Chosen, documented,
   and queued for Andy rather than resolved unilaterally.
 
+  **CORRECTION, PR #24 cage-match (Kelvin):** the two arms above are not exhaustive, and
+  presenting them as though they were is a claim about the problem's shape that is wrong.
+  A THIRD arm exists — reconstruct the quantity CPython actually produces. On Linux
+  `time.monotonic()` is CLOCK_MONOTONIC, i.e. seconds since boot, which Dart can derive
+  from the host's boot time (`/proc/uptime`, or `sysctl kern.boottime` on macOS) plus a
+  wall clock. That would make our value directly COMPARABLE with a Python registrar's on
+  the same host, which is what the field is for and what neither chosen arm achieves.
+  Not built, and not assumed to work — the origin has to be measured against the running
+  container first. Tracked; the decision above stands until it is.
+
 * ~~**Nothing here has been run.**~~ Steps 1-3 have now been run against a live broker,
   and running them corrected this note twice (the LWT section, and the acceptance
   criterion) and turned up a live island defect and a missing signal. The claim now holds
