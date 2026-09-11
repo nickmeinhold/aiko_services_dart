@@ -127,37 +127,34 @@ final class CancelSearchTimer extends ElectionEffect {
   String toString() => 'CancelSearchTimer()';
 }
 
-/// Publish an EMPTY retained payload to the boot topic.
+/// Become the primary: clear the boot topic, take the retained will, THEN
+/// announce. **Three steps, ONE effect, because they are one transaction.**
 ///
-/// `registrar.py:186`, and its comment says why: *"Clear LWT, so this registrar
-/// doesn't receive another LWT on reconnect."* Without it, the previous
-/// primary's retained `(primary absent)` is still sitting on the topic and this
-/// process reads its own predecessor's death as news.
-final class ClearBootTopic extends ElectionEffect {
-  const ClearBootTopic();
-
-  @override
-  bool operator ==(Object other) => other is ClearBootTopic;
-
-  @override
-  int get hashCode => (ClearBootTopic).hashCode;
-
-  @override
-  String toString() => 'ClearBootTopic()';
-}
-
-/// Become the primary: take the retained will, THEN announce.
-///
-/// **The order inside this effect is the protocol and is not incidental.** The
-/// driver must (1) set the will to a retained `(primary absent)` and only then
-/// (2) publish the retained `(primary found …)`. Announcing first leaves a
-/// window in which a crash strands a retained `found` naming a dead process,
-/// and every peer that joins afterwards is told a corpse is primary — the exact
-/// failure that makes a will non-optional for a registrar.
+/// **The order is the protocol and is not incidental.** The driver must
+/// (1) publish an EMPTY retained payload to the boot topic — `registrar.py:186`,
+/// whose comment says why: *"Clear LWT, so this registrar doesn't receive
+/// another LWT on reconnect"*, without which the previous primary's retained
+/// `(primary absent)` is still sitting there and this process reads its own
+/// predecessor's death as news; (2) set the will to a retained
+/// `(primary absent)`; and only then (3) publish the retained
+/// `(primary found …)`. Announcing first leaves a window in which a crash
+/// strands a retained `found` naming a dead process, and every peer that joins
+/// afterwards is told a corpse is primary — the exact failure that makes a will
+/// non-optional for a registrar.
 ///
 /// Setting the will means RECONNECTING, because MQTT carries a will only in the
 /// CONNECT packet. Upstream does the same thing for the same reason
 /// (`message/mqtt.py:200-209`); it is MQTT's law rather than paho clumsiness.
+///
+/// **The clear used to be its own effect, and that split was a defect.** A
+/// promotion either completes or stands the role back down, and the only thing
+/// that stands it down is this effect's failure handler. With the clear outside
+/// it, a `TransportUnavailable` from a down link threw out of the drain, the
+/// announcement never ran, `onPrimaryFailed` never fired — and the process sat
+/// at `RegistrarRole.primary` having published NOTHING. Measured, not reasoned:
+/// role `primary`, actions `[]`. Merging is not tidiness; it is what makes the
+/// transaction boundary and the catch boundary the same boundary, so no future
+/// step can be added outside the handler by accident.
 final class AnnouncePrimary extends ElectionEffect {
   const AnnouncePrimary();
 
@@ -327,13 +324,6 @@ class RegistrarElection {
 
   List<ElectionEffect> _enterPrimary() {
     _role = RegistrarRole.primary;
-    // Clear BEFORE announcing, and announce only after the will is taken —
-    // see [ClearBootTopic] and [AnnouncePrimary]. This ordering is the whole
-    // reason effects are an ordered list rather than a set.
-    return [
-      PublishLifecycle(_role),
-      const ClearBootTopic(),
-      const AnnouncePrimary(),
-    ];
+    return [PublishLifecycle(_role), const AnnouncePrimary()];
   }
 }

@@ -297,6 +297,50 @@ void main() {
     );
   });
 
+  group('promoting while the link is down', () {
+    // REVISION 4 GOT THIS WRONG AND IMPLEMENTING IT IS WHAT FOUND IT.
+    //
+    // The design put the boot-topic clear OUTSIDE the promotion's try, arguing
+    // "a transient fails the promotion one step later anyway". There is no step
+    // later: the throw aborts the drain, so the announcement never runs, nothing
+    // calls onPrimaryFailed, and the process sits at `primary` having published
+    // NOTHING. Measured before the fix — role `primary`, actions `[]` — which is
+    // a role declared true by something other than the mechanism that makes it
+    // true, the exact class this whole design is named for.
+    test('stands back down instead of sitting at primary having said nothing',
+        () async {
+      final bus = FakeBus();
+      final timers = FakeTimers();
+      final process = _process(
+        bus,
+        searchTimeout: const Duration(seconds: 30),
+        timers: timers,
+      );
+      await process.connect();
+      await bus.setTransport(up: false);
+      bus.clear();
+
+      final failures = <Object>[];
+      final watch = process.promotionFailures.listen(failures.add);
+
+      await _deliverAbsent(bus);
+      await settle();
+
+      // NOT primary. A role nothing backs is worse than no role: a caller keying
+      // on it reports a registrar that is not discoverable and never will be.
+      expect(process.role, isNot(RegistrarRole.primary));
+      // And the failure was REPORTED as a transient, not swallowed — the type is
+      // what lets the layer above tell a down link from a bug.
+      expect(failures, hasLength(1));
+      expect(failures.single, isA<TransportUnavailable>());
+      // Nothing reached the wire, so no half-promotion is stranded on the broker.
+      expect(bus.actions, isEmpty);
+
+      await watch.cancel();
+      await process.disconnect();
+    });
+  });
+
   group('leaving', () {
     test('disconnect cancels a search still in flight', () async {
       final bus = FakeBus();

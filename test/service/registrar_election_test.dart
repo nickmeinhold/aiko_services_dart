@@ -82,21 +82,16 @@ void main() {
       expect(election.role, RegistrarRole.primary);
       expect(effects, [
         PublishLifecycle(RegistrarRole.primary),
-        const ClearBootTopic(),
         const AnnouncePrimary(),
       ]);
     });
 
-    // ORDER IS PROTOCOL. Announcing before the will is taken leaves a window
-    // where a crash strands a retained `found` naming a dead process, and every
-    // later joiner is told a corpse is primary.
-    test('the boot topic is cleared BEFORE the announcement', () {
-      final effects = (RegistrarElection()..initialize()).onSearchTimeout(1);
-      final clear = effects.indexWhere((e) => e is ClearBootTopic);
-      final announce = effects.indexWhere((e) => e is AnnouncePrimary);
-      expect(clear, isNonNegative);
-      expect(announce, greaterThan(clear));
-    });
+    // ORDER IS PROTOCOL, and it is asserted where it can now be OBSERVED:
+    // `registrar_process_test`'s "takes the retained will BEFORE it announces"
+    // reads clear → will → announce off one ordered list across kinds. That was
+    // always the stronger of the two assertions — this one could only see the
+    // order of two effects, never the will-change sitting between them — and it
+    // is the only one left now that promotion is a single effect.
 
     test('a found while searching stands us down to secondary', () {
       final election = RegistrarElection()..initialize();
@@ -237,8 +232,6 @@ void main() {
       // ignore: prefer_const_constructors
       expect(CancelSearchTimer(), CancelSearchTimer());
       // ignore: prefer_const_constructors
-      expect(ClearBootTopic(), ClearBootTopic());
-      // ignore: prefer_const_constructors
       expect(AnnouncePrimary(), AnnouncePrimary());
       // ignore: prefer_const_constructors
       expect(DropRoster(), DropRoster());
@@ -253,7 +246,7 @@ void main() {
       );
 
       // And DIFFERENT effects must not collapse together.
-      expect(const ClearBootTopic(), isNot(const AnnouncePrimary()));
+      expect(const AnnouncePrimary(), isNot(const DropRoster()));
       expect(
         PublishLifecycle(RegistrarRole.primary),
         isNot(PublishLifecycle(RegistrarRole.secondary)),

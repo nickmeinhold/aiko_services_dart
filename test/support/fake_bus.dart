@@ -42,6 +42,16 @@ final class const WillChanged(final LastWill? will) extends BusAction {
 }
 
 class FakeBus implements MessageBus {
+  FakeBus();
+
+  /// A bus handed over already connected.
+  ///
+  /// For the consumers whose subject is a protocol state machine rather than a
+  /// lifecycle — an ECConsumer's snapshot framing, a services cache's two-topic
+  /// completion rule. Requiring those to drive a connection would be ceremony
+  /// that tests the fake; naming it here keeps the DEFAULT honest.
+  FakeBus.alreadyAttached() : _reach = const Attached();
+
   final _controller = StreamController<AikoMessage>.broadcast();
 
   /// Everything the bus was asked to do, in order and across kinds.
@@ -67,18 +77,17 @@ class FakeBus implements MessageBus {
   /// Topics that were unsubscribed.
   final List<String> unsubscribed = [];
 
-  /// Starts LIVE, because that is what every caller means by handing a bus to a
-  /// consumer: you are given a connected wire. Fourteen tests drive an
-  /// ECConsumer through `attach()`, which publishes, and none of them models a
-  /// connection — requiring one would be ceremony that tests the fake.
+  /// Starts [NotStarted], like a real bus.
   ///
-  /// Strict where it counts and lenient where it does not: this fake refuses
-  /// publishes AFTER [disconnect] and says nothing about the pre-connect
-  /// window. Use-after-teardown is the class that actually bit (a promotion
-  /// still publishing at a bus already torn down); publish-before-connect has
-  /// never hidden anything here, and a real caller cannot reach it — a process
-  /// awaits `connect()` before anything can attach.
-  var connected = true;
+  /// It did not used to. A fake that hands out a live wire nobody asked for is
+  /// MORE FORGIVING THAN THE REAL API, and a fake that is more forgiving hides
+  /// exactly the bugs it exists to catch — three times in this subsystem
+  /// already. Tests that legitimately begin with a connected bus say so, with
+  /// [FakeBus.alreadyAttached].
+  Reach _reach = const NotStarted();
+
+  @override
+  Reach get reach => _reach;
 
   final _transport = StreamController<bool>.broadcast();
 
@@ -88,19 +97,61 @@ class FakeBus implements MessageBus {
   @override
   Stream<bool> get transportUp => _transport.stream;
 
-  /// Drops or restores the link, as a broker outage would.
-  Future<void> setTransport({required bool up}) async {
+  bool? _reported;
+
+  void _report({required bool up}) {
+    if (_transport.isClosed || _reported == up) return;
+    _reported = up;
     _transport.add(up);
+  }
+
+  /// Drop the link, as a broker outage would. Lands in [Detached].
+  ///
+  /// The real bus arms a timer here. This fake models the supervisor as a
+  /// METHOD instead — [restoreLink] — so a test drives recovery explicitly
+  /// rather than waiting out a backoff.
+  Future<void> setTransport({required bool up}) async {
+    if (up) {
+      await restoreLink();
+    } else {
+      _reach = const Detached();
+      _report(up: false);
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  /// Perform what the supervisor's next `_open()` would: re-attach carrying the
+  /// current will, with every recorded subscription restored.
+  Future<void> restoreLink() async {
+    _reach = const Attached();
+    _report(up: true);
     await Future<void>.delayed(Duration.zero);
   }
 
   @override
-  Future<void> connect() async => connected = true;
+  Future<void> connect() async {
+    switch (_reach) {
+      case Retired():
+        throw StateError(
+          'cannot connect: this bus is retired — construct a new AikoClient',
+        );
+      case Attached():
+        return;
+      case Detached():
+        throw const TransportUnavailable('connect');
+      case NotStarted():
+        _reach = const Attached();
+        _report(up: true);
+    }
+  }
 
   final Map<String, Completer<void>> _awaited = {};
 
   @override
   void subscribe(String topic) {
+    if (_reach case Retired()) {
+      throw StateError('cannot subscribe: this bus is retired');
+    }
     subscribed.add(topic);
     final waiter = _awaited.remove(topic);
     if (waiter != null && !waiter.isCompleted) waiter.complete();
@@ -118,6 +169,9 @@ class FakeBus implements MessageBus {
 
   @override
   void unsubscribe(String topic) {
+    if (_reach case Retired()) {
+      throw StateError('cannot unsubscribe: this bus is retired');
+    }
     unsubscribed.add(topic);
     subscribed.remove(topic);
   }
@@ -127,14 +181,23 @@ class FakeBus implements MessageBus {
   @override
   LastWill? get will => _will;
 
-  /// A real client throws `ConnectionException` from `publishMessage` when the
-  /// socket is not up. A fake that silently accepts the publish is MORE
-  /// FORGIVING THAN THE REAL API, and a fake that is more forgiving hides
-  /// exactly the bugs it exists to catch — this one hid a promotion that kept
-  /// publishing at a bus `disconnect()` had already torn down.
-  void _requireConnected(String what) {
-    if (!connected) {
-      throw StateError('$what on a bus that is not connected');
+  /// Refuse exactly as [AikoClient] does, with the same TYPES.
+  ///
+  /// The type is the whole point: a down link is [TransportUnavailable] and a
+  /// caller error is [StateError], so the election above can tell a bug from
+  /// weather. A fake that threw one shape for both would make that distinction
+  /// untestable — and this fake has already hidden a promotion that kept
+  /// publishing at a bus `disconnect()` had torn down.
+  void _requirePublishable(String what) {
+    switch (_reach) {
+      case Attached():
+        return;
+      case Detached():
+        throw TransportUnavailable(what);
+      case NotStarted():
+        throw StateError('cannot $what: connect() has not run');
+      case Retired():
+        throw StateError('cannot $what: this bus is retired');
     }
   }
 
@@ -145,7 +208,7 @@ class FakeBus implements MessageBus {
     Object? params, {
     bool retain = false,
   }) {
-    _requireConnected('send($topic)');
+    _requirePublishable('send to $topic');
     final message = SentMessage(topic, command, params, retain: retain);
     actions.add(message);
     sent.add(message);
@@ -153,7 +216,7 @@ class FakeBus implements MessageBus {
 
   @override
   void clearRetained(String topic) {
-    _requireConnected('clearRetained($topic)');
+    _requirePublishable('clear the retained payload on $topic');
     actions.add(RetainedCleared(topic));
   }
 
@@ -190,22 +253,37 @@ class FakeBus implements MessageBus {
       // live registrar permanently deaf (Tesla, round 3). Third time a fake
       // being kinder than the API hid a real bug in this PR.
       _will = next;
-      connected = false;
+      _reach = const Detached();
+      _report(up: false);
       throw failure;
     }
     // Mirrors AikoClient exactly: the short-circuit is about not paying a
     // reconnect for an ALREADY-ARMED will, so it may only fire when something is
     // armed. Keeping the fake's rule looser than the real one is how the driver
     // test passed over a defect that leaves a live registrar deaf forever.
-    if (next == _will && connected) return;
-    _will = next;
-    actions.add(WillChanged(next));
+    switch (_reach) {
+      case Retired():
+        throw StateError('cannot set a will: this bus is retired');
+      case NotStarted():
+        _will = next;
+        return;
+      case Detached():
+        // RECORD AND REFUSE, exactly as the real bus does: the supervisor's next
+        // open carries it, and opening here would be a second opener.
+        _will = next;
+        throw const TransportUnavailable('set a will while the link is down');
+      case Attached():
+        if (next == _will) return;
+        _will = next;
+        actions.add(WillChanged(next));
+    }
   }
 
   @override
   Future<void> disconnect() async {
-    connected = false;
+    _reach = const Retired();
     await _controller.close();
+    await _transport.close();
   }
 
   /// Delivers an inbound message as if the broker had.

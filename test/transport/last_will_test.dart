@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
@@ -83,12 +81,26 @@ void main() {
         port: 1,
         clientId: 'teardown',
       );
-      // SocketException specifically, NOT isA<Exception>(). Tesla, round 2: the
-      // bug this test exists for was a TypeError from a bare `!`, and TypeError
-      // is an Error, not an Exception — so a loose matcher here would have
-      // blessed the very failure the test is for, and would equally bless a
-      // hand-thrown decoy.
-      await expectLater(client.connect(), throwsA(isA<SocketException>()));
+      // TransportUnavailable specifically, NOT isA<Exception>(), and its message
+      // must NAME the SocketException underneath. Tesla, round 2: the bug this
+      // test exists for was a TypeError from a bare `!`, and TypeError is an
+      // Error, not an Exception — so a loose matcher would have blessed the very
+      // failure the test is for, and would equally bless a hand-thrown decoy.
+      //
+      // The TYPE changed with revision 4 and the proposition did not. Every
+      // mechanism-open failure now wears one type so the election can tell a bug
+      // from weather; checking the wrapped text is what keeps this an assertion
+      // about the REAL failure rather than about the wrapper.
+      await expectLater(
+        client.connect(),
+        throwsA(
+          isA<TransportUnavailable>().having(
+            (failure) => failure.action,
+            'action',
+            contains('SocketException'),
+          ),
+        ),
+      );
       await expectLater(client.disconnect(), completes);
       // And prove the teardown left the bus INERT rather than merely
       // non-throwing: `completes` alone cannot tell a guard that worked from one

@@ -187,8 +187,39 @@ bug from weather.
 | call site | after | why |
 |---|---|---|
 | `registrar_process` `AnnouncePrimary` (`:350-370`) | `on TransportUnavailable` **before** `on Object` | the election instrument this type exists for |
-| `registrar_process` `ClearBootTopic` (`:347`) | uncaught, documented | outside the try; a transient fails the promotion one step later anyway |
+| `registrar_process` the boot-topic clear | **inside** `AnnouncePrimary`'s try | see the finding below — this row used to say "uncaught, outside the try" and it was wrong |
 | `services_cache`, `ec_consumer`, `bus_process` | uncaught, type changed only | all crashed before; the new type reads better in a stack trace |
+
+### FINDING AGAINST THIS REVISION, found by implementing it
+
+Revision 4 left the boot-topic clear outside the promotion's try and justified it
+in one sentence: *"a transient fails the promotion one step later anyway."*
+**There is no step later.** The throw propagates out of `_perform`, out of
+`_drainPending`'s loop, and out of `_apply` — which every caller invokes through
+`unawaited`. So `AnnouncePrimary` never runs, nothing calls `onPrimaryFailed`,
+and the only handler that can stand the role back down is never reached.
+
+Measured on a `Detached` bus rather than argued: **`role = primary`,
+`actions = []`.** A registrar that believes it is primary having published
+nothing — no clear, no will, no announcement — with an unhandled async error
+beside it. That is a state declared true by something other than the mechanism
+that makes it true, which is the class this document is named for, arriving in
+the one place six rounds never looked: the *caller* of the transport, not the
+transport.
+
+**The fix is the split, not the guard.** Catching inside a `ClearBootTopic` arm
+does not work — `AnnouncePrimary` is still sitting in `_pending` and the drain
+announces anyway, so the cheap fix needs an unwind step, which is the tell that
+the boundary is in the wrong place. `ClearBootTopic` had exactly one emitter and
+no independent meaning; it is now folded into `AnnouncePrimary`, so the
+transaction boundary and the catch boundary are the same boundary and a future
+fourth step cannot be added outside the handler by accident. The type is deleted,
+which keeps this revision's own template: remove the cause rather than guard it.
+
+The ordering assertion did not weaken. `registrar_election_test`'s version could
+only see two effects' indices; `registrar_process_test`'s "takes the retained
+will BEFORE it announces" reads clear → will → announce off one ordered list
+across kinds, and was always the stronger of the two.
 
 ## 3b. `subscribe` / `unsubscribe` — one list again
 

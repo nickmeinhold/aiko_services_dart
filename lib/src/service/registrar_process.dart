@@ -8,8 +8,8 @@
 ///
 /// * [AnnouncePrimary] needs a RETAINED publish — `MessageBus.send` had no
 ///   `retain`, so every publish this port could make was `retain: false`.
-/// * [ClearBootTopic] needs an EMPTY retained publish — `send` runs `generate`,
-///   and no command name encodes to zero bytes.
+/// * clearing the boot topic needs an EMPTY retained publish — `send` runs
+///   `generate`, and no command name encodes to zero bytes.
 /// * and promotion changes the will, which MQTT permits only in a CONNECT
 ///   packet, so it needs a reconnect that does not deafen the process.
 ///
@@ -168,7 +168,7 @@ class RegistrarProcess {
   /// yet been told, and stays that way for as long as a socket takes.
   ///
   /// This was found by a probe killing itself on `role == primary` and catching
-  /// a broker that had received the empty [ClearBootTopic] and nothing else. A
+  /// a broker that had received the empty boot-topic clear and nothing else. A
   /// caller keying on the role reports a registrar that is not yet
   /// discoverable; there is no such window upstream, so there is no upstream
   /// signal to port. Hence a new one, named for what it actually witnesses.
@@ -351,15 +351,14 @@ class RegistrarProcess {
         _timer?.cancel();
         _timer = null;
 
-      case ClearBootTopic():
-        bus.clearRetained(bootTopic);
-
       case AnnouncePrimary():
         try {
-          // Will FIRST, announcement second, and the gap between them is the
-          // whole point. Announcing first leaves a window in which a crash
-          // strands a retained `found` naming a dead process, and every peer
-          // joining afterwards is told a corpse is primary.
+          // Clear, will, announce — in that order, inside ONE try, because they
+          // are one transaction. The gap between the will and the announcement
+          // is the whole point: announcing first leaves a window in which a
+          // crash strands a retained `found` naming a dead process, and every
+          // peer joining afterwards is told a corpse is primary.
+          bus.clearRetained(bootTopic);
           await bus.setWill(primaryWill);
           bus.send(bootTopic, 'primary', [
             'found',
@@ -370,9 +369,15 @@ class RegistrarProcess {
           if (!_announcements.isClosed) _announcements.add(topicPath);
         } on Object catch (error) {
           // `registrar.py:198-200` catches here and stands the registrar back
-          // down. Anything thrown between taking the will and publishing leaves
-          // an island holding a primary that never spoke, so the ROLE has to go
-          // back rather than the error go up.
+          // down. Anything thrown between clearing the topic and publishing
+          // leaves an island holding a primary that never spoke, so the ROLE has
+          // to go back rather than the error go up.
+          //
+          // A TRANSIENT reaches here like anything else and is handled the same
+          // way. That is deliberate: standing back down and re-searching is the
+          // correct response to "the broker is unreachable right now", and the
+          // supervisor beneath us — not this election — owns getting the link
+          // back. The retry is a cheap local throw that never touches the wire.
           if (!_promotionFailures.isClosed) _promotionFailures.add(error);
           _pending.addAll(_election.onPrimaryFailed());
         }
