@@ -497,7 +497,19 @@ class AikoClient implements MessageBus {
     await _updates?.cancel();
     _updates = null;
     live.disconnect();
-    await _open();
+    // If the replacement socket cannot be opened, leave NOTHING usable behind.
+    // `_open` assigns `_client` only on success, so without this the field still
+    // points at the client we just tore down while `will` reports the new will —
+    // a corpse wearing a live type signature (Carnot, round 2). Nulling makes
+    // the bus inert, which is the same contract `disconnect` now honours, and
+    // lets the caller's promotion-failure path be the only story.
+    _client = null;
+    try {
+      await _open();
+    } on Object {
+      _reportTransport(up: false);
+      rethrow;
+    }
     _reportTransport(up: true);
   }
 
