@@ -10,8 +10,7 @@
 >
 > **Two step-1 items remain open, for different reasons.** `ServiceFilter`'s tag matching
 > is simply unwritten. Snapshot ADMISSION is harder: a cage-match established over three
-> rounds that a consumer cannot tell the registrar's frame from a peer's on ADR-023's
-> unauthenticated bus, and that no arrangement of local flags fixes it — each guard
+> rounds that a consumer cannot tell the registrar's frame from a peer's on the bus as it stands today, and that no arrangement of local flags fixes it — each guard
 > closed one instance and opened another. That is a design question, tracked separately,
 > and deliberately NOT patched further here. See *"Snapshot admission"* below.
 >
@@ -404,7 +403,7 @@ session will otherwise re-derive it.
 
 `ServicesCache` receives its snapshot on `{our path}/registrar_share`. That topic is not
 secret: it is derived from our own topic path, and the registrar BROADCASTS it in
-`(sync <topic_response>)` on its own `/out`. On ADR-023's unauthenticated bus, any peer
+`(sync <topic_response>)` on its own `/out`. On the bus as it stands today, any peer
 can publish a frame onto it.
 
 Three guards were tried and each closed one instance while opening another:

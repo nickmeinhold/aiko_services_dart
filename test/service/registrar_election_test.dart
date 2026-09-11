@@ -183,7 +183,7 @@ void main() {
 
     // `registrar.py:280-282`. Faithful, and a wire-reachable way to make a
     // healthy registrar forget every service it knows — any peer can publish
-    // `(primary absent)` on ADR-023's unauthenticated bus. Reproduced because
+    // `(primary absent)` on the bus as it stands today. Reproduced because
     // diverging unilaterally is an interop change; recorded because it is a
     // finding for upstream.
     test(

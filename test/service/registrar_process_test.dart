@@ -235,8 +235,11 @@ void main() {
       final process = _process(bus, searchTimeout: const Duration(seconds: 30));
       await process.connect();
 
-      // Every one of these is reachable by any peer on ADR-023's
-      // unauthenticated bus, and none of them is a valid announcement.
+      // Every one of these is reachable by any peer on the bus as it stands
+      // TODAY, and none of them is a valid announcement. (Attribution fixed:
+      // ADR-023 describes that openness in its CONTEXT and RULES IT CLOSED —
+      // decision 2 mints P12, default-deny per method. Citing it as authority
+      // for a permanently open bus reverses it.)
       await bus.deliver(_bootTopic, 'primary', const ['found']);
       await bus.deliver(_bootTopic, 'primary', const ['found', 'a', 'b']);
       await bus.deliver(_bootTopic, 'primary', const [

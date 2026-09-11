@@ -117,3 +117,42 @@ none chosen here:
 
 All three are wire changes and therefore Andy's to choose. Faces 1-3 are drafted in
 `registrar-findings-for-upstream.md`; this note is the shape behind them.
+
+---
+
+## Appendix: a premise three cage-match rounds never questioned
+
+Surfaced by a peer session working from another repo — which is the point, because it could
+not have come from inside.
+
+This repo cites **ADR-023** eight times as the authority for "the bus is unauthenticated, any
+client may invoke any public method", and several hazards above are reproduced faithfully on
+that basis. Two things are wrong with the citation:
+
+1. **ADR-023 does not exist in this repo.** The highest ADR committed here is 0003. It lives
+   in the Python `aiko_services` repo, at `constitution/adr/ADR-023_GuardedEvalDefaultDeny.md`.
+   A cross-repo normative reference cited as though it were local is a dangling premise.
+
+2. **We have been quoting its CONTEXT as though it were its DECISION.** The sentence we
+   paraphrase is real and appears in the ADR — in the paragraph describing *the problem*.
+   Decision 2 is the opposite: *"Default-deny method exposure. Every public API is deny-all
+   by default, per method… it closes the arbitrary-invocation hole."* It mints **P12**. So
+   the document we cite as authority for the hole being permanently open is the document that
+   rules it shut.
+
+Our factual statements stay true — the bus IS open today, and the enforcement is unshipped.
+What was wrong is the ROLE the citation played: an open bus as an accepted end state rather
+than an unfinished obligation. That changes "reproduced faithfully because diverging would be
+an interop change" into a conformance question the port owes an answer to (see claude-tasks
+#3760).
+
+ADR-023 also explicitly separates two axes the word "ACL" conflates: what is *offered*
+(exposure — ADR-023 itself) and who may *invoke* it (authority — candidate CP-C, still open,
+and whose rationale rejects bolting ACLs onto an open dispatch bus). A broker-level
+mTLS + mosquitto-ACL design is a THIRD axis again — topic-level reachability. Worth deciding
+on purpose rather than by proximity.
+
+**Why this matters beyond the citation:** three cage-match rounds, four model families, and
+none of them questioned it — because every reviewer was handed the premise in the same
+prompt. A panel interrogates claims within a premise bundle and is structurally incapable of
+interrogating the bundle. The correction came from someone who was not in the thread.

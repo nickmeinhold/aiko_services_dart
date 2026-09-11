@@ -91,7 +91,7 @@ neither for now? We are happy to write conformance vectors for whichever shape y
 on. We have the reproductions and they run against a throwaway broker in a few seconds.
 
 Also worth saying plainly: none of this is reachable in a deployment where the broker is
-authenticated, and ADR-023 already treats the unauthenticated bus as the threat model, so
+authenticated, and ADR-023 already rules the arbitrary-invocation hole CLOSED by default-deny (P12), so
 you may well have all three filed under "that is what the sandbox is for".
 
 ---
