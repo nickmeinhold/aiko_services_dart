@@ -28,6 +28,7 @@ library;
 import 'dart:async';
 
 import '../dispatch/topic_router.dart';
+import '../time/create_timer.dart';
 import '../transport/mqtt_transport.dart';
 import 'bus_process.dart' show registrarBootTopic;
 import 'process_identity.dart';
@@ -55,6 +56,7 @@ class RegistrarProcess {
     int brokerPort = 1883,
     MessageBus? bus,
     Duration searchTimeout = RegistrarElection.defaultSearchTimeout,
+    CreateTimer createTimer = Timer.new,
   }) {
     // Service `0` is the PROCESS; the registrar is a service that process
     // hosts, and upstream's own announcement names a service path — the live
@@ -78,6 +80,7 @@ class RegistrarProcess {
             will: LastWill.processAbsent(topicPath.processPath),
           ),
       election: RegistrarElection(searchTimeout: searchTimeout),
+      createTimer: createTimer,
     );
   }
 
@@ -87,7 +90,12 @@ class RegistrarProcess {
     required this.topicPath,
     required this.bus,
     required this._election,
+    required this._createTimer,
   });
+
+  /// How the search timer is made. See [CreateTimer] for why this is a seam.
+  final CreateTimer _createTimer;
+
 
   /// This registrar's service address, as published in the announcement.
   final ServiceTopicPath topicPath;
@@ -321,7 +329,7 @@ class RegistrarProcess {
 
       case StartSearchTimer(:final timeout, :final epoch):
         _timer?.cancel();
-        _timer = Timer(timeout, () {
+        _timer = _createTimer(timeout, () {
           _timer = null;
           // Same rule as [_onAnnouncement]: a timer that fires on a process
           // which has begun leaving must not move the election either. Checked

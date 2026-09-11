@@ -1,6 +1,19 @@
 # The socket is a handle; the intent is the state
 
-> **Status: REVISION 4, round-6 folded. Untempered at THIS delta.**
+> **Status: REVISION 4, round-6 folded. IMPLEMENTING.**
+>
+> **The round-6 delta was NOT struck again, and that is a recorded choice.**
+> `_enterDetached()`, R1, R2 and R3 were folded in after round 6 and never went
+> back through `/design-temper`. The call: **proceed to implementation and let
+> `/cage-match` catch residuals.** Three reasons, none of them "we were tired".
+> The delta is three small mechanisms authored *in response to* findings all four
+> families already agreed on, so a seventh round would re-litigate a settled
+> premise. A design temper strikes a sketch; a code cage-match strikes bytes, and
+> every remaining question here — does the lock actually hold across the await,
+> does the door actually get walked — is a question about bytes. And Carnot's own
+> crux says it outright: *review documents name closure; probes and tests own
+> closure.* Striking the sketch again would be the one move that cannot close
+> anything.
 >
 > Round 6 struck revision 4's first draft: **0 DISSOLVE, 4 RECAST**, all four
 > deletions audited **SAFE by every family**, and three findings — instance 6

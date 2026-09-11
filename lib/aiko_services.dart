@@ -22,3 +22,6 @@ export 'src/service/registrar_process.dart';
 export 'src/service/services_cache.dart';
 export 'src/share/ec_consumer.dart';
 export 'src/share/share_event.dart';
+
+/// The one injectable seam for time.
+export 'src/time/create_timer.dart';

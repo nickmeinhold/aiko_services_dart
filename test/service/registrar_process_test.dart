@@ -4,6 +4,7 @@ import 'package:aiko_services/aiko_services.dart';
 import 'package:test/test.dart';
 
 import '../support/fake_bus.dart';
+import '../support/fake_timers.dart';
 
 /// Let every microtask-bound effect finish.
 ///
@@ -23,11 +24,13 @@ const _bootTopic = 'aiko/service/registrar';
 RegistrarProcess _process(
   FakeBus bus, {
   Duration searchTimeout = const Duration(milliseconds: 40),
+  FakeTimers? timers,
 }) => RegistrarProcess(
   host: 'testhost',
   processId: 7,
   bus: bus,
   searchTimeout: searchTimeout,
+  createTimer: timers == null ? Timer.new : timers.create,
 );
 
 /// An announcement from SOMEBODY ELSE — a different host, so nothing here can
@@ -111,15 +114,20 @@ void main() {
 
     test('the timer does not promote us after we stood down', () async {
       final bus = FakeBus();
-      final process = _process(bus);
+      final timers = FakeTimers();
+      final process = _process(bus, timers: timers);
       await process.connect();
+      expect(timers.hasPending, isTrue, reason: 'the search armed a timer');
+
       await _deliverFound(bus);
       await settle();
 
-      // Outlive the search timeout. A driver that handed back a stale epoch —
-      // or none — would promote here, onto an island that already has a
-      // primary.
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      // Standing down DISARMS the search rather than leaving a timer to be
+      // refused later. Asserting on the timer rather than outwaiting it is what
+      // separates "cancelled" from "fired and correctly ignored" — the wall-clock
+      // version could not tell those apart, so it read as a test of the epoch
+      // guard while actually testing the cancel.
+      expect(timers.hasPending, isFalse);
       expect(process.role, RegistrarRole.secondary);
       await process.disconnect();
     });
@@ -147,11 +155,12 @@ void main() {
 
     test('promotes when nothing answers before the timer', () async {
       final bus = FakeBus();
-      final process = _process(bus);
+      final timers = FakeTimers();
+      final process = _process(bus, timers: timers);
       await process.connect();
       expect(process.role, RegistrarRole.primarySearch);
 
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      timers.fireNext();
       await settle();
 
       expect(process.role, RegistrarRole.primary);
@@ -291,18 +300,20 @@ void main() {
   group('leaving', () {
     test('disconnect cancels a search still in flight', () async {
       final bus = FakeBus();
-      final process = _process(bus);
+      final timers = FakeTimers();
+      final process = _process(bus, timers: timers);
       await process.connect();
       expect(process.role, RegistrarRole.primarySearch);
+      expect(timers.hasPending, isTrue);
 
       await process.disconnect();
       bus.clear();
 
-      // Outlive the search timeout. A timer left armed promotes a process that
-      // has already LEFT, publishing a retained announcement that names it —
-      // the exact corpse-is-primary state the retained will exists to prevent,
-      // arrived at without anybody dying.
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      // A timer left armed promotes a process that has already LEFT, publishing
+      // a retained announcement that names it — the corpse-is-primary state the
+      // retained will exists to prevent, arrived at without anybody dying.
+      // Read directly: the timer is GONE, not merely harmless when it fires.
+      expect(timers.hasPending, isFalse);
       await settle();
 
       expect(bus.actions, isEmpty);
@@ -364,9 +375,11 @@ void main() {
       final bus = FakeBus()
         ..setWillDelay = const Duration(milliseconds: 60)
         ..failSetWillWith = StateError('reopen failed');
+      final timers = FakeTimers();
       final process = _process(
         bus,
         searchTimeout: const Duration(milliseconds: 30),
+        timers: timers,
       );
       await process.connect();
 
@@ -376,8 +389,23 @@ void main() {
       await process.disconnect();
       final roleOnLeaving = process.role;
 
-      // Outlive the search timer the failed promotion armed during the drain.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      // READ the two mechanisms separately, which outwaiting a Duration cannot.
+      //
+      // `scheduled` counts every timer ever ASKED for, so two of them is the
+      // proof the drain armed one AFTER disconnect's first cancel — the state
+      // this test exists to construct, and which nothing previously verified was
+      // ever reached.
+      expect(
+        timers.scheduled,
+        hasLength(2),
+        reason: "the failed promotion's onPrimaryFailed armed a second search",
+      );
+      // And it is GONE, because disconnect cancels a second time after the
+      // drain. That cancel is what actually defends this path; the `_leaving`
+      // check inside the callback is a second line for a real-event-loop race
+      // that fake time cannot construct. The wall-clock version could not tell
+      // those two apart — it saw only that the role had not moved.
+      expect(timers.hasPending, isFalse);
       await settle();
 
       expect(
