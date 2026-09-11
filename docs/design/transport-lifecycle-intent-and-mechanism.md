@@ -668,6 +668,52 @@ parity in prose and were struck for it; the suite is the fold.
   → 2 primaries, `(path, timeStarted)` → 1, and own-residue after a demotion is
   still ignored, so the green is not a filter that never fires.
 
+## Measured against the IMPLEMENTATION
+
+`spike/transport-lifecycle/probe_lifecycle.sh` — an isolated mosquitto on a spare
+port (the island's broker has two dependents; an instrument must not damage the
+room it shares), killed and restarted under the probe. **10/10 arms pass**, and
+the probe is a real instrument: disabling the single door's `_scheduleReconnect`
+turns three arms red and the driver exits 1.
+
+- **IDLE LIVENESS — Attached again 611ms after the broker returned, with nothing
+  calling `connect()`.** This is the cost round 5 named and the arm Option B was
+  most accused of not being able to serve.
+- A topic subscribed while `Detached` received traffic 4ms after recovery.
+- `send` and `setWill` on `Detached` are `TransportUnavailable`, and the will
+  recorded while down is the one the reopened socket carries.
+- Backoff `[1,2,4,8,16,32,64,120,120,120]` — driven through the production
+  `_open()` really failing against a refusing port, in
+  `test/transport/supervisor_test.dart`, with five must-fail mutations each
+  measured red.
+
+### Two corrections to this document's own verification section
+
+**1. The `connectionStatus` conjunct is NOT proven load-bearing, and the claim
+above that it is "reproduced on demand" was true of the five-state model only.**
+`Dipped` existed so a handle could outlive its connection; Option B deleted it,
+so `_open` is the only installer and `_enterDetached` the only remover — and the
+remover runs in the same callback that flips the status. Measured: an arm polling
+`reach` at 1ms passed IDENTICALLY with the conjunct deleted, twice. A check whose
+disabled value equals its success value cannot report its own absence, so it was
+removed rather than kept as a green nobody can cash. **The conjunct stays**, on a
+narrower and honest claim: it makes the invariant structural rather than
+dependent on every future path remembering to null the handle.
+
+**2. `transportUp` is now edge-triggered, which this design did not specify.**
+The supervisor retries forever, and every failed attempt walks the door that
+reports down — so level-triggered, `BusProcess` drops the registrar and resets
+the ladder at 1s, 2s, 4s, forever. Taking ownership of reconnection is what made
+this load-bearing.
+
+### Not yet covered
+
+**The R3 lock has no arm against the implementation.** Two `onDisconnected`
+events during one in-flight `_open()` needs the callback reachable from a test,
+and `_build` installs it privately. The design's red/green was a spike harness,
+not this code. `_attempting` dropped from `_recoveryOwned` currently turns
+nothing red — recorded as a gap, not cited as covered.
+
 ## Appendix: considered and not taken
 
 **`autoReconnect = true`** (revisions 1–3). Removed by unanimous round-5 verdict;
