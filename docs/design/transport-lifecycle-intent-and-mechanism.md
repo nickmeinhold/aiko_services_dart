@@ -1,6 +1,11 @@
 # The socket is a handle; the intent is the state
 
-> **Status: REVISION 4, written against Option B. Untempered at this revision.**
+> **Status: REVISION 4, round-6 folded. Untempered at THIS delta.**
+>
+> Round 6 struck revision 4's first draft: **0 DISSOLVE, 4 RECAST**, all four
+> deletions audited **SAFE by every family**, and three findings — instance 6
+> (`Detached` proxying a control loop), a false one-opener rule, and a supervisor
+> that could race itself. All three are folded here.
 >
 > Rounds 1–4 hardened a five-state model on a premise nobody had chosen:
 > `autoReconnect = true`, so the MQTT package owns socket recovery. Round 5 put
@@ -94,7 +99,7 @@ Duration _backoff = _backoffMin;
 |---|---|---|---|---|
 | F | F | — | `NotStarted` | call `connect()` |
 | F | T | yes | `Attached` | publish |
-| F | T | no | `Detached` | **nothing — the supervisor owns recovery** |
+| F | T | no | `Detached` | **nothing — recovery is already armed (§5 R2)** |
 | T | — | — | `Retired` | nothing, ever |
 
 **`Dipped` is gone.** It existed to name a live handle whose wire was down while
@@ -248,15 +253,26 @@ Future<void> connect() => _gate(() async {
 });
 
 Future<void> _reopen(MqttServerClient live) async {
-  _retire(live);
-  await _open();                         // ONE attempt; on failure the supervisor takes over
+  _discard(live);
+  _client = null;
+  await _open();                         // ONE attempt; _open's catch arms the
+                                         // supervisor through §5's single door
 }
 
-void _retire(MqttServerClient live) {
-  live.onDisconnected = null;            // disarm before disconnect, or our own
-  live.onConnected = null;               // teardown reports as an island event
-  live.disconnect();
-  _client = null;
+/// Disarm and drop ONE client object. Deliberately does NOT touch `_client` or
+/// arm recovery — those are `_enterDetached`'s job (§5, R2), and keeping them
+/// apart is what lets `_open` discard a failed *candidate* without pretending
+/// the installed socket died.
+void _discard(MqttServerClient client) {
+  client.onDisconnected = null;          // disarm before disconnect, or our own
+  client.onConnected = null;             // teardown reports as an island event
+  client.disconnect();
+}
+
+void _onLinkLost() {                     // wired to onDisconnected
+  final live = _client;
+  if (live != null) _discard(live);
+  _enterDetached();                      // the same single door
 }
 ```
 
@@ -266,54 +282,134 @@ same rule as `setWill`: **callers state intent; the supervisor performs.**
 
 ## 5. The supervisor — one loop, and it is ours
 
-> **THE SINGLE RULE: `_open()` is called from exactly two places — the first
-> `connect()`, and the supervisor. Nothing else ever opens a socket.**
+> **TWO RULES, both true as written. Revision 4's first draft printed one rule
+> that was false, and all four families counted the call sites and caught it.**
+>
+> **R1 — ONE OPENER FUNCTION.** `_open()` is the only function that ever builds a
+> socket. It has **three** call sites — the first `connect()`, `_reopen()` from a
+> will change, and the supervisor — and it runs **only inside the gate**, so at
+> most one open is ever in flight. `_reopen` retires before it opens, so no two
+> sockets coexist.
+>
+> **R2 — ONE RECOVERY OWNER.** `Detached` **implies** an armed recovery, always,
+> and that is enforced at the single door below rather than asserted in a table.
 
-Revision 3's §5a proved two reconnect policies were disjoint. That argument is
-deleted, not weakened: **there is one policy.**
+Revision 4's first draft claimed *"`_open()` is called from exactly two places"*
+and it has three. That false sentence is what hid the next finding from its own
+author: **counting stopped because the rule said the count was done.**
+
+### Instance 6, and the door that kills it
+
+Tesla, round 6: ***"A comment is not a timer."*** The first draft's §5c table said
+`Detached`'s owner was *"the supervisor, always"* and §8 said a failed first
+`connect()` *"starts the supervisor"* — and **no code did either**.
+`_scheduleReconnect` was reachable only from `onDisconnected`, which `_retire`
+disarms before its own teardowns.
+
+That is **the sixth instance of this design's named class**, and Tesla located it
+exactly: `reach == Detached` is `_started && !connected`, which is **not**
+`_retry != null`. *A local value proxying a control loop.*
+
+**And nothing rescues it, measured rather than hoped**
+(`spike/autoreconnect-off/probe_failed_connect.dart`): `onDisconnected` **does not
+fire on a failed `connect()`** — the attempt throws `SocketException`, the state
+goes to `faulted`, and the callback stays silent. Round 5's probe measured the
+drop of a *live* socket and revision 4 leaned it on an adjacent proposition. So
+after a failed first connect or a failed will-change reopen, **nothing anywhere
+arms recovery** and the bus is deaf forever: the round-3 deadlock, with a timer
+that was never armed in place of `_will == next`.
+
+The fix is the same move that killed the other five — **make the state a
+recording of what the mechanism did**, through one door:
 
 ```dart
 static const _backoffMin = Duration(seconds: 1);
 static const _backoffMax = Duration(seconds: 120);
 
-void _onLinkLost() {                     // wired to onDisconnected
-  final live = _client;
-  if (live != null) _retire(live);
-  _scheduleReconnect();
+Timer? _retry;
+bool _attempting = false;
+Duration _backoff = _backoffMin;
+
+/// Recovery is OWNED while a timer is pending or an attempt is in flight.
+/// Both halves matter — see R3 below.
+bool get _recoveryOwned => _retry != null || _attempting;
+
+/// THE SINGLE DOOR INTO `Detached`. Every path that loses or fails to build a
+/// socket comes through here, so `Detached` cannot exist without an owner.
+void _enterDetached() {
+  _client = null;
+  _reportTransport(up: false);          // every path, not just the callback
+  if (!_closed && _started) _scheduleReconnect();
 }
 
 void _scheduleReconnect() {
-  if (_closed || _retry != null) return;
+  if (_closed || _recoveryOwned) return;
   _retry = Timer(_backoff, () async {
+    // R3: take the in-flight lock BEFORE releasing the timer slot. Clearing
+    // `_retry` first releases the one-owner invariant for the whole await.
+    _attempting = true;
     _retry = null;
-    if (_closed) return;
     try {
       await _gate(_open);
-      _backoff = _backoffMin;            // reset ONLY on success
+      _backoff = _backoffMin;           // reset ONLY on success
     } on Object {
-      _backoff = _backoff * 2 > _backoffMax ? _backoffMax : _backoff * 2;
-      _scheduleReconnect();
+      final doubled = _backoff * 2;
+      _backoff = doubled > _backoffMax ? _backoffMax : doubled;
+    } finally {
+      _attempting = false;
+      // Still down? Own it again. Covers both "the open failed" and "the open
+      // succeeded and the link dropped during it".
+      if (!_closed && reach is Detached) _scheduleReconnect();
     }
   });
 }
 ```
 
+> **R3 — THE OWNER LOCK COVERS THE WHOLE ATTEMPT.** Kelvin found this alone and
+> it is his sharpest work in six rounds: the first draft nulled `_retry` at
+> timer-fire, *before* `await _gate(_open)`. An `onDisconnected` arriving during
+> that await finds `_retry == null`, calls `_scheduleReconnect` again, and
+> **the supervisor races itself** — N loops for N flaps during one attempt.
+> *"The system returns to two racing loops, only this time we wrote both."*
+> `_attempting` holds the lock across the await; `_recoveryOwned` is the
+> conjunction.
+
+**The generation question is closed by the gate and the epoch, not by a third
+mechanism** (Carnot asked for a proof rather than an assertion). A fired timer
+awaiting the gate cannot be overtaken by `_reopen` or `connect`, because those
+are gated too and the gate is FIFO. It can be overtaken by `disconnect`, which
+bypasses the gate — and that is exactly what `_epoch` fences: `_open` captures
+the epoch before its first await and refuses to install if it moved.
+
+**Subscription snapshot semantics** (Carnot asked; Tesla answered): `_open()`
+walks `_subscriptions` and installs `_client` with **no `await` in that span**, so
+an ungated `subscribe` cannot interleave. A topic added while the connect is in
+flight lands in the set before the walk and is therefore included in *this*
+connect. That is determinate, and it is stated rather than inferred.
+
 **1s doubling to 120s, because that is the number the reference already chose**
-(`paho/mqtt/client.py:576-577`). Not a number we invented.
+(`paho/mqtt/client.py:576-577`). Not a number we invented. Verified to produce
+`[1, 2, 4, 8, 16, 32, 64, 120, 120, 120]`.
+
+> **R3 verified, red and green.** A harness fires the timer, holds `_open` in
+> flight, and delivers two `onDisconnected` events during the await:
+> **with `_attempting` → 1 recovery loop; without it → 2.** Kelvin's race is real
+> and reproduces on demand.
+>
+> **One correction to the finding, on evidence:** Kelvin predicted *"N, where N is
+> the number of link-flaps during a single `_open` attempt."* It is bounded at
+> **2**, not N — the second spurious `_scheduleReconnect` finds `_retry` occupied
+> by the first. The defect is real; the multiplicity is not.
 
 **No jitter, deliberately.** N registrars reconnecting in lockstep after a broker
 restart is a real thundering herd, and paho does not jitter either. Adding it
-would be a silent divergence on timing — so it is **filed as an upstream finding
-for Andy** rather than taken. That is the discipline this revision's own parity
-argument demands of it.
+would be a silent timing divergence — so it is **filed as an upstream finding for
+Andy** (claude-tasks #7) rather than taken.
 
-**IDLE LIVENESS — the cost round 5 named and the brief missed.** Tesla: paho's
-background thread restores reachability *with no application poll*, and
-"caller-driven `connect()`/`setWill()`" is not that. A broker dying while the
-actor is quiet leaves Python recovering and Dart down until the next API call.
-**The timer above is the answer, and it is why it must be a timer rather than a
-retry-on-next-call.** Revision 3's §5c table said `Detached` was caller-owned.
-That row was wrong and is deleted.
+**IDLE LIVENESS — the cost round 5 named.** paho's background thread restores
+reachability *with no application poll*, and caller-driven recovery is not that.
+The timer is the answer, and R2 is what makes it total: revision 4's first draft
+had the timer and reached it from one of three entrances.
 
 ### What one opener buys, beyond correctness
 
@@ -335,7 +431,7 @@ it does not, because it no longer reaches the broker.
 |---|---|---|
 | `NotStarted` | `connect()` | caller |
 | `Attached` | link loss → `onDisconnected` | mechanism |
-| `Detached` | the supervisor's next successful `_open()` | **the supervisor, always** |
+| `Detached` | the supervisor's next successful `_open()` | **the supervisor — enforced by §5 R2's single door, not asserted here** |
 | `Retired` | — | terminal (§8) |
 
 Every row has an owner. Revision 3's uncovered-observer gap is closed: an
@@ -402,7 +498,8 @@ Future<void> _open() async {
     _client = client;                         // installed LAST, fully armed
     _reportTransport(up: true);
   } on Object catch (error) {
-    _retire(client);
+    _discard(client);      // disarm + disconnect the candidate
+    _enterDetached();      // R2: the single door — arms recovery, reports down
     throw error is TransportUnavailable
         ? error
         : TransportUnavailable('open: $error');
@@ -415,7 +512,8 @@ never externally `Attached` with nothing listening (Carnot, round 2).
 
 The orphan hazard revision 3 found stays closed: a thrown `connect()` leaves an
 inert client (`initialConnectionComplete` is never reached), and a post-connect
-throw goes through `_retire`. With `autoReconnect = false` an abandoned client
+throw goes through `_discard` **and `_enterDetached`**. With `autoReconnect = false`
+an abandoned client
 cannot storm at all, which is strictly safer than the version that needed
 disarming.
 
@@ -438,9 +536,15 @@ The client id is the island's notion of who we are and what our will is attached
 to; re-minting it inside a method called `connect()` would make wire identity
 depend on which method a caller reached for.
 
-A failed *first* `connect()` lands in `Detached` and starts the supervisor, so
-`send` reports transient rather than caller error — honest, since the caller did
-ask, and now something is actually working on it.
+A failed *first* `connect()` lands in `Detached` **through §5's single door**, so
+the supervisor is armed by the same code that made us `Detached` rather than by a
+sentence in this paragraph. `send` then reports transient rather than caller
+error — honest, since the caller did ask, and something is actually working on it.
+
+This is the paragraph revision 4's first draft got wrong: it asserted the
+supervisor started, and nothing started it. The measurement that settles it is
+that the package does not rescue us either — `onDisconnected` never fires on a
+failed `connect()` (`spike/autoreconnect-off/probe_failed_connect.dart`).
 
 **Session semantics are unchanged by this fork** (Tesla asked). Our
 `connectionMessage` has always carried `startClean()`, so a package auto-reconnect
@@ -482,6 +586,14 @@ parity in prose and were struck for it; the suite is the fold.
    - **`disconnect()` during an in-flight `_open()`** — reachable because
      `disconnect` bypasses the gate; must not leave `_closed` with a live client,
      and must not block on the connect.
+   - **first `connect()` against a dead broker, then bring the broker up, and
+     NOBODY calls anything** — the bus must reach `Attached`. **Red without §5
+     R2's door**, and blind in the first draft's §10, which only tested the
+     callback path. This is instance 6's arm.
+   - **`setWill` on `Attached` while the broker is down**, same idle assertion —
+     the second entrance that never armed a timer.
+   - **two `onDisconnected` events during one in-flight `_open()`** — exactly one
+     recovery owner afterwards. Red without R3's `_attempting` lock (Kelvin).
    - **two registrars sharing `path` and `timeStarted`** — documents the §6
      residual rather than asserting it away.
 
