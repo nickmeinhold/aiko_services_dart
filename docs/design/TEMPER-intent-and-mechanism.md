@@ -689,3 +689,129 @@ all survive unchanged.
 moment this decision will ever have — and it was missing from the brief, which is
 the same priority inversion this session has committed repeatedly: instrument the
 dependency, under-describe the state of your own work.
+
+---
+
+# ROUND 6 — on revision 4: the deletions held, the rewrite did not
+
+**Overall verdict: RECAST (three findings), folded.** Zero DISSOLVE.
+**Maxwell · Kelvin · Carnot · Tesla — all four RECAST.**
+**Struck:** dt-1789112690, 2026-09-11. Bundle 55KB; sentinel, three RCs of 0.
+
+This round asked the opposite question of rounds 1–4. Those hunted things **added**
+carelessly. Revision 4 was 32% *shorter* than its predecessor, so the
+characteristic failure was something **deleted** whose reason lived elsewhere.
+
+## Deletion audit — UNANIMOUS SAFE, all four families
+
+| deleted | verdict |
+|---|---|
+| `Dipped` | **safe** — the cause (package-owned repair of a live handle) is gone; a non-connected handle reading `Detached` is correct |
+| `_willOnWire` | **safe** — no path writes `_will` while a socket lives without rebuilding it, so `next == _will` on `Attached` is a fact again |
+| §3b's reconcile | **safe, and better** — one install site walking one list handles both poles |
+| §5a's disjointness proof | **safe as a proof** — but Carnot: a new, smaller proof of mutual exclusion among the openers is still owed |
+
+Carnot and Tesla both closed with the same instruction: ***"leave the deletions
+dead."*** Tesla: *"Do not fold the two-list machine back."*
+
+**So the round-5 verdict is vindicated on its own terms.** Removing the premise
+removed the causes; the fixes evaporated rather than needing replacement.
+
+## Finding 1 — instance 6, and Tesla named it better than its author
+
+Maxwell and Carnot found the hole; **Tesla named the class**:
+
+> *"`reach == Detached` is `_started && !connected`. That is not `_retry != null`.
+> A local value is proxying a control loop."*
+
+§5c's table said `Detached`'s owner was *"the supervisor, always"*; §8 said a
+failed first `connect()` *"starts the supervisor"*. **Nothing did either.**
+`_scheduleReconnect` was reachable only from `onDisconnected`, which `_retire`
+disarms before its own teardowns. Carnot, independently: *"Detached with no
+supervisor — the old deafness wearing a smaller mask."*
+
+Tesla's sentence for it: ***"A comment is not a timer."*** And: *"prose wearing a
+timer's clothes — the same costume as `_will == next && _client != null` in the
+file you are replacing."*
+
+**And Tesla caught a claim-scope error in the author's own measurement.** Round 5
+probed the drop of a *live* socket; revision 4 leaned it on an adjacent
+proposition. Measured (`spike/autoreconnect-off/probe_failed_connect.dart`):
+**`onDisconnected` does NOT fire on a failed `connect()`** — `SocketException`,
+state `faulted`, callback silent. So nothing anywhere armed recovery.
+
+— **FOLDED** as §5's **single door**: `_enterDetached()` nulls the handle, reports
+transport down on *every* path rather than only the callback one, and arms
+recovery. `Detached` now cannot exist without an owner. The state became a
+recording of what the mechanism did — the same move that killed instances 1–5.
+
+## Finding 2 — the SINGLE RULE was false, and that is why finding 1 hid
+
+**All four families counted the call sites.** §5 printed *"`_open()` is called
+from exactly two places"*; it has **three** — first `connect()`, `_reopen()`, and
+the supervisor. Carnot: *"the remaining lie is small enough to see."* Tesla:
+*"3, 6, 9: you counted 2."*
+
+Not a cosmetic error. **Counting stopped because the rule said the count was
+done** — the author's own search terminated on a false invariant.
+
+— **FOLDED** as two rules that are true as written: **R1** one opener *function*,
+three gated call sites, at most one open in flight; **R2** one recovery *owner*,
+enforced at the door rather than asserted in a table.
+
+## Finding 3 — the supervisor could race itself (Kelvin, alone)
+
+Kelvin's sharpest work in six rounds. The draft nulled `_retry` at timer-fire,
+**before** `await _gate(_open)` — so an `onDisconnected` arriving during the await
+found the lock released and scheduled a second loop. *"The system returns to two
+racing loops, only this time we wrote both."*
+
+— **FOLDED** as **R3**: `_attempting` holds the lock across the whole attempt;
+`_recoveryOwned` is the conjunction. Tesla reached the same fold-back
+independently.
+
+— **VERIFIED red and green**: two flaps during one in-flight `_open` give
+**1 loop with the lock, 2 without**.
+
+— **One correction to the finding, on evidence.** Kelvin predicted *"N, where N is
+the number of link-flaps."* It is bounded at **2** — the second spurious schedule
+finds `_retry` occupied by the first. The defect is real; the multiplicity is
+not. Recorded because a reviewer's severity is not evidence, in either direction.
+
+## Also folded
+
+- `_reportTransport(up: false)` now fires on every path into `Detached`, not only
+  the callback path (Carnot).
+- Carnot's **generation question** is closed by the gate plus the epoch rather
+  than a third mechanism — and the proof is written rather than asserted.
+- Carnot's **subscription-snapshot question** is answered by Tesla: there is no
+  `await` between `_open`'s walk of `_subscriptions` and the install, so an
+  ungated `subscribe` cannot interleave, and a topic added mid-connect lands in
+  *this* connect. Determinate, and now stated.
+
+## What holds
+
+- **Option B itself**, re-endorsed by all four after seeing its first
+  implementation fail. Kelvin: *"Removing `autoReconnect = true` was, and is, the
+  correct path. It starves the original defect class of the conditions it needs
+  to form."*
+- **Every deletion.** Unanimous.
+- **The heat shield.** Tesla: `connect()`/`setWill` refusing on `Detached` *"is
+  why the election's 2s retry no longer CONNECTs; claude-tasks #6 is answered for
+  the path that has a timer."*
+- **Five of Tesla's six constraints MET**, with **bounded retry graduating from
+  PROSE for the first time in six rounds** — the storm is gone where the
+  supervisor is alive, which finding 1 is what makes universal.
+- The `connectionStatus` conjunct, install-last, the epoch fence, synchronous
+  `disconnect` cancellation, political time owned, jitter refused on parity
+  grounds, and the keep-alive window **named rather than modelled** — Tesla
+  explicitly cleared that last one as honest rather than evasive.
+
+## Disposition
+
+**RECAST, folded; the delta is unstruck.** Three findings, all closed with
+mechanisms carrying red/green pairs, plus two measurements the round demanded.
+
+Six rounds. Findings by round: **8 → 8 → 1 → 2 → (fork) → 3.** Zero DISSOLVE
+throughout. The shape has not moved since round 1; what keeps moving is whether
+each revision's *sentences* are true of its own code.
