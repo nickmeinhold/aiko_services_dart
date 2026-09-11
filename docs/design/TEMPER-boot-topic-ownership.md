@@ -111,3 +111,55 @@ failure path, and that is a hazard whether or not the transport states are disti
 **RECAST — do not build.** Round 1 of ≤3. The fold-back list above is concrete and the two
 conclusion-changing items are flaws 1 and 2: **face 1 comes back to us, and bucket B goes to Andy.**
 The design's shape survives; its central jurisdictional claim does not.
+
+---
+
+# Round 2 — RECAST again. 4/4 families, 0 DISSOLVE.
+
+The forensics survived untouched by all four families for a second round. **Every round-2 flaw
+is in the local patch set (N1/N2), and they converge on one cause the recast never questioned.**
+
+| Family | Verdict | One line |
+|---|---|---|
+| Maxwell | RECAST | N1 adds a THIRD anonymous producer to the identity-free message §1 just named as the root |
+| Kelvin | RECAST | N1 aliases clean-stop with dirty-death and destroys operator-visible information |
+| Carnot | RECAST | N1 can overwrite a HEALTHY successor's `found` — a destructive retained write on a stale belief |
+| Tesla | RECAST | N1's own ECHO re-opens the election on a live process, which can re-announce and leave a fresh corpse |
+
+## The one cause
+
+**A shutting-down process is still a full election participant until `disconnect()` lands.**
+N1 and N2 are wire fixes for a role-lifecycle problem, which is why each fails differently:
+
+- **Own-echo (Tesla).** Registrars subscribe to the boot topic; the recast withdrew every
+  read-side filter; so N1's own publish comes back and is handled as *"somebody stopped being
+  primary"*. The process leaves `primary` WHILE ALIVE, can win the re-election, publishes a fresh
+  `found` AFTER N1, then disconnects. **Face 1, reborn from the patch that closed it.** N1 and
+  "no read-side changes" cancel each other — a fix-interaction, not two independent flaws.
+- **Stale-belief overwrite (Carnot).** If a successor promoted while we were slow, N1's retained
+  `absent` lands on their healthy `found`. No CAS on the cell, so the write cannot be conditional.
+- **Phase, not bytes (Tesla).** §3's cut is right about the payload and silent about WHEN. A will
+  fires when the writer **cannot act**; N1 fires the same bytes while it **can**. Corrected rule:
+  *a write into existing vocabulary is partition-free only when it produces a state the protocol
+  already produces AT A PHASE the protocol already produces it.*
+- **Information destruction (Kelvin).** Clean stop and dirty death become indistinguishable to an
+  operator. Kelvin's alternative beats reuse: propose `(primary withdrawn <identity>)` — a NEW
+  message carrying identity, which merges with the `absent`-needs-identity thread.
+- **Promote-during-restore (Tesla).** §4's re-entrancy answer covers revoke-during-restore and is
+  FALSE for its dual. Win again mid-restore: promotion arms the primary will, the in-flight
+  restore overwrites it with the per-process will, and a live primary's dirty death no longer
+  retracts. **N2 mints face 1.**
+- **Fail-noisy, not fail-closed (Kelvin, Carnot, Maxwell — 3/4).** "Say so on an observable
+  channel" names no listener, no severity, no action. Kelvin: a process that cannot guarantee its
+  safety contract must **terminate**. It is telemetry wearing containment's coat.
+
+## Disputed, and NOT resolved here
+
+**Carnot dissents on the blanket read-side prohibition.** `found` carries identity, so face 3
+(self-recognition on an identity-BEARING message) is a different argument from the `absent` veto —
+and the port already ships `ownResidue`, which nobody has called a partition. Kelvin and Tesla
+hold the blanket line. Recorded as disputed rather than tie-broken.
+
+## Disposition
+
+**RECAST, round 2 of ≤3.** Round 3 leads with role retirement and orders the wire work beneath it.
