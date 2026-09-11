@@ -105,6 +105,26 @@ class RegistrarProcess {
 
   /// The will a PRIMARY holds: retained, so a late joiner learns the registrar
   /// is gone without having to ask anyone who is no longer there to answer.
+  ///
+  /// **NOTHING EVER GIVES THIS BACK, and that is upstream's behaviour too.**
+  /// `set_last_will_and_testament` appears exactly once in `registrar.py`
+  /// (`:189`, inside `on_enter_primary`); the state machine has no
+  /// `on_exit_primary` and no relinquish path. So a process that was primary
+  /// and has since been demoted — stood down to `secondary`, or knocked back to
+  /// `primary_search` by a `(primary absent)` — is STILL holding a retained
+  /// `(primary absent)` aimed at the boot topic.
+  ///
+  /// The failure that makes this worth a paragraph: once a DIFFERENT registrar
+  /// has legitimately announced itself, an unclean death of this demoted
+  /// process makes the broker publish our stale tombstone over the top of a
+  /// healthy `(primary found …)`. The island is then told it has no primary
+  /// while one is running and answering — a false absence, from a process that
+  /// has not been primary for hours.
+  ///
+  /// Found by Carnot in the cage-match on PR #24, and verified against the
+  /// reference rather than assumed. Reproduced faithfully and filed for Andy
+  /// rather than fixed unilaterally: relinquishing costs another reconnect and
+  /// is a state-machine change, so it is a decision, not a patch.
   LastWill get primaryWill =>
       LastWill(topic: bootTopic, payload: '(primary absent)', retain: true);
 
