@@ -67,5 +67,22 @@ void main() {
       final client = AikoClient(clientId: 'test', will: will);
       expect(client.will, same(will));
     });
+
+    test('teardown survives a setup that never succeeded', () async {
+      // Port 1 refuses. The point is NOT that connect fails — it is that the
+      // failure the caller sees is the REAL one. `_client` is assigned only
+      // after a successful connect, so an unguarded teardown raised
+      // "Null check operator used on a null value" and buried the
+      // SocketException that is the actual news. A teardown path may not assume
+      // its setup ran; `try { connect() } finally { disconnect() }` is the
+      // canonical shape and it must not lie about why it failed.
+      final client = AikoClient(
+        host: '127.0.0.1',
+        port: 1,
+        clientId: 'teardown',
+      );
+      await expectLater(client.connect(), throwsA(isA<Exception>()));
+      await expectLater(client.disconnect(), completes);
+    });
   });
 }

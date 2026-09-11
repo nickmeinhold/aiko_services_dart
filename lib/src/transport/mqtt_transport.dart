@@ -221,8 +221,8 @@ class AikoClient implements MessageBus {
   /// is why the transport went this long without one. It is load-bearing the
   /// moment a peer's roster depends on hearing that we are gone.
   ///
-  /// **Set only at [connect].** MQTT carries the will in the CONNECT packet, so
-  /// there is no way to change it on a live connection: assigning
+  /// **Carried in the CONNECT packet, and changeable only by [setWill], which
+  /// reconnects.** MQTT offers no other way: assigning
   /// `connectionMessage` after `connect()` is silently ignored by the reconnect
   /// path while reading back as though it took. A process that must CHANGE its
   /// will — a registrar being promoted to primary swaps a per-process
@@ -423,8 +423,10 @@ class AikoClient implements MessageBus {
   /// `{namespace}/{host}/{pid}/{service_id}/{in|out}`).
   @override
   void subscribe(String topic) {
+    // Recorded even when there is no socket yet: the set is the memory, and a
+    // subscription taken before connect must survive into the first [_open].
     _subscriptions.add(topic);
-    _mqtt.subscribe(topic, MqttQos.atMostOnce);
+    _client?.subscribe(topic, MqttQos.atMostOnce);
   }
 
   /// Stop receiving [topic]. Paired with [subscribe] by `TopicRouter`, which
@@ -434,7 +436,7 @@ class AikoClient implements MessageBus {
   @override
   void unsubscribe(String topic) {
     _subscriptions.remove(topic);
-    _mqtt.unsubscribe(topic);
+    _client?.unsubscribe(topic);
   }
 
   /// Publish a function call as an Aiko S-expression to [topic].
@@ -506,8 +508,18 @@ class AikoClient implements MessageBus {
     // would react to its own shutdown as though the island had gone.
     await _updates?.cancel();
     _updates = null;
-    _mqtt.onDisconnected = null;
-    _mqtt.disconnect();
+    // TOLERATE A SETUP THAT NEVER SUCCEEDED. `_client` is assigned only after a
+    // successful connect, so `try { await connect(); } finally { await
+    // disconnect(); }` against a dead broker used to raise
+    // `Null check operator used on a null value` from here — MASKING the
+    // SocketException that is the actual news. Measured, not theorised: against
+    // a closed port it printed exactly that, and the operator learns nothing
+    // from it. A teardown path may not assume its setup ran.
+    final live = _client;
+    if (live != null) {
+      live.onDisconnected = null;
+      live.disconnect();
+    }
     await _controller.close();
     await _transport.close();
   }
