@@ -422,3 +422,133 @@ The honest options are Nick's: strike the delta once more (it is small and
 bounded — §6, §3b, §0's narrowing), or proceed to implement with the delta's risk
 named. What is no longer open is the *shape*: three rounds, four families, and
 seventeen findings all landed inside one decomposition, and none of them moved it.
+
+---
+
+# ROUND 4 — past the cap, at Nick's call; the bell rang in the same cavity
+
+**Overall verdict: RECAST (two findings), folded.** Zero DISSOLVE.
+**Kelvin SOUND · Tesla RECAST · Carnot RECAST · Maxwell RECAST** — the exact
+mirror of round 3, where Tesla was the lone SOUND and Kelvin the loudest RECAST.
+**Struck:** dt-1789110316, 2026-09-11. Bundle 79KB; sentinel, three RCs of 0, verdict
+markers present.
+
+> **This round is past `/design-temper`'s own ≤3-round cap.** Nick overruled it.
+> Recorded because a cap silently exceeded is worse than one deliberately spent.
+
+Findings by round: **8 → 8 → 1 → 2.** Not monotone, and the two here are real.
+
+## On Kelvin's SOUND — recorded, and weighted at near zero
+
+1471 bytes, zero findings, every delta item "Holds", and explicitly:
+*"(b) §3b's split of subscription into intent and mechanism closes the last open
+port for the original class of error."*
+
+**§3b contained a defect verified at the package source by two independent
+reviewers in this same round.** A zero-finding approval on demonstrably broken
+text is a fact about the reviewer, not the design. Kelvin's round-3 RECAST was
+also refuted on its stated mechanism. Both of his last two verdicts have been
+wrong in opposite directions, and this repo's own note that reviewer
+*availability and value run anti-correlated* applies: the short, enthusiastic,
+zero-finding approval is the tell, not the signal.
+
+Kelvin's one genuine contribution this round: he **accepted the round-3
+adjudication** in full — *"My round-3 analysis of the filter's mechanics was
+flawed; the conjunct holds."* Conceding on evidence is worth more than the
+verdict attached to it.
+
+## Finding 1 — §3b was the fifth instance, in the section that fixed the fourth
+
+**Maxwell AND Tesla, independently, both from the package source.**
+
+Round 3's §3b asserted: *"On `Dipped` the record alone is correct;
+`resubscribeOnAutoReconnect` carries it when the link returns."* **False. There
+are two lists.** `_subscriptions` is ours and only `_open()` walks it;
+`SubscriptionsManager._resubscribe` walks the package's own
+`subscriptions`/`pendingSubscriptions` maps (`:465-485`). Auto-reconnect never
+calls `_open()` — it keeps the handle. So a topic recorded while `Dipped` and
+deliberately withheld from the client reaches neither map and **nothing ever
+carries it: the process goes silently deaf on that topic.**
+
+Tesla: *"§3b withholds the package write on `Dipped` and then asserts the package
+feature will carry `_subscriptions` when the link returns. Those are two lists.
+This section was written by running that rule, and it violates it on the next
+line."*
+
+Three things only Tesla had:
+- **the opposite pole** — `unsubscribe` while `Dipped` *forgets* an interest the
+  returning socket still holds, so the package replays a subscription we dropped;
+- **the fake would hide it** — *"a one-list `FakeBus` cannot go red for a
+  two-list bug — the kinder-API prophet, wearing a must-fail."* §10's new arm
+  would have passed on the double and failed in production;
+- **the shape** — *"I hunted a sixth. It is not here. The cavity is `Dipped`; it
+  rang once per round; this is that same bell, not a new church."* Every instance
+  since round 1 has been in the fifth situation or its neighbourhood.
+
+**And round 3's account of what it replaced was wrong.** `_client?.subscribe` on
+`Dipped` does not "return normally" — `MqttClient.subscribe` throws
+`ConnectionException` when not connected (`mqtt_client.dart:448-452`). So the
+original crashed **loudly** and round 3 converted it to a **silent loss**, which
+is the wrong direction in a repo whose doctrine is that silence reads as success.
+
+— **FOLDED.** §3b now names **two** install sites (`_open` and
+`onAutoReconnected`) and *reconciles* rather than replays — subscribe what the
+client lacks, unsubscribe what we retired — because replay closes one pole and
+leaves the other open. `onAutoReconnected` reconciles **before** reporting up.
+The must-fail arms run on `AikoClient`, both poles, and `FakeBus.setTransport`
+performs the same reconcile.
+
+## Finding 2 — `(path, timeStarted)` is a DISCRIMINATOR, not AUTHORITY
+
+**Carnot AND Maxwell**, by different routes, converging on one fold.
+
+Carnot: *"a wall-clock-derived local value, not authority from the broker, not an
+ack, not a lease, and not a minted unguessable incarnation token. It proves only:
+this message contains the same path and timestamp I believe are mine."* Tesla
+scored the same item HOLDS and declined to re-raise RP-1, so the panel splits on
+claim STRENGTH, not on mechanism — all three agree the decomposition is right.
+
+Maxwell measured the harder half. §6 said *"microsecond resolution"* and *"not
+reachable"*; two consecutive `DateTime.now().microsecondsSinceEpoch`:
+
+| target | reading | reading | distinct? |
+|---|---|---|---|
+| Dart VM | `…702114` | `…702143` | **yes** |
+| dart2js | `…496000` | `…496000` | **no** — millisecond-granular |
+
+**~1000× weaker on the web target**, which claude-tasks #3240 and #3497 are both
+actively building. **Third time this design has stated a platform property as a
+law** — pid uniqueness was the first.
+
+— **FOLDED.** The sentence *"RP-1 is no longer load-bearing for safety in any
+arm"* is retracted and replaced by **property RI-1**, which states the
+discrimination, its measured per-target resolution, the web caveat with the two
+ticket numbers that inherit it, and the residual (same path **and** same
+`timeStarted` is still a silent dual primary). The real fix — a minted
+per-incarnation token in the `found` payload — changes the announcement's arity
+and is therefore **Andy's**, filed rather than taken.
+
+## What holds, round 4
+
+- **The frame, for a fourth sitting.** Tesla: *"nothing in this delta moves it."*
+- **Delta (a) core, (c) and (d) all HOLD** across every reviewer who examined
+  them. `_hasAnnounced` is gone and nobody wants it back.
+- **Five of Tesla's six constraints MET**, with bounded retry PROSE and explicitly
+  *"an owned non-goal, not a recast"*.
+- **Seventeen prior findings stay folded.** Nothing regressed.
+- **The rule's hit rate is now five.** Named after round 2, it has since found
+  instance 4 twice (`subscribe`, `_hasAnnounced`) and instance 5 twice
+  (Maxwell and Tesla, same round, independently) — every one in code the design
+  had just written to satisfy the rule.
+
+## Disposition
+
+**RECAST, folded; round 5 unstruck.** Both findings are closed with mechanisms
+rather than prose, and both carry named must-fail arms — but that delta has not
+been struck, so the design stays `provisional` and a build gate must treat it as
+un-tempered.
+
+Tesla's structural observation is the one to carry forward: **every instance of
+the class since round 1 has been inside `Dipped` or adjacent to it.** The fifth
+situation is where this design's complexity concentrates, and the next strike —
+if there is one — should be aimed there rather than spread evenly.

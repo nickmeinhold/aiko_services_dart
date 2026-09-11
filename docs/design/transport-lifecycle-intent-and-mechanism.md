@@ -208,38 +208,87 @@ shape.
 | `registrar_process` `ClearBootTopic` (`:347`) | uncaught, documented | outside the try; a transient here fails the promotion at the next step regardless |
 | `services_cache`, `ec_consumer`, `bus_process` | uncaught, type changed only | both crashed before; the new type is better news in the stack trace |
 
-## 3b. `subscribe` / `unsubscribe` — the two members that were still `_client?.`
+## 3b. `subscribe` / `unsubscribe` — two lists, and the site that reconciles them
 
-Found by running this revision's own rule back over this revision. `send`,
-`clearRetained`, `setWill`, `connect` and `disconnect` are specified across all
-five reaches; `subscribe` and `unsubscribe` were left as
-`_client?.subscribe(topic, …)` — **the null-guard-whose-subject-is-never-nulled
-that was round 1 of the original cage-match**, still in the file. On `Dipped`
-that call lands on a client whose socket is down, returns normally, and leaves
-the caller believing it is subscribed: a local call standing in for a broker
-subscription, which is the same sentence as `_will == next` standing in for
-the-socket-carries-it.
+Round 3 found these were still `_client?.subscribe(topic, …)` — the
+null-guard-whose-subject-is-never-nulled that was round 1 of the original
+cage-match, untouched while five other members got specified across five reaches.
 
-The split follows from what each half is:
+**Round 3's fix was itself the fifth instance of the class** (Maxwell and Tesla,
+independently, both from the package source). It said: *"On `Dipped` the record
+alone is correct: `resubscribeOnAutoReconnect` carries it when the link returns."*
+**That is false. There are two lists.**
+
+- `_subscriptions` is ours. `_open()` walks it.
+- `SubscriptionsManager.subscriptions` / `.pendingSubscriptions` are the
+  package's. `_resubscribe` walks **those**
+  (`mqtt_client_subscriptions_manager.dart:465-485`).
+
+Auto-reconnect does not call `_open()` — it keeps the same handle. So a topic
+recorded while `Dipped` and deliberately withheld from the client is in *neither*
+package map, and nothing ever carries it. **The process goes silently deaf on
+that topic.** Tesla: *"§3b withholds the package write on `Dipped` and then
+asserts the package feature will carry `_subscriptions` when the link returns.
+Those are two lists."*
+
+And the inverse pole, which Maxwell missed and Tesla named: **`unsubscribe` while
+`Dipped` forgets an interest the returning socket still holds** — the package
+replays a subscription we have already dropped, and messages arrive for a topic
+nothing wants.
+
+**Correcting the record of what was replaced.** Round 3's strike said
+`_client?.subscribe` on `Dipped` *"returns normally"*. It does not:
+`MqttClient.subscribe` throws `ConnectionException` when
+`connectionStatus.state != connected` (`mqtt_client.dart:448-452`). So the
+original crashes **loudly**, and round 3's fix converted that into a **silent
+loss** — the wrong direction, in a repo whose own doctrine is that silence reads
+as success.
+
+### The fix: name both install sites, and reconcile at each
 
 ```dart
 void subscribe(String topic) {
   if (reach case Retired()) {
     throw StateError('cannot subscribe: this bus is retired');
   }
-  _subscriptions.add(topic);          // INTENT — the set IS the memory, and
-                                      // _open restores it in every reach
-  if (reach case Attached()) {
-    _live.subscribe(topic, MqttQos.atMostOnce);   // MECHANISM — only when live
+  _subscriptions.add(topic);          // INTENT — an interest, not an act
+  if (reach case Attached()) _live.subscribe(topic, MqttQos.atMostOnce);
+}
+
+/// The TWO sites where a live client is made to match our interests.
+/// `_open` is one. This is the other, and round 3 had only the first.
+void _reconcileSubscriptions(MqttServerClient client) {
+  for (final topic in _subscriptions) {
+    client.subscribe(topic, MqttQos.atMostOnce);       // add what it lacks
+  }
+  for (final topic in _packageHeld(client).difference(_subscriptions)) {
+    client.unsubscribe(topic);                          // drop what we retired
   }
 }
 ```
 
-On `Dipped` the record alone is correct: `resubscribeOnAutoReconnect` carries it
-when the link returns. On `Detached` and `NotStarted` the next `_open()` carries
-it. Neither throws, because a subscription is an interest rather than an act —
-and that sentence is one the design owes rather than a behaviour to infer.
-`unsubscribe` mirrors it.
+`onAutoReconnected` calls `_reconcileSubscriptions` **before**
+`_reportTransport(up: true)`, because a bus that announces itself up while deaf
+on a topic is the lying rung one layer in. That is the MECHANISM writer the
+record was missing: the moment the mechanism becomes *able* to make the intent
+true is the moment it must.
+
+`_packageHeld` is implementable rather than wished for — checked before the
+sketch was written. `MqttClient.subscriptionsManager` is public
+(`mqtt_client.dart:169`), `SubscriptionsManager.subscriptions` is a public map
+(`:22`) in a `part` of the exported library, and the package's own `resubscribe`
+reads `subscription.topic.rawTopic` off it (`:299`), which is the same access
+this needs.
+
+**Why a reconcile and not a replay.** Replay closes the `subscribe` pole and
+leaves the `unsubscribe` pole open. The two lists can differ in both directions,
+so the operation that makes them agree is set reconciliation, once, at both
+install sites — not two patches aimed at two symptoms.
+
+**And the must-fail arm must run on `AikoClient`, not only the fake** (Tesla):
+*"a one-list `FakeBus` cannot go red for a two-list bug — the kinder-API prophet,
+wearing a must-fail."* `FakeBus.setTransport(up: true)` performs the same
+reconcile, or it hides exactly this.
 
 ## 4. `setWill` — the short-circuit tests the wire, not the wish
 
@@ -435,9 +484,47 @@ wire change, and no cooperation from anyone:
 | two registrars share a path, neither announced | one primary | one primary | one primary |
 | two registrars share a path, both announced | one primary | **both promote, silently** | one primary |
 
-**RP-1 is no longer load-bearing for safety in any arm**, and unlike the previous
-revision's version of that sentence, this one is true for the both-announced case
-too. RP-1 survives only as a note: a shared topic path is a confusing island.
+### It is a DISCRIMINATOR, not AUTHORITY — and the resolution is per-target
+
+Carnot, round 4: *"`timeStarted` is a wall-clock-derived local value, not
+authority from the broker, not an ack, not a lease, and not a minted unguessable
+incarnation token. It proves only: this message contains the same path and
+timestamp I believe are mine. That is a discriminator, not ownership."*
+
+He is right, and the previous sentence here — *"RP-1 is no longer load-bearing
+for safety in any arm"* — was the **third time this design stated a platform
+property as a law** (pid uniqueness in round 2 was the first). So it is
+retracted, and replaced with a measurement.
+
+> **PROPERTY RI-1 (incarnation discrimination).** Own-residue detection is exact
+> whenever two registrars sharing a `topicPath` have distinct `timeStarted`. It
+> is a collision-resistant discriminator, **not** an authority token: nothing in
+> the broker, the session or a lease backs it.
+>
+> **Resolution is PER TARGET, measured rather than assumed** — two consecutive
+> `DateTime.now().microsecondsSinceEpoch` calls:
+>
+> | target | reading | reading | distinct? |
+> |---|---|---|---|
+> | Dart VM | `…702114` | `…702143` | **yes** — true microseconds |
+> | dart2js | `…496000` | `…496000` | **no** — millisecond-granular |
+>
+> So on the **web target the guarantee is probabilistic and ~1000× weaker**, and
+> two same-path registrars starting in the same millisecond share an incarnation
+> identity. That matters here and not hypothetically: claude-tasks **#3240**
+> (web-compat transport split) and **#3497** (the SharedWorker route) are both
+> open and both about running this code in a browser. The web work inherits RI-1
+> rather than rediscovering it.
+>
+> **Residual:** same path AND same `timeStarted` still gives a silent dual
+> primary. The real fix is a minted per-incarnation token in the `found` payload
+> — Carnot's fold-back, and candidate 2 of `notes/boot-topic-lifecycle.md`. That
+> changes the announcement's arity, so it is **Andy's**, and it is filed rather
+> than taken unilaterally.
+
+What is now true in every arm is narrower and checkable: **RP-1 is no longer
+load-bearing where incarnations differ**, which is every arm the port can create
+on the VM and almost every arm on the web.
 
 `ownResidue` is its own case rather than `null` beside malformed, so the filter's
 success is observable instead of silent.
@@ -593,8 +680,16 @@ fold; the prose is not.
      primary. This is the arm round 3's first attempt failed, and it is the one
      that proves `timeStarted` rather than a local flag. It must be watched red
      with the `started == timeStarted` conjunct removed;
-   - **`subscribe` while `Dipped`** — records the interest, does not call the
-     broker, and the topic is live again after the link returns (§3b).
+   - **`subscribe` while `Dipped`, then the link returns** — a message on that
+     topic must arrive. Watched red with `_reconcileSubscriptions` deleted, and
+     **run on `AikoClient`**, because a one-list fake cannot go red for a
+     two-list bug (§3b);
+   - **`unsubscribe` while `Dipped`, then the link returns** — the opposite pole:
+     no message on that topic may arrive;
+   - **two registrars sharing BOTH `path` and `timeStarted`** — documents the
+     residual rather than asserting it away. If the answer is "not reachable",
+     the arm names the construction that makes it so, rather than resting on
+     clock folklore (Carnot).
 
 ### Verified at design time
 
