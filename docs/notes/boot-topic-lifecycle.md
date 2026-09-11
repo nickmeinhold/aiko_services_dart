@@ -62,6 +62,18 @@ record who wrote what.
 
 ## A SECOND design finding, same session: the transport collapses five states into one null
 
+> **SUPERSEDED 2026-09-12 — this section describes the transport as it was, not as it is.**
+> The five-state collapse is exactly what the sealed `Reach` observation replaced
+> (`docs/design/transport-lifecycle-intent-and-mechanism.md` revision 4, shipped on
+> `feat/registrar-process` from `3a33e76`; 263 tests plus a 10/10 live-broker probe).
+> `never-connected` / `live` / `failed-reopen` / `deliberately-closed` are now distinct and
+> exhaustively switched, and the auto-reconnecting row no longer exists at all —
+> `autoReconnect` is off and the supervisor is ours.
+>
+> Kept rather than deleted because the FINDING was real and the record of it is load-bearing.
+> Marked because it was bundled unmarked into a `/design-temper` round and two of four families
+> struck a premise that had already been fixed. A checked-in doc is not current intent.
+
 Not a face of the boot topic — a separate shape, surfaced by the same cage-match and
 recorded here because it has the identical structure and the identical wrong answer.
 

@@ -1,156 +1,161 @@
-# The boot topic needs an owner — a design, not a sixth patch
+# The boot topic needs an owner — recast against the round-1 strike
 
-> **Status: STRUCK — RECAST, round 1 of ≤3. DO NOT BUILD.**
-> Verdict and the full fold-back list: `TEMPER-boot-topic-ownership.md`.
-> 4/4 families, 0 DISSOLVE. Two findings change the conclusion rather than the detail:
-> **face 1 is port-local after all** (a clean stop can publish the retraction while it is
-> still alive — same payload Python already sends, at a moment we can still speak), and
-> **bucket B is not ours** (unanimous: a read-side veto is a split source of truth on a
-> shared island, not a local adoption). The text below is the STRUCK cast, kept unedited
-> so the fold-back is legible against it.
+> **Status: RECAST (round 2 of ≤3). UNSTRUCK at THIS revision.**
 >
-> **What forced it.** Three `/cage-match` rounds on PR #24 produced findings that all
-> reduce to one absence, and `docs/notes/boot-topic-lifecycle.md` had already named that
-> absence and its four faces. The rounds then added two more faces. Six instances is past
-> the point where the honest move is a class-level answer rather than a sixth guard.
+> Round 1: 4/4 RECAST, 0 DISSOLVE — `TEMPER-boot-topic-ownership.md`. Two findings changed the
+> conclusion rather than the detail, and both are folded here:
+> **face 1 is port-local** (a clean stop can answer for itself while it is still alive), and
+> **"read-side changes are ours" is wrong** (unanimous).
+>
+> This revision is built on the distinction that makes those two verdicts consistent — §3. It is
+> SHORTER than the cast, and the candidate ladder is gone.
 
-## 1. The one sentence
+## 0. The frame, stated so it can be attacked
 
-`{namespace}/service/registrar` is **a shared mutable cell that every registrar both writes
-and reads, with no identity check, no ownership model, and no lifecycle rules** — and every
-process on the island treats whatever it holds as the truth about who is primary.
+Aiko elects a leader using **a retained MQTT message as the election primitive**. A retained
+message has no compare-and-swap, no fencing, no expiry and no owner. It is a value cell being
+used as a lock.
 
-Every face below is a consequence of that single absence.
+Every face below is a consequence of that category error. This design does **not** propose
+replacing the primitive — that is Andy's architecture — but nothing here should be read as
+claiming the primitive is adequate. It is not. §5 says so to him.
 
-## 2. The faces, now six
+## 1. The root: three questions, and which one the wire can answer
 
-Faces 1-4 are from `boot-topic-lifecycle.md` and are reproduced here only by name. Faces 5
-and 6 are new, from the PR #24 cage-match, and **face 5 is the one that is ours alone.**
+A process reading `{namespace}/service/registrar` must answer three questions. They are
+independent, and the protocol answers them unequally:
 
-| # | Face | Upstream has it? |
+| Question | Answered by | Status |
 |---|---|---|
-| 1 | A clean stop does not retract — the retained `found` outlives the process (measured: 139s, still there) | **yes** |
-| 2 | A demotion does not disarm — a demoted process still holds the retained `(primary absent)` | **yes** |
-| 3 | A registrar can read its OWN announcement as somebody else's | **yes** |
-| 4 | The live gate-A crash: a process acting on its own residue | **yes** |
-| 5 | **The abandon path** — a promotion revoked mid-`setWill` returns holding the primary will | **NO — ours** |
-| 6 | The QoS 0 boot-topic clear is published onto a socket `_reopen` immediately discards | **yes** |
+| **Who wrote this?** | `found` carries the announcer's path. **`absent` carries nothing.** | half-answered |
+| **Is this the latest?** | nothing | unanswered |
+| **Is the writer still alive?** | the will — and **only on an UNCLEAN death** | conditionally |
 
-**Face 5 exists only because our `setWill` is asynchronous.** Upstream's `on_enter_primary`
-is one synchronous handler and cannot be interrupted between taking the will and announcing.
-MQTT's law forces the reconnect on us the same way it forces it on paho, but paho's caller
-blocks; ours awaits, and an await is a window. So face 5 is not a parity question and never
-was — it is a consequence of a decision the port made.
+**The retraction channel is identity-free by construction.** `(primary absent)` is a two-token
+S-expression with zero parameters; `RegistrarAnnouncement` is `{found, absent}`. The protocol can
+say *"X is primary"* and can only say *"somebody stopped being primary"*.
 
-## 3. The premise this design refuses to inherit
+That asymmetry — not "a cell with no owner" — is the root. The cast named it one level too high,
+and the tell was that its favoured fix closed exactly the faces whose message carries a name and
+none of the faces whose message does not. That was reported as a coincidence. It was the structure.
 
-`boot-topic-lifecycle.md` closes with *"All three are wire changes and therefore Andy's to
-choose."* **That sentence is not true of candidate 1, and the note says so two paragraphs
-earlier** — candidate 1 "closes faces 2-4 **without new messages**."
+## 2. The six faces, by question
 
-Both cannot hold. Resolving it changes who decides:
+| # | Face | Question it fails | Evidence tier |
+|---|---|---|---|
+| 1 | A clean stop does not retract | **alive?** | **measured** (Dart AND the Python container: `docker stop`, 139s, `FINAL_ROLE=secondary`, zero registrars) |
+| 2 | A demotion does not disarm the will | who? | code-reading (`registrar.py:189`, no `on_exit_primary`) |
+| 3 | A registrar reads its OWN `found` as somebody else's | who? | code-reading + Dart-side reproduction |
+| 4 | Acting on our own residue after a blip | who? | **measured on DART** — that Python does it too is a code-reading, not a measurement |
+| 5 | The abandon path: a revoked promotion keeps the primary will | who? | **measured**, ours alone |
+| 6 | The QoS 0 boot-topic clear rides a socket `_reopen` discards | latest? | code-reading |
 
-- **A wire-FORMAT change** (new field, changed arity) is unambiguously Andy's. `process.py:333`
-  requires exactly four parameters for `found`; adding a fifth breaks every Python peer. ADR
-  territory, and the constitution is explicit that a wire change is an ADR.
-- **A read-SIDE behaviour change** uses only fields already on the wire and breaks no peer's
-  parser. It is still a divergence — our registrar would ignore an announcement Python's would
-  act on — but it is observable only as *our* behaviour, not as a malformed packet.
+Face 5 exists only because our `setWill` is asynchronous. Upstream's `on_enter_primary` is one
+synchronous handler and structurally cannot abandon.
 
-These are different tiers with different bars, and collapsing them into "all wire changes"
-hands Andy a decision he does not need to make while blocking the port from one it can.
+## 3. The cut that governs — and it is NOT format-vs-read-side
 
-**And we have already shipped half of candidate 1.** `registrar_process.dart` compares
-`(path, timeStarted)` from the announcement against its own and returns
-`RegistrarAnnouncement.ownResidue` — identity enforced on read, using existing fields,
-already merged. The question is not whether to start; it is whether to finish.
+The cast's cut was "wire-format change (Andy's) vs read-side change (ours)". All four families
+rejected it: *"breaks no parser"* is an argument about FORMAT answering a question about
+SEMANTICS. They were right, and the cast had already named that as its weakest point.
 
-## 4. Scope: three buckets, and only one of them is Andy's
+The cut that survives is different, and it explains why face 1 and bucket B get **opposite**
+answers from the same panel:
 
-**Bucket A — ours, no wire involvement, decidable now.**
-Face 5. The abandon path is port-local by construction.
+> **A change to what we WRITE, using the protocol's existing vocabulary, produces a state every
+> peer already handles. A change to what we READ produces asymmetric belief — we ignore a message
+> a peer obeys — which is a partition.**
 
-**Bucket B — ours to PROPOSE and adopt, read-side only, no format change.**
-Faces 2, 3, 4: refuse to act on an announcement that names us; do not honour a retraction
-from a process that did not announce. Existing fields only. Diverges in behaviour, so it
-needs a stated divergence-register entry (claude-tasks #4306) and a batched finding to Andy
-— but it does not need his sign-off to be *correct*, only to be *coordinated*.
+- **Face 1's fix is write-side into existing vocabulary.** A clean stop publishes retained
+  `(primary absent)` — *the exact payload the will already publishes on an unclean death*. A
+  Python peer reading it does precisely what it does today when a registrar dies dirty: starts an
+  election. **There is no state produced that the protocol does not already produce.** The only
+  difference is the trigger.
+- **A read-side veto is not that.** Ignoring an `(absent)` a Python registrar acts on leaves two
+  processes with different beliefs about one cell. Kelvin: *"not a divergence-register entry — a
+  bug class."*
 
-**Bucket C — Andy's, format change, ADR.**
-Faces 1 and 6, and the durable fix for 2-4. A fencing token or a lease changes the payload's
-arity. **Do not self-assign an RFC number** — the registry owns them.
+So: **no read-side changes.** The cast's B1 and B2 are withdrawn entirely, including the parts
+that looked free.
 
-## 5. The candidates, priced
+### B2 is withdrawn twice over, and the second reason is the sharper one
 
-| | Closes | Wire change | Needs a dying process to cooperate | Cost |
-|---|---|---|---|---|
-| **1. Identity on read** | 2, 3, 4 (and half of 5) | none | no | small; half-built |
-| **2. Fencing token** | 1, 2, 3, 4, 6 | **yes** — arity | no | ADR + every peer |
-| **3. Lease the primacy** | all, including 1 | **yes** | **no** — the only one | largest |
+It could not be built: `absent` has no identity field to compare. And even granted the field, the
+cast aimed it at the wrong predicate. Two distinct predicates were conflated:
 
-Candidate 3 is the only one that closes face 1, because face 1 is *a corpse that cannot be
-asked to retract*. Candidates 1 and 2 both require somebody alive to do something.
+- **P_own** — *does this payload name ME?* Closes face 4.
+- **P_holder** — *does it name who I believe is primary?* Closes face 2.
 
-**This design proposes: do 1 now, propose 2 to Andy, and name 3 as the end state.**
+Face 4's live crash was **our own will**, fired after a blip and read back on reconnect. We *were*
+the announcer, so P_holder admits it and drops the roster — the bug wearing a filter. The cast
+assigned face 4 to P_holder.
 
-The reason is not that 1 is cheapest. It is that **1 and 2 are not alternatives** — a
-fencing token is identity-on-read with a better discriminator. Building 1 now is building
-the read-side machinery 2 needs, against a weaker key. When Andy rules on the token, the
-comparison changes and the structure does not.
+## 4. What the port does now
 
-## 6. What the port does now (buckets A and B)
+**N1 — a clean stop retracts (face 1).** Before `disconnect()` suppresses the will, a process that
+is currently `primary` publishes retained `(primary absent)` to the boot topic. Write-side,
+existing vocabulary, no new state.
+*Fail-closed:* if the publish throws, the shutdown continues — we are no worse off than today, and
+the retained `found` is exactly what today leaves anyway. The failure is reported, not swallowed.
 
-**A1 — the abandon path restores the will it took.** When `AnnouncePrimary` abandons because
-the election revoked our authority, restore `LastWill.processAbsent(...)` before returning.
-Face 5 closed at its source.
+**N2 — every exit from `primary` restores the per-process will (face 5, and faces 2's local half).**
+`setWill` appears once in `registrar_process.dart` and restores nowhere; three exits leave the
+primary will armed. Restore on all of them.
+*Re-entrancy, which round 1 demanded and the cast did not answer:* **the restore's target does not
+depend on the election state.** Every non-primary role wants the per-process will, so a nested
+revocation during the restore does not invalidate it — the operation is idempotent under
+interruption, which is why it is safe where the promotion it unwinds was not.
+*Fail-closed:* if the restore fails, the process is a non-primary holding a primary will and
+**cannot fix itself**. It must SAY so on an observable channel rather than continue silently. That
+is a named degraded state with an owner, not an absorbed one.
 
-> **The known cost, named rather than absorbed.** This is a second reconnect on a path that
-> is already a failure path. It publishes nothing, so it cannot announce under revoked
-> authority — but it is unmeasured, and the reason face 5 exists at all is that somebody
-> reasoned about this window instead of measuring it. **A1 is gated on a probe**, not on
-> agreement.
+Both are wire-observable, so both get a divergence-register entry (claude-tasks #4306) and both go
+into the same message to Andy — shipped, registered, and disclosed in one breath, because the
+alternative is knowingly shipping a registrar that takes an island down on a clean stop.
 
-**B1 — `ownResidue` is honoured everywhere, not only in the filter.** Today the comparison
-exists and one call site reads it. Face 3 is a *different* call site acting on the same
-payload without asking.
+## 5. What we propose to Andy — leading with the recommendation
 
-**B2 — a retraction is only honoured from the announcer.** An `(absent)` that does not name
-the process we believe is primary does not drop the roster. This is the read-side half of
-face 4, and it is what turns "a process acting on its own residue" into a no-op.
+**We recommend leasing the primacy.** Not as one of three options: as the answer.
 
-## 7. What this design deliberately does NOT do
+Only a lease closes the **alive?** question in the general case. Identity and freshness both
+require somebody alive to act — a fence answers *is this latest*, and a corpse's token IS the
+latest until someone increments it, which a joiner that stands down never does. Round 1 killed the
+cast's three-rung ladder for exactly this: its middle rung does not reach the measured outage.
 
-- **No retraction-on-shutdown.** It would invent a wire message Python does not send, and
-  face 1 is the one face candidate 1 cannot close. It stays open, on purpose, until Andy
-  rules.
-- **No fix for face 6.** The obvious reorder — reconnect, then clear — puts the clear after
-  the resubscribe that re-reads the very tombstone the clear exists to erase. The order is
-  load-bearing in the direction it already has. QoS 1 is a wire change.
-- **No local workaround for the token.** The design already tried that twice (`_hasAnnounced`,
-  then RP-1 as an unenforced invariant) and both were struck.
+The batched message carries: the lease recommendation; `absent` needs an identity field (faces
+2/3/4, and it is what makes P_own and P_holder expressible at all); face 6's QoS-0 clear; and the
+incarnation-token finding already drafted as #4264 — which is the same field arriving from a
+third direction.
 
-## 8. Done-test
+**No self-assigned RFC number.** The registry owns them.
 
-1. A `/design-temper` strike scores 0 DISSOLVE from ≥2 families.
-2. Face 5 has a red-proven arm: a promotion abandoned mid-`setWill` leaves the process
-   holding the PER-PROCESS will, not the primary one.
-3. Faces 3 and 4 have red-proven arms driven through `FakeBus`: our own retained `found`
-   replayed to us moves nothing; an `(absent)` naming a third party drops no roster.
-4. The A1 probe is run against the live island and its cost is a number, not an adjective.
-5. A divergence-register entry exists for B1/B2 before they merge (#4306).
-6. A single batched finding to Andy covers faces 1, 2, 6 and the token — **one** Discussion,
-   not four, and only after the existing queue clears.
+## 6. Deliberately not done
 
-## 9. The question this design is least sure of
+- **No read-side filtering of any kind** (§3).
+- **No fix for face 6.** The obvious reorder puts the clear after the resubscribe that re-reads the
+  tombstone it exists to erase. The order is load-bearing in the direction it has.
+- **No local workaround for the token.** Tried twice (`_hasAnnounced`, RP-1); struck both times.
 
-**Is bucket B actually ours?** The port's charter is that a difference from Python becomes a
-FINDING rather than a bug we fix. B1 and B2 make our registrar ignore messages a Python
-registrar would act on. That is a behavioural divergence on a shared island, and the
-argument that it is "read-side only, so it breaks no parser" is an argument about *format*
-answering a question about *semantics*.
+## 7. Done-test
 
-The counter-argument is that faces 3 and 4 are **live defects we have already observed in
-production**, and reproducing a defect faithfully is only virtuous while somebody is
-counting on the reproduction.
+1. A strike on **this** revision: 0 DISSOLVE from ≥2 families.
+2. **N1 red-proven against the live island**, not the fake: start a registrar, let it announce,
+   `disconnect()` it cleanly, and assert the boot topic reads `(primary absent)` — then assert a
+   replacement registrar PROMOTES instead of standing down. The round-1 measurement is the red arm
+   and it already exists (139s, `FINAL_ROLE=secondary`).
+3. **N2 red-proven per exit**, all three, with the fail-closed arm driven by a forced `setWill`
+   failure — the degraded state must be observable, not inferred.
+4. A divergence-register entry exists for N1 and N2 before they merge.
+5. **One** message to Andy, after the existing queue clears.
 
-This design does not resolve that. It is the thing most worth striking.
+## 8. What this revision is least sure of
+
+**§3's cut is load-bearing and it is one round old.** "Write-side into existing vocabulary cannot
+partition" is clean, and cleanliness is exactly what the round-1 cast's cut also had before four
+families took it apart.
+
+The specific place to push: N1 makes a *clean stop* and an *unclean death* indistinguishable on the
+wire. Today they differ — clean leaves `found`, dirty leaves `absent` — and something could be
+relying on telling them apart. Nothing in `registrar.py` reads the difference, which is a
+code-reading and not a measurement. **If that distinction is load-bearing anywhere, §3 is wrong and
+N1 is a read-side change wearing a write-side coat.**
