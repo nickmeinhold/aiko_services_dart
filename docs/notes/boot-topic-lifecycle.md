@@ -60,6 +60,39 @@ published **our own** retained will, we auto-reconnected, re-read it, dropped th
 roster and re-elected. A process acting on its own residue, because the topic does not
 record who wrote what.
 
+## A SECOND design finding, same session: the transport collapses five states into one null
+
+Not a face of the boot topic — a separate shape, surfaced by the same cage-match and
+recorded here because it has the identical structure and the identical wrong answer.
+
+`AikoClient` represents its entire connection lifecycle as `_client == null`. At least five
+distinct states share that encoding:
+
+| state | `_client` | what a caller should do |
+|---|---|---|
+| never connected | null | `connect()` |
+| live | non-null | publish |
+| auto-reconnecting | non-null, not `connected` | wait |
+| **failed reopen** (a `setWill` that tore the socket down and could not rebuild it) | **null** | **reconnect** |
+| deliberately closed | null | nothing, ever |
+
+**Every transport defect this cage-match found is a consequence of that collapse.** The
+teardown that threw a null-check error over a `SocketException`; the null-guard whose subject
+was never nulled; the corpse client left behind by a failed reopen; and Tesla's round-3
+finding, which is the one that hurts: after a failed reopen, `setWill` takes the
+`if (live == null) return` branch — the one that MEANS "not connected yet, `connect()` will
+carry it" — so a registrar retrying promotion never reconnects, and arcs between
+`primary_search` and a promotion it can never complete, deaf, indefinitely.
+
+The first fix attempt guarded the value-equality short-circuit instead, which is the wrong
+gate: the retry stops earlier than that. Guarding the right gate needs the states to be
+distinguishable, which is the design change.
+
+**Not attempted here.** Three review rounds produced four transport patches, and the fourth
+generated this finding — which is the "my own last round's fix generated this finding" stop
+signal, at the round cap. A fifth guard is the wrong move; naming the state machine is the
+right one.
+
 ## What the fix is not
 
 Not a guard per face. Three of the four have an obvious local patch (publish a retraction on
