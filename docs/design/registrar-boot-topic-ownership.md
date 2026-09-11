@@ -107,8 +107,10 @@ existing queue clears. **No self-assigned RFC number.**
 ## 7. Resolving round 2's disputed item — MY call, offered to be struck
 
 Carnot dissents from the blanket read-side ban: `found` carries identity, so face 3 is a different
-argument from the `absent` veto — and the port already ships `ownResidue` with nobody calling it a
-partition. Kelvin and Tesla hold the blanket line.
+argument from the `absent` veto. (The cast and rounds 1-3 also claimed the port *already ships*
+`ownResidue`. **It does not** — verified against the tree after Tesla said to: the enum has two
+members and nothing compares paths. That claim was load-bearing for this section and is withdrawn;
+see claude-tasks #4322.) Kelvin and Tesla hold the blanket line.
 
 **Proposed resolution:** the line is not read-side-vs-write-side, it is **whether the predicate
 needs a guess.**
@@ -119,7 +121,7 @@ needs a guess.**
 - Ignoring an **identity-free** `absent` requires guessing who sent it. Two implementations
   guessing differently is a partition by construction.
 
-That keeps `ownResidue` (shipped, correct) and keeps B2 dead. **It is a distinction I invented to
+That would keep `ownResidue` — which must be BUILT, not preserved — and keeps B2 dead. **It is a distinction I invented to
 settle a 2-1 split among families that each had a point, which makes it the most likely thing in
 this revision to be wrong.**
 
@@ -137,5 +139,5 @@ this revision to be wrong.**
 ## 9. Least sure
 
 **§7.** It is a fresh distinction invented to break a family split, one revision old, and it is
-load-bearing for whether `ownResidue` stays. The rest of this revision is other people's findings
+load-bearing for whether `ownResidue` is built at all. The rest of this revision is other people's findings
 folded; §7 is mine.

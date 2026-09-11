@@ -494,7 +494,16 @@ discards the announced path and timestamp at `:274`; both are published at `:360
         : RegistrarAnnouncement.found,
 ```
 
-> **PROPERTY RI-1.** Own-residue detection is exact whenever two registrars
+> **RI-1 IS NOT BUILT — corrected 2026-09-12.** The snippet above is PROPOSED code. The
+> shipped enum is `RegistrarAnnouncement { found, absent }`, two members; there is no
+> `ownResidue` anywhere in `lib/`, and **nothing in the port compares an announced path to its
+> own** (`grep` for both: zero hits). So faces 3 and 4 of `notes/boot-topic-lifecycle.md` are
+> UNMITIGATED here — which is parity with `registrar.py`, and is not what the paragraph below
+> says. The property is stated in the present tense and was read as current state by a later
+> design, which propagated it through three `/design-temper` rounds before Tesla said to check
+> it against the tree. Tracked as claude-tasks #4322.
+>
+> **PROPERTY RI-1 (AS DESIGNED, UNIMPLEMENTED).** Own-residue detection is exact whenever two registrars
 > sharing a `topicPath` have distinct `timeStarted`. It is a **collision-resistant
 > discriminator, not an authority token** — nothing in the broker, the session or
 > a lease backs it (Carnot).

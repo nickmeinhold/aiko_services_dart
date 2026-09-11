@@ -212,7 +212,16 @@ existing identity plus a real `ownResidue` arm. Stop bundling four faces onto on
 - **Abdication can strand a live process (Maxwell).** It runs on demotion and abandonment too,
   where the process stays alive. Restore hangs → candidacy never resumes → no primary, forever,
   caused by our own abdication. No timeout, no abort, no re-entry.
-- **§7 is disputed 2-2 and stays unresolved.** Maxwell struck it (the key is `(path, timeStarted)`,
+- **§7 is disputed 2-2, unresolved — and it rested on a FALSE PREMISE.** Tesla's fold-back said
+  to verify "ownResidue already ships" against the tree. **It does not ship** (claude-tasks
+  #4329): the enum has two members and nothing in the port compares an announced path to its
+  own. That claim was load-bearing for §7 — the argument was "we already ship this and nobody
+  called it a partition" — so two families debated a premise that was false, in a strike whose
+  own round-1 lesson was that a checked-in doc is not current intent. Second instance this
+  session, pointing the opposite way: the note described a defect already FIXED, the transport
+  design describes a mitigation never BUILT.
+
+  The original dispute, for the record: Maxwell struck it (the key is `(path, timeStarted)`,
   which the design itself documents as collision-prone on dart2js — so the predicate CAN be wrong,
   so it IS a guess). Carnot endorsed it. Kelvin struck it ("the Partition of Theseus"). Tesla
   endorsed the CUT while rejecting its evidence, and adds a check: **`ownResidue` is cited as
