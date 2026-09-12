@@ -14,7 +14,11 @@
 # only run when somebody remembers. This script is the cheapest thing that makes
 # "run everything" one command instead of a memory.
 #
-# Interop is now HALF covered, and the halves are not symmetric. A Dart consumer
+# Interop was HALF covered and asymmetric for a long time. The REGISTRAR half is
+# now symmetric: spike/interop-election/probe_peer_election.sh runs the island's
+# own Python registrar image in a throwaway namespace against our Dart one, so a
+# Python process finally reads what a Dart process wrote. The SHARE half is still
+# one-directional. A Dart consumer
 # reading a live Python producer is exercised by tool/observer_acceptance.sh
 # below, against a real island. The other direction — a real Python ECConsumer
 # reading a live Dart share snapshot (ADR-0001 §3 test 12) — still needs a Dart
@@ -353,6 +357,23 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     2) bad "election probe did not run: no mosquitto_sub/mosquitto_pub on this machine (the island is up)" ;;
     3) bad "election probe did not run: no reachable broker, or the island has no primary registrar to stand down to" ;;
     *) bad "primary election against a live broker" ;;
+  esac
+
+  # THE OTHER HALF OF INTEROP, and the reason this block exists at all: every
+  # probe above has a DART process reading a PYTHON one. Until this arm, no
+  # Python process had ever read a message a Dart registrar wrote — which is why
+  # most faces in notes/boot-topic-lifecycle.md carry "code-reading" rather than
+  # "measured" in their evidence column. The header of this very file has been
+  # saying "interop is now HALF covered, and the halves are not symmetric" the
+  # whole time.
+  step "peer election: a real PYTHON registrar reading a DART one (the missing half)"
+  spike/interop-election/probe_peer_election.sh
+  PEER_RC=$?
+  case "$PEER_RC" in
+    0) ok "a Python registrar stands down to a Dart primary, and face 1 is measured from the victim's side" ;;
+    2) bad "peer probe did not run: missing mosquitto tools or docker (the island is up)" ;;
+    3) bad "peer probe did not run: no reachable broker, or the island image is not present locally" ;;
+    *) bad "peer election: a Python registrar against a Dart one" ;;
   esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'
