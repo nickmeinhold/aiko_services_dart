@@ -12,5 +12,10 @@ dependencies:
   mqtt_client: ^10.11.11
 
 dev_dependencies:
+  # Probe CLIs only. claude-tasks #31: the positional-argument probes cannot
+  # take a port without also taking a host, nor keep a default lease while
+  # overriding the broker. New probes are flag-based from the start so that
+  # ticket's remaining scope is the two older drivers, not three.
+  args: ^2.6.0
   lints: ^6.1.0
   test: ^1.25.0

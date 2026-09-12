@@ -12,7 +12,7 @@ void main() {
   late ECConsumer consumer;
 
   setUp(() {
-    bus = FakeBus();
+    bus = FakeBus.alreadyAttached();
     router = TopicRouter(bus);
     consumer = ECConsumer(
       router,

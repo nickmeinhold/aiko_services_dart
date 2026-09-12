@@ -25,7 +25,7 @@ void main(List<String> a) {
   // into slack in exactly the direction that matters.
   final minimumCompared = a.length > 2 ? int.parse(a[2]) : 1;
   var checked = 0, mismatch = 0;
-  for (final c in cases.cast<Map<String, dynamic>>()) {
+  for (final c in cases.cast<Map<String, Object?>>()) {
     if (!c.containsKey('w')) continue;
     final got = generate('c', <Object?>[c['e'] as String]);
     checked++;
