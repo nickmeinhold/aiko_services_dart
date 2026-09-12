@@ -54,12 +54,14 @@ void main() {
         expect((await retired()).reach, isA<Retired>());
       });
 
-      test('unsubscribe is PERMITTED — forgetting is always satisfiable',
-          () async {
-        final bus = await retired();
-        expect(() => bus.unsubscribe('aiko/a/1/1/out'), returnsNormally);
-        expect(() => bus.unsubscribe('never/subscribed'), returnsNormally);
-      });
+      test(
+        'unsubscribe is PERMITTED — forgetting is always satisfiable',
+        () async {
+          final bus = await retired();
+          expect(() => bus.unsubscribe('aiko/a/1/1/out'), returnsNormally);
+          expect(() => bus.unsubscribe('never/subscribed'), returnsNormally);
+        },
+      );
 
       test('subscribe is REFUSED — it asks for what it cannot have', () async {
         final bus = await retired();

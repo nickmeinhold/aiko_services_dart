@@ -162,7 +162,8 @@ class TransportUnavailable implements Exception {
   final String action;
 
   @override
-  String toString() => 'TransportUnavailable: cannot $action — the link is down';
+  String toString() =>
+      'TransportUnavailable: cannot $action — the link is down';
 }
 
 /// The bus, as everything above the transport needs it.

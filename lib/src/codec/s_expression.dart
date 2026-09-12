@@ -7,7 +7,7 @@
 /// `docs/distributed-seam.html` for why nothing but these strings ever crosses
 /// an actor boundary.
 ///
-/// The tree model mirrors Python's dynamic types 1:1 so interop is exact:
+/// The tree model mirrors Python's runtime types 1:1 so interop is exact:
 ///   * atom      -> [String]
 ///   * null      -> [Null]   (encoded on the wire as `0:`)
 ///   * list      -> [List<Object?>]

@@ -4,6 +4,7 @@
 // Port 18899 has nothing listening.
 import 'dart:async';
 import 'dart:io';
+
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
@@ -13,7 +14,10 @@ Future<void> main() async {
     ..logging(on: false)
     ..autoReconnect = false
     ..setProtocolV311()
-    ..onDisconnected = (() { disconnected = true; print('  onDisconnected FIRED'); })
+    ..onDisconnected = (() {
+      disconnected = true;
+      print('  onDisconnected FIRED');
+    })
     ..onConnected = (() => print('  onConnected'));
   c.connectionMessage = MqttConnectMessage().startClean();
 
@@ -26,8 +30,10 @@ Future<void> main() async {
   await Future<void>.delayed(const Duration(seconds: 3));
   print('state=${c.connectionStatus?.state}');
   print('--- onDisconnected fired on a FAILED connect: $disconnected ---');
-  print(disconnected
-      ? 'the package would arm nothing extra — but we still must not depend on it'
-      : 'CONFIRMED: nothing fires. A failed connect arms NO recovery unless we do it.');
+  print(
+    disconnected
+        ? 'the package would arm nothing extra — but we still must not depend on it'
+        : 'CONFIRMED: nothing fires. A failed connect arms NO recovery unless we do it.',
+  );
   exit(0);
 }

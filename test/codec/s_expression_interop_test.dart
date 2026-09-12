@@ -18,11 +18,11 @@ import 'package:test/test.dart';
 void main() {
   final fixture = jsonDecode(
     File('test/codec/fixtures/s_expression_golden.json').readAsStringSync(),
-  ) as Map<String, dynamic>;
+  ) as Map<String, Object?>;
 
   group('generate() byte-matches the Python reference', () {
     for (final vector in fixture['generate'] as List) {
-      final v = vector as Map<String, dynamic>;
+      final v = vector as Map<String, Object?>;
       final command = v['command'] as String;
       final params = v['params']; // List or Map from JSON
       final expected = v['expected'] as String;
@@ -34,7 +34,7 @@ void main() {
 
   group('parse() structurally matches the Python reference', () {
     for (final vector in fixture['parse'] as List) {
-      final v = vector as Map<String, dynamic>;
+      final v = vector as Map<String, Object?>;
       final payload = v['payload'] as String;
       final expectedCommand = v['command'] as String;
       final expectedCdr = v['cdr']; // List or Map from JSON
@@ -79,7 +79,7 @@ void main() {
     // unhandled crash (§8 errata) for the unterminated/overlong cases; §7 only
     // requires that the input not decode SUCCESSFULLY, which we assert here.
     for (final vector in fixture['parse_errors'] as List) {
-      final v = vector as Map<String, dynamic>;
+      final v = vector as Map<String, Object?>;
       final payload = v['payload'] as String;
       final raises = v['raises'] as String;
       test('$payload (reference: $raises)', () {
@@ -102,7 +102,7 @@ void main() {
     // either shape. The fixture carries what the reference produced, so this
     // stays a reviewable decision (RFC-0001 §8.6) rather than behaviour drift.
     for (final vector in fixture['divergences'] as List) {
-      final v = vector as Map<String, dynamic>;
+      final v = vector as Map<String, Object?>;
       final payload = v['payload'] as String;
       test('$payload (reference decodes to '
           '${jsonEncode(v['reference_car'])})', () {

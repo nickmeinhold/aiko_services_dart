@@ -30,8 +30,7 @@ void main() {
     );
   });
 
-  test('restoreLink replays the memory, including a topic taken while down',
-      () async {
+  test('restoreLink replays the memory, including a topic taken while down', () async {
     final bus = FakeBus();
     await bus.connect();
     bus.subscribe('aiko/a/1/1/out');

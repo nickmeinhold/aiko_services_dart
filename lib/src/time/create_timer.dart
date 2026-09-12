@@ -12,5 +12,7 @@ import 'dart:async';
 /// The recorded [Duration] is half the point. A test that only fires timers can
 /// prove a timer ran; one that reads the durations it was asked for can prove
 /// the SHAPE of a backoff, which is otherwise a two-minute assertion.
-typedef CreateTimer =
-    Timer Function(Duration duration, void Function() callback);
+typedef CreateTimer = Timer Function(
+  Duration duration,
+  void Function() callback,
+);

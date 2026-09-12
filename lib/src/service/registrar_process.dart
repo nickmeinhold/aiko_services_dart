@@ -96,7 +96,6 @@ class RegistrarProcess {
   /// How the search timer is made. See [CreateTimer] for why this is a seam.
   final CreateTimer _createTimer;
 
-
   /// This registrar's service address, as published in the announcement.
   final ServiceTopicPath topicPath;
 

@@ -307,38 +307,40 @@ void main() {
     // NOTHING. Measured before the fix — role `primary`, actions `[]` — which is
     // a role declared true by something other than the mechanism that makes it
     // true, the exact class this whole design is named for.
-    test('stands back down instead of sitting at primary having said nothing',
-        () async {
-      final bus = FakeBus();
-      final timers = FakeTimers();
-      final process = _process(
-        bus,
-        searchTimeout: const Duration(seconds: 30),
-        timers: timers,
-      );
-      await process.connect();
-      await bus.setTransport(up: false);
-      bus.clear();
+    test(
+      'stands back down instead of sitting at primary having said nothing',
+      () async {
+        final bus = FakeBus();
+        final timers = FakeTimers();
+        final process = _process(
+          bus,
+          searchTimeout: const Duration(seconds: 30),
+          timers: timers,
+        );
+        await process.connect();
+        await bus.setTransport(up: false);
+        bus.clear();
 
-      final failures = <Object>[];
-      final watch = process.promotionFailures.listen(failures.add);
+        final failures = <Object>[];
+        final watch = process.promotionFailures.listen(failures.add);
 
-      await _deliverAbsent(bus);
-      await settle();
+        await _deliverAbsent(bus);
+        await settle();
 
-      // NOT primary. A role nothing backs is worse than no role: a caller keying
-      // on it reports a registrar that is not discoverable and never will be.
-      expect(process.role, isNot(RegistrarRole.primary));
-      // And the failure was REPORTED as a transient, not swallowed — the type is
-      // what lets the layer above tell a down link from a bug.
-      expect(failures, hasLength(1));
-      expect(failures.single, isA<TransportUnavailable>());
-      // Nothing reached the wire, so no half-promotion is stranded on the broker.
-      expect(bus.actions, isEmpty);
+        // NOT primary. A role nothing backs is worse than no role: a caller keying
+        // on it reports a registrar that is not discoverable and never will be.
+        expect(process.role, isNot(RegistrarRole.primary));
+        // And the failure was REPORTED as a transient, not swallowed — the type is
+        // what lets the layer above tell a down link from a bug.
+        expect(failures, hasLength(1));
+        expect(failures.single, isA<TransportUnavailable>());
+        // Nothing reached the wire, so no half-promotion is stranded on the broker.
+        expect(bus.actions, isEmpty);
 
-      await watch.cancel();
-      await process.disconnect();
-    });
+        await watch.cancel();
+        await process.disconnect();
+      },
+    );
   });
 
   group('the promotion transaction spans an await', () {
@@ -356,48 +358,53 @@ void main() {
     // `(primary found <us>)` on the boot topic. A process that is not serving,
     // telling every future joiner in a retained message that it is — the
     // corpse-primary state the will exists to prevent, with nobody dead.
-    test('a stand-down during the will change abandons the announcement',
-        () async {
-      final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 80);
-      final process = _process(
-        bus,
-        searchTimeout: const Duration(seconds: 30),
-      );
-      await process.connect();
-      bus.clear();
+    test(
+      'a stand-down during the will change abandons the announcement',
+      () async {
+        final bus = FakeBus()..setWillDelay = const Duration(milliseconds: 80);
+        final process = _process(
+          bus,
+          searchTimeout: const Duration(seconds: 30),
+        );
+        await process.connect();
+        bus.clear();
 
-      // Open the promotion: clear, setWill (80ms window), announce.
-      unawaited(_deliverAbsent(bus));
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(process.role, RegistrarRole.primary, reason: 'promotion is open');
+        // Open the promotion: clear, setWill (80ms window), announce.
+        unawaited(_deliverAbsent(bus));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(
+          process.role,
+          RegistrarRole.primary,
+          reason: 'promotion is open',
+        );
 
-      // The predecessor's retained tombstone lands INSIDE the window. The
-      // election acts on this one: primary -> primarySearch.
-      await _deliverAbsent(bus);
-      expect(process.role, RegistrarRole.primarySearch);
+        // The predecessor's retained tombstone lands INSIDE the window. The
+        // election acts on this one: primary -> primarySearch.
+        await _deliverAbsent(bus);
+        expect(process.role, RegistrarRole.primarySearch);
 
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      await settle();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await settle();
 
-      // The authority was revoked, so nothing may be published under it.
-      final ourFound = bus.actions
-          .whereType<SentMessage>()
-          .where(
-            (sent) =>
-                sent.topic == _bootTopic &&
-                (sent.params! as List).first == 'found',
-          );
-      expect(
-        ourFound,
-        isEmpty,
-        reason: 'a retained found from a process that is not primary is a '
-            'corpse the island cannot tell from a live registrar',
-      );
-      // And the boot topic is left CLEARED rather than claimed — the honest
-      // state. A joiner asks instead of believing us.
-      expect(bus.actions.whereType<RetainedCleared>(), isNotEmpty);
-      await process.disconnect();
-    });
+        // The authority was revoked, so nothing may be published under it.
+        final ourFound = bus.actions.whereType<SentMessage>().where(
+          (sent) =>
+              sent.topic == _bootTopic &&
+              (sent.params! as List).first == 'found',
+        );
+        expect(
+          ourFound,
+          isEmpty,
+          reason:
+              'a retained found from a process that is not primary is a '
+              'corpse the island cannot tell from a live registrar',
+        );
+        // And the boot topic is left CLEARED rather than claimed — the honest
+        // state. A joiner asks instead of believing us.
+        expect(bus.actions.whereType<RetainedCleared>(), isNotEmpty);
+        await process.disconnect();
+      },
+    );
   });
 
   group('leaving', () {

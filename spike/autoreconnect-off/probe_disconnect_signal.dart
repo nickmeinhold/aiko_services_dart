@@ -46,8 +46,10 @@ Future<void> main() async {
 
   final client = MqttServerClient.withPort('localhost', 'ar_off_$pid', 18831)
     ..logging(on: false)
-    ..keepAlivePeriod = 5 // short, so the probe does not outlive our patience
-    ..autoReconnect = false // THE VARIABLE UNDER TEST
+    ..keepAlivePeriod =
+        5 // short, so the probe does not outlive our patience
+    ..autoReconnect =
+        false // THE VARIABLE UNDER TEST
     ..setProtocolV311()
     ..onConnected = (() => note('onConnected'))
     ..onDisconnected = (() => note('onDisconnected'))
@@ -70,9 +72,11 @@ Future<void> main() async {
   note('final state=${client.connectionStatus?.state}');
   note('--- VERDICT ---');
   final fired = events.any((e) => e.contains('onDisconnected'));
-  note(fired
-      ? 'onDisconnected FIRED with autoReconnect=false -> Option B has a live signal'
-      : 'onDisconnected DID NOT FIRE -> Option B would be built on a dead callback');
+  note(
+    fired
+        ? 'onDisconnected FIRED with autoReconnect=false -> Option B has a live signal'
+        : 'onDisconnected DID NOT FIRE -> Option B would be built on a dead callback',
+  );
   final auto = events.any((e) => e.contains('onAutoReconnect'));
   note('onAutoReconnect fired: $auto (must be false — it is disabled)');
   exit(0);

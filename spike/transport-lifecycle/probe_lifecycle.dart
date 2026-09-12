@@ -14,9 +14,7 @@ import 'dart:io';
 import 'package:aiko_services/aiko_services.dart';
 
 const _host = '127.0.0.1';
-final _port = int.parse(
-  Platform.environment['AIKO_PROBE_PORT'] ?? '1885',
-);
+final _port = int.parse(Platform.environment['AIKO_PROBE_PORT'] ?? '1885');
 const _container = 'aiko-probe-mosquitto';
 
 final _results = <String, String>{};
@@ -70,7 +68,11 @@ Future<void> main() async {
   client.messages.listen((m) => received.add('${m.topic} ${m.command}'));
 
   await client.connect();
-  record('connect reaches Attached', client.reach is Attached, '${client.reach}');
+  record(
+    'connect reaches Attached',
+    client.reach is Attached,
+    '${client.reach}',
+  );
 
   const topic = 'aiko/probe/lifecycle/out';
   client.subscribe(topic);
@@ -114,7 +116,11 @@ Future<void> main() async {
         : 'transportUp:false at ${downAt.first}ms',
   );
 
-  record('down link reads Detached', client.reach is Detached, '${client.reach}');
+  record(
+    'down link reads Detached',
+    client.reach is Detached,
+    '${client.reach}',
+  );
 
   // ---------------------------------------- ARM: refusals while the link is down
   var sendThrew = '';
@@ -123,8 +129,11 @@ Future<void> main() async {
   } on Object catch (error) {
     sendThrew = error.runtimeType.toString();
   }
-  record('send on Detached is TRANSIENT', sendThrew == 'TransportUnavailable',
-      sendThrew.isEmpty ? 'did not throw at all' : sendThrew);
+  record(
+    'send on Detached is TRANSIENT',
+    sendThrew == 'TransportUnavailable',
+    sendThrew.isEmpty ? 'did not throw at all' : sendThrew,
+  );
 
   var willThrew = '';
   const promoted = LastWill(
@@ -137,9 +146,11 @@ Future<void> main() async {
   } on Object catch (error) {
     willThrew = error.runtimeType.toString();
   }
-  record('setWill on Detached RECORDS and refuses',
-      willThrew == 'TransportUnavailable' && client.will == promoted,
-      '$willThrew, will=${client.will}');
+  record(
+    'setWill on Detached RECORDS and refuses',
+    willThrew == 'TransportUnavailable' && client.will == promoted,
+    '$willThrew, will=${client.will}',
+  );
 
   // A topic taken while there is no socket at all. The set is the memory.
   const lateTopic = 'aiko/probe/lifecycle/late';
@@ -151,36 +162,63 @@ Future<void> main() async {
   // only thing that could have done it.
   await _docker('start');
   final backAt = await until(() => client.reach is Attached);
-  record('IDLE LIVENESS — back without any caller', backAt != null,
-      backAt == null ? 'still down after 30s' : 'Attached again after ${backAt}ms');
-  record('recovery reported up', upAt.length >= 2, 'transportUp ups=$upAt downs=$downAt');
+  record(
+    'IDLE LIVENESS — back without any caller',
+    backAt != null,
+    backAt == null
+        ? 'still down after 30s'
+        : 'Attached again after ${backAt}ms',
+  );
+  record(
+    'recovery reported up',
+    upAt.length >= 2,
+    'transportUp ups=$upAt downs=$downAt',
+  );
 
   // ------------------------------- ARM: subscriptions survived the outage
   final pub = await Process.run('mosquitto_pub', [
-    '-h', _host, '-p', '$_port', '-t', lateTopic, '-m', '(hello)',
+    '-h',
+    _host,
+    '-p',
+    '$_port',
+    '-t',
+    lateTopic,
+    '-m',
+    '(hello)',
   ]);
   if (pub.exitCode != 0) {
-    record('a topic taken while Detached is live after recovery', false,
-        'mosquitto_pub failed: ${pub.stderr}');
+    record(
+      'a topic taken while Detached is live after recovery',
+      false,
+      'mosquitto_pub failed: ${pub.stderr}',
+    );
   } else {
     final got = await until(
       () => received.any((r) => r.startsWith(lateTopic)),
       budget: const Duration(seconds: 10),
     );
-    record('a topic taken while Detached is live after recovery', got != null,
-        got == null ? 'never arrived' : 'arrived after ${got}ms; got=$received');
+    record(
+      'a topic taken while Detached is live after recovery',
+      got != null,
+      got == null ? 'never arrived' : 'arrived after ${got}ms; got=$received',
+    );
   }
 
   // ----------------------------------- ARM: the will the supervisor carried
-  record('the reopened socket carries the will recorded while down',
-      client.will == promoted, '${client.will}');
+  record(
+    'the reopened socket carries the will recorded while down',
+    client.will == promoted,
+    '${client.will}',
+  );
 
   await client.disconnect();
   record('disconnect retires', client.reach is Retired, '${client.reach}');
 
   // ------------------------------------------------------------- verdict
   final failed = _results.entries.where((e) => e.value.startsWith('FAIL'));
-  stdout.writeln('\n${_results.length - failed.length}/${_results.length} arms passed');
+  stdout.writeln(
+    '\n${_results.length - failed.length}/${_results.length} arms passed',
+  );
   if (failed.isNotEmpty) {
     stdout.writeln('FAILED ARMS:');
     for (final arm in failed) {

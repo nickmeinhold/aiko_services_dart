@@ -21,10 +21,7 @@ void main() {
       final timers = FakeTimers();
       final client = _deadBroker(timers);
 
-      await expectLater(
-        client.connect(),
-        throwsA(isA<TransportUnavailable>()),
-      );
+      await expectLater(client.connect(), throwsA(isA<TransportUnavailable>()));
 
       // INSTANCE 6'S ARM. `reach == Detached` is `_started && !connected`, which
       // is NOT `_retry != null` — the previous revision had a table SAYING the
@@ -55,26 +52,31 @@ void main() {
       await client.disconnect();
     });
 
-    test('connect() on Detached REFUSES rather than opening a second time',
-        () async {
-      final timers = FakeTimers();
-      final client = _deadBroker(timers);
-      await expectLater(client.connect(), throwsA(isA<TransportUnavailable>()));
-      final openedSoFar = timers.scheduled.length;
+    test(
+      'connect() on Detached REFUSES rather than opening a second time',
+      () async {
+        final timers = FakeTimers();
+        final client = _deadBroker(timers);
+        await expectLater(
+          client.connect(),
+          throwsA(isA<TransportUnavailable>()),
+        );
+        final openedSoFar = timers.scheduled.length;
 
-      // The supervisor owns opening. A caller that opens here is the second
-      // opener that made a failing promotion into an unbounded CONNECT storm.
-      await expectLater(
-        client.connect(),
-        throwsA(isA<TransportUnavailable>()),
-      );
-      expect(
-        timers.scheduled,
-        hasLength(openedSoFar),
-        reason: 'a refused connect must not schedule anything',
-      );
-      await client.disconnect();
-    });
+        // The supervisor owns opening. A caller that opens here is the second
+        // opener that made a failing promotion into an unbounded CONNECT storm.
+        await expectLater(
+          client.connect(),
+          throwsA(isA<TransportUnavailable>()),
+        );
+        expect(
+          timers.scheduled,
+          hasLength(openedSoFar),
+          reason: 'a refused connect must not schedule anything',
+        );
+        await client.disconnect();
+      },
+    );
 
     test('setWill on Detached RECORDS and refuses', () async {
       final timers = FakeTimers();
@@ -94,8 +96,7 @@ void main() {
   });
 
   group('backoff shape', () {
-    test('doubles 1s to 120s and CAPS there — paho numbers, run not reasoned',
-        () async {
+    test('doubles 1s to 120s and CAPS there — paho numbers, run not reasoned', () async {
       final timers = FakeTimers();
       final client = _deadBroker(timers);
       await expectLater(client.connect(), throwsA(isA<TransportUnavailable>()));
@@ -108,10 +109,18 @@ void main() {
         await timers.whenScheduled(attempt);
       }
 
-      expect(
-        timers.scheduled.map((d) => d.inSeconds).toList(),
-        [1, 2, 4, 8, 16, 32, 64, 120, 120, 120],
-      );
+      expect(timers.scheduled.map((d) => d.inSeconds).toList(), [
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        120,
+        120,
+        120,
+      ]);
       await client.disconnect();
     });
 
@@ -148,8 +157,7 @@ void main() {
       expect(client.reach, isA<Retired>());
     });
 
-    test('unsubscribe after disconnect does NOT throw — teardown is idempotent',
-        () async {
+    test('unsubscribe after disconnect does NOT throw — teardown is idempotent', () async {
       final timers = FakeTimers();
       final client = _deadBroker(timers);
       await expectLater(client.connect(), throwsA(isA<TransportUnavailable>()));
