@@ -32,10 +32,21 @@ typedef WallClock = String Function();
 ///
 /// One consequence specific to history, which `time_started` does not have:
 /// these two values are compared with EACH OTHER far more plausibly than with
-/// anything of Python's — how long a service lived is `time_remove - time_add`,
-/// and that difference is correct under either clock. A cross-implementation
-/// comparison of the absolute values is not, and nothing in the reference makes
-/// one.
+/// anything of Python's — how long a service lived is `time_remove - time_add`.
+///
+/// **That difference is NOT unconditionally correct, and an earlier draft of
+/// this comment claimed it was.** A wall clock is not monotonic: an NTP step
+/// backwards between a service's arrival and its departure makes the computed
+/// lifetime short, or negative. `time.monotonic()` upstream cannot do that —
+/// that is the entire reason the function is named "monotonic" — so this is a
+/// place where the substitution is genuinely WEAKER than what it replaces,
+/// rather than merely differently scaled.
+///
+/// It is kept anyway, because a `Stopwatch` resets to zero on every restart and
+/// would make every service on a freshly-restarted registrar appear to have
+/// arrived at the dawn of time — a worse lie, told constantly, instead of a
+/// rare one told when the clock steps. Recorded here so the next reader
+/// inherits the tradeoff rather than the earlier draft's false reassurance.
 String wallClockSeconds() =>
     (DateTime.now().microsecondsSinceEpoch / 1e6).toStringAsFixed(6);
 
@@ -131,7 +142,14 @@ final class ServiceRoster {
   final ListQueue<ServiceDeparture> _history = ListQueue();
 
   /// Everything that has left, newest first.
-  Iterable<ServiceDeparture> get history => _history;
+  ///
+  /// An unmodifiable VIEW, not the queue itself. Returning `_history` directly
+  /// typed as `Iterable` still hands out the live `ListQueue`, and
+  /// `(roster.history as ListQueue).clear()` would then drain the ring buffer
+  /// through a getter that advertises read-only. Every other accessor here is
+  /// safe by construction — `services` is a generator, `topicPaths` a lazy map
+  /// — and this one was the exception.
+  Iterable<ServiceDeparture> get history => UnmodifiableListView(_history);
 
   /// Process paths in the order they are served.
   ///

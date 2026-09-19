@@ -220,6 +220,52 @@ void main() {
       expect(replies().skip(1).length, 1);
     });
 
+    test('roster.clear() forgets the LIVING and keeps the DEAD — the '
+        'asymmetry upstream has', () async {
+      // Tesla, cage-match round 1: this behaviour was documented at `clear()`
+      // and tested nowhere, so the doc was an assertion rather than a fact.
+      // `registrar.py:281` rebinds `self.services` and never touches
+      // `self.history`, so a `(primary absent)` roster wipe leaves the already-
+      // departed still speaking while the living vanish with no record at all.
+      final roster = ServiceRoster(now: clock.call);
+      final departed = ServiceDetails.tryParse(_add('aiko/h/1/1'))!;
+      final living = ServiceDetails.tryParse(_add('aiko/h/1/2'))!;
+
+      roster.add(departed);
+      roster.remove(departed.topicPath); // a real departure — recorded
+      roster.add(living); // still here when the wipe lands
+
+      roster.clear();
+
+      expect(roster.count, 0, reason: 'the living are gone');
+      expect(roster.history.length, 1, reason: 'the dead keep speaking');
+      expect(roster.history.single.details.topicPath.path, 'aiko/h/1/1');
+      // And the consequence worth pinning: the living left NO trace. A consumer
+      // cannot read "absent from the roster and absent from history" as
+      // anything, because that is exactly what a wiped service looks like.
+      expect(
+        roster.history.map((d) => d.details.topicPath.path),
+        isNot(contains('aiko/h/1/2')),
+      );
+    });
+
+    test('history is an UNMODIFIABLE view — a caller cannot drain the '
+        'ring buffer through a getter', () async {
+      final roster = ServiceRoster(now: clock.call);
+      final details = ServiceDetails.tryParse(_add('aiko/h/1/1'))!;
+      roster.add(details);
+      roster.remove(details.topicPath);
+
+      expect(roster.history.length, 1);
+      // Returning the internal ListQueue typed as Iterable would make this
+      // succeed and silently empty the buffer.
+      expect(
+        () => (roster.history as List<ServiceDeparture>).clear(),
+        throwsUnsupportedError,
+      );
+      expect(roster.history.length, 1, reason: 'still intact');
+    });
+
     test('the buffer is BOUNDED — it does not grow without limit', () async {
       // Smaller than the 4096 default would be untestable at speed, so the
       // bound itself is exercised on the roster directly. The wire path above
@@ -279,6 +325,70 @@ void main() {
       // somebody "fixed" it, the fix is the thing to question, not the test.
       expect(replies().single.command, 'item_count');
       expect(replies().single.params, [-5]);
+    });
+
+    test('the fallback is SIXTEEN — the default value itself, not merely '
+        '"we did not drop the request"', () async {
+      // Tesla, cage-match round 1: the fallback arm above asked with ONE corpse
+      // in the buffer, so min(16, 1) and min(4096, 1) are both 1 and swapping
+      // the default changed nothing. Measured: 16 -> 4096 left the suite GREEN.
+      // A check whose success value equals its disabled value cannot report its
+      // own absence — the exact class this repo's reviewer brief hunts.
+      //
+      // Twenty departures makes the constant observable: 16 comes back, not 20
+      // and not 4096.
+      for (var id = 1; id <= 20; id++) {
+        await bus.deliver(_in, 'add', _add('aiko/h/1/$id'));
+        await settle();
+        await bus.deliver(_in, 'remove', ['aiko/h/1/$id']);
+        await settle();
+      }
+      bus.clear();
+
+      await ask('not-a-number');
+
+      expect(replies().first.params, [16]);
+      expect(replies().skip(1).length, 16);
+    });
+
+    test('count parsing matches CPython int(), not Dart int.tryParse', () async {
+      for (var id = 1; id <= 40; id++) {
+        await bus.deliver(_in, 'add', _add('aiko/h/1/$id'));
+        await settle();
+        await bus.deliver(_in, 'remove', ['aiko/h/1/$id']);
+        await settle();
+      }
+
+      // `0x20`: CPython's base-10 int() raises, so upstream falls back to 16.
+      // Dart's int.tryParse would read it as 32 — a silent divergence where the
+      // same request draws a different answer from each implementation.
+      bus.clear();
+      await ask('0x20');
+      expect(replies().first.params, [
+        16,
+      ], reason: '0x20 is not a number to CPython');
+
+      // `1_000`: CPython has accepted digit underscores since PEP 515, so
+      // upstream reads 1000 and clamps to the buffer. Dart's int.tryParse
+      // returns null, which would have fallen back to 16.
+      bus.clear();
+      await ask('1_000');
+      expect(replies().first.params, [40], reason: 'PEP 515 underscores parse');
+
+      // The shapes both already agreed on, kept so a future "simplification"
+      // back to int.tryParse cannot pass by satisfying only the two rows above.
+      for (final (atom, expected) in <(String, int)>[
+        ('3', 3),
+        ('  3  ', 3),
+        ('+3', 3),
+        ('3.0', 16),
+        ('_1', 16),
+        ('1__0', 16),
+      ]) {
+        bus.clear();
+        await ask(atom);
+        expect(replies().first.params, [expected], reason: 'atom "$atom"');
+      }
     });
 
     test('a reply topic we will not publish to gets nothing', () async {
