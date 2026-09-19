@@ -67,5 +67,65 @@ void main() {
       final client = AikoClient(clientId: 'test', will: will);
       expect(client.will, same(will));
     });
+
+    test('teardown survives a setup that never succeeded', () async {
+      // Port 1 refuses. The point is NOT that connect fails — it is that the
+      // failure the caller sees is the REAL one. `_client` is assigned only
+      // after a successful connect, so an unguarded teardown raised
+      // "Null check operator used on a null value" and buried the
+      // SocketException that is the actual news. A teardown path may not assume
+      // its setup ran; `try { connect() } finally { disconnect() }` is the
+      // canonical shape and it must not lie about why it failed.
+      final client = AikoClient(
+        host: '127.0.0.1',
+        port: 1,
+        clientId: 'teardown',
+      );
+      // TransportUnavailable specifically, NOT isA<Exception>(), and its message
+      // must NAME the SocketException underneath. Tesla, round 2: the bug this
+      // test exists for was a TypeError from a bare `!`, and TypeError is an
+      // Error, not an Exception — so a loose matcher would have blessed the very
+      // failure the test is for, and would equally bless a hand-thrown decoy.
+      //
+      // The TYPE changed with revision 4 and the proposition did not. Every
+      // mechanism-open failure now wears one type so the election can tell a bug
+      // from weather; checking the wrapped text is what keeps this an assertion
+      // about the REAL failure rather than about the wrapper.
+      await expectLater(
+        client.connect(),
+        throwsA(
+          isA<TransportUnavailable>().having(
+            (failure) => failure.action,
+            'action',
+            contains('SocketException'),
+          ),
+        ),
+      );
+      await expectLater(client.disconnect(), completes);
+      // And prove the teardown left the bus INERT rather than merely
+      // non-throwing: `completes` alone cannot tell a guard that worked from one
+      // that had nothing to guard.
+      expect(
+        () => client.send('a/b', 'x', const <Object?>[]),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('the bus is inert after disconnect, not merely disconnected', () {
+      // The other half of the same class, missed by the first fix: guarding
+      // every reach with `_client?.` means nothing while `_client` still points
+      // at a torn-down client. Measured against a real broker, unsubscribe threw
+      // _TypeError and subscribe threw ConnectionException AFTER a clean
+      // disconnect. A null-guard whose subject is never nulled is decoration.
+      //
+      // No broker needed: a client that never connected is already in the state
+      // this asserts, and disconnect() must leave a connected one the same way.
+      final client = AikoClient(clientId: 'inert');
+      expect(() => client.subscribe('a/b'), returnsNormally);
+      expect(() => client.unsubscribe('a/b'), returnsNormally);
+      // The subscription is still RECORDED — the set is the memory, and a topic
+      // taken before a connect must survive into the first open.
+      expect(() => client.subscribe('c/d'), returnsNormally);
+    });
   });
 }

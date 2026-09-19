@@ -94,7 +94,7 @@ void main(List<String> args) {
     if (list.length < 6) list.add(detail);
   }
 
-  for (final c in cases.cast<Map<String, dynamic>>()) {
+  for (final c in cases.cast<Map<String, Object?>>()) {
     final payload = c['p'] as String;
     if (c.containsKey('errata')) {
       errata++;

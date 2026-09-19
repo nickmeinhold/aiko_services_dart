@@ -14,7 +14,11 @@
 # only run when somebody remembers. This script is the cheapest thing that makes
 # "run everything" one command instead of a memory.
 #
-# Interop is now HALF covered, and the halves are not symmetric. A Dart consumer
+# Interop was HALF covered and asymmetric for a long time. The REGISTRAR half is
+# now symmetric: spike/interop-election/probe_peer_election.sh runs the island's
+# own Python registrar image in a throwaway namespace against our Dart one, so a
+# Python process finally reads what a Dart process wrote. The SHARE half is still
+# one-directional. A Dart consumer
 # reading a live Python producer is exercised by tool/observer_acceptance.sh
 # below, against a real island. The other direction — a real Python ECConsumer
 # reading a live Dart share snapshot (ADR-0001 §3 test 12) — still needs a Dart
@@ -332,6 +336,44 @@ elif docker inspect -f '{{.State.Running}}' aiko-chat-1 2>/dev/null | grep -q tr
     2) bad "lease probe did not run: no mosquitto_sub on this machine (the island is up)" ;;
     3) bad "lease probe did not run: no reachable broker or no ECProducer in the roster, though the island container is up" ;;
     *) bad "EC lease renewal probe against a live producer" ;;
+  esac
+
+  # The election, RUN. Its unit suite proves the state machine transitions
+  # correctly given events; it cannot say whether the events arrive correctly
+  # from a broker holding a real retained message, and it structurally cannot
+  # reach the third arm at all — promotion changes the will, MQTT carries a will
+  # only in a CONNECT packet, so promotion RECONNECTS and a reconnect with
+  # startClean throws the session away. Whether the subscriptions come back is a
+  # property of a real socket being replaced. Mutating the restore away leaves
+  # arms 1 and 2 green and takes only arm 3 red, which is the whole reason it is
+  # a separate arm.
+  step "primary election: stand down to a live primary, promote without one, and still hear"
+  spike/election/probe_election.sh
+  ELECTION_RC=$?
+  # Same fail-closed shape as the will and lease arms, for the same reason: this
+  # branch only runs when the island container is up.
+  case "$ELECTION_RC" in
+    0) ok "secondary against the live island, primary + will + retraction without one, not deaf after promotion" ;;
+    2) bad "election probe did not run: no mosquitto_sub/mosquitto_pub on this machine (the island is up)" ;;
+    3) bad "election probe did not run: no reachable broker, or the island has no primary registrar to stand down to" ;;
+    *) bad "primary election against a live broker" ;;
+  esac
+
+  # THE OTHER HALF OF INTEROP, and the reason this block exists at all: every
+  # probe above has a DART process reading a PYTHON one. Until this arm, no
+  # Python process had ever read a message a Dart registrar wrote — which is why
+  # most faces in notes/boot-topic-lifecycle.md carry "code-reading" rather than
+  # "measured" in their evidence column. The header of this very file has been
+  # saying "interop is now HALF covered, and the halves are not symmetric" the
+  # whole time.
+  step "peer election: a real PYTHON registrar reading a DART one (the missing half)"
+  spike/interop-election/probe_peer_election.sh
+  PEER_RC=$?
+  case "$PEER_RC" in
+    0) ok "a Python registrar stands down to a Dart primary, and face 1 is measured from the victim's side" ;;
+    2) bad "peer probe did not run: missing mosquitto tools or docker (the island is up)" ;;
+    3) bad "peer probe did not run: no reachable broker, or the island image is not present locally" ;;
+    *) bad "peer election: a Python registrar against a Dart one" ;;
   esac
 else
   printf '\n\033[33mSKIPPED the island run: no aiko-chat-1 container.\033[0m\n'

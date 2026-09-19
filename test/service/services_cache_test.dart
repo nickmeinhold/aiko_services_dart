@@ -363,7 +363,7 @@ void main() {
 
       test('the registrar returning at a NEW path re-asks the new one', () async {
         await bus.deliver('aiko/service/registrar', 'primary', ['absent']);
-        bus.sent.clear();
+        bus.clear();
 
         const reborn = 'aiko/island/44/1';
         await bus.deliver('aiko/service/registrar', 'primary', [
@@ -401,7 +401,7 @@ void main() {
         await bus.deliver(cache.shareTopic, 'add', _chatRecord);
         expect(cache.state, ServicesCacheState.loaded);
         expect(process.state, ConnectionState.registrar);
-        bus.sent.clear();
+        bus.clear();
 
         const replacement = 'aiko/island/77/1';
         await bus.deliver('aiko/service/registrar', 'primary', [
@@ -424,7 +424,7 @@ void main() {
       cache.attach();
       await bus.deliver(cache.shareTopic, 'item_count', ['1']);
       await bus.deliver(cache.shareTopic, 'add', _chatRecord);
-      bus.sent.clear();
+      bus.clear();
 
       await bus.deliver('aiko/service/registrar', 'primary', [
         'found',
