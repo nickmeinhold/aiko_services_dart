@@ -428,6 +428,41 @@ void main() {
       }
     });
 
+    test('a count too big for a 64-bit int still behaves like CPython — '
+        'BOTH signs', () async {
+      // Carnot, cage-match round 4, found inside the function round 1 added to
+      // eliminate this exact class. CPython's `int` is arbitrary precision;
+      // Dart's is 64-bit, so `int.tryParse` returned null on overflow and an
+      // oversized count silently became the default.
+      //
+      // Measured against CPython with a 40-entry buffer:
+      //   999…999  -> (item_count 40)      clamped to the buffer
+      //  -999…999  -> (item_count -999…999) published verbatim
+      for (var id = 1; id <= 40; id++) {
+        await bus.deliver(_in, 'add', _add('aiko/h/1/$id'));
+        await settle();
+        await bus.deliver(_in, 'remove', ['aiko/h/1/$id']);
+        await settle();
+      }
+      const huge = '999999999999999999999999999999';
+
+      // POSITIVE: clamps to the buffer, and actually sends that many.
+      bus.clear();
+      await ask(huge);
+      expect(replies().first.params, [40]);
+      expect(replies().skip(1).length, 40);
+
+      // NEGATIVE — the row Carnot did not name, and the worse of the two.
+      // Upstream's one-sided clamp leaves it untouched and the f-string prints
+      // every digit, so the only Dart type that can say it is a BigInt. The
+      // atom goes out as digits, which `generate` renders identically to an
+      // int (measured: `(x 40)` from both 40 and '40').
+      bus.clear();
+      await ask('-$huge');
+      expect(replies().single.command, 'item_count');
+      expect(replies().single.params, ['-$huge']);
+    });
+
     test('a reply topic we will not publish to gets nothing', () async {
       await bus.deliver(_in, 'add', _add('aiko/h/1/1'));
       await settle();

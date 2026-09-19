@@ -78,15 +78,43 @@ const _historyLimitDefault = 16;
 /// count defect on the grounds that a silent divergence is worse than a visible
 /// bug, while carrying two silent divergences of its own, ten lines away. The
 /// principle was right and the audit was incomplete.
-int? _parseIntLikePython(String value) {
+/// Returns a `BigInt`, because **CPython's `int` is arbitrary precision and
+/// Dart's is 64-bit**, and that difference is visible on the wire.
+///
+/// Found by Carnot in cage-match round 4, inside the function written in round
+/// 1 to eliminate exactly this class. Measured against both interpreters with a
+/// 40-entry buffer:
+///
+/// | count atom (30 digits) | CPython publishes | Dart with `int.tryParse` |
+/// |---|---|---|
+/// | `999…999` | `(item_count 40)` — clamped to the buffer | `(item_count 16)` |
+/// | `-999…999` | `(item_count -999…999)` verbatim | `(item_count 16)` |
+///
+/// `int.tryParse` returns null on overflow, so an oversized count fell back to
+/// the default instead of being clamped (positive) or passed through
+/// (negative). Carnot named the positive row; the negative one is worse,
+/// because upstream publishes the enormous value verbatim and a `BigInt` is the
+/// only Dart type that can say it.
+BigInt? _parseCountLikePython(String value) {
   final trimmed = value.trim();
   // Optional sign, then digit groups separated by SINGLE underscores — PEP 515
   // permits `1_000` and `1_0_0` but not `_1`, `1_`, or `1__0`. Anchored, so a
   // radix prefix or a decimal point fails the match rather than being partially
   // consumed.
   if (!RegExp(r'^[+-]?\d+(_\d+)*$').hasMatch(trimmed)) return null;
-  return int.tryParse(trimmed.replaceAll('_', ''));
+  return BigInt.tryParse(trimmed.replaceAll('_', ''));
 }
+
+/// The `item_count` value as an atom the codec renders exactly like CPython's
+/// f-string does.
+///
+/// An `int` and its decimal `String` encode identically — `generate('x', [40])`
+/// and `generate('x', ['40'])` are both `(x 40)`, measured — so the common path
+/// keeps its `int` and only an out-of-range value degrades to digits. That
+/// keeps the wire byte-identical in both regimes without widening the type
+/// every caller sees.
+Object _countAtom(BigInt count) =>
+    count.isValidInt ? count.toInt() : count.toString();
 
 /// A process that runs the registrar's primary election against a live bus.
 class RegistrarProcess {
@@ -679,9 +707,10 @@ class RegistrarProcess {
     // (`registrar.py:298-303`). The wire carries atoms as strings, so an int
     // literal arrives as one; both are accepted, and anything else falls back.
     final requested = switch (count) {
-      final int value => value,
-      final String value => _parseIntLikePython(value) ?? _historyLimitDefault,
-      _ => _historyLimitDefault,
+      final int value => BigInt.from(value),
+      final String value =>
+        _parseCountLikePython(value) ?? BigInt.from(_historyLimitDefault),
+      _ => BigInt.from(_historyLimitDefault),
     };
 
     // Upstream's arithmetic, reproduced rather than improved — including where
@@ -702,12 +731,15 @@ class RegistrarProcess {
     // about. Reproduced, pinned by a test that says it is reproduced rather
     // than endorsed, and filed for Andy.
     // `min(requested, length)` — which is what upstream's one-sided `if`
-    // reduces to, negatives included.
-    final length = roster.history.length;
+    // reduces to, negatives included. Compared as BigInt so an oversized count
+    // clamps to the buffer (positive) or passes through (negative) the way
+    // CPython's arbitrary-precision `int` does, rather than overflowing to the
+    // default.
+    final length = BigInt.from(roster.history.length);
     final sending = requested < length ? requested : length;
 
-    bus.send(replyTopic, 'item_count', [sending]);
-    if (sending < 1) return;
+    bus.send(replyTopic, 'item_count', [_countAtom(sending)]);
+    if (sending < BigInt.one) return;
     // MATERIALISED BEFORE THE FIRST PUBLISH, for the reason `_servicesShare`
     // already gives one method above: a count published from one walk followed
     // by a second walk that yields something different is a frame a consumer
@@ -720,7 +752,12 @@ class RegistrarProcess {
     // is the neighbouring verb's invariant being applied to its twin instead of
     // left for a future transport change to discover. (Tesla, cage-match round
     // 1: the share path snapshots and says why; history did neither.)
-    final departures = roster.history.take(sending).toList(growable: false);
+    // `toInt()` is safe HERE and only here: the guard above returned on
+    // `sending < 1`, and the clamp bounded it by `length`, so at this line
+    // 1 <= sending <= roster.history.length — an ordinary int by construction.
+    final departures = roster.history
+        .take(sending.toInt())
+        .toList(growable: false);
     for (final departure in departures) {
       bus.send(replyTopic, 'add', departure.toAddParameters());
     }
