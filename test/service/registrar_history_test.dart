@@ -279,6 +279,24 @@ void main() {
       expect(roster.history.length, 1, reason: 'still intact');
     });
 
+    test('BOTH ring-buffer constants match the reference, by value', () {
+      // Tesla, cage-match round 3 — and this is the SIBLING of round 1's
+      // finding, not a new one. Round 1 pinned `_historyLimitDefault` (16) and
+      // left its twin unpinned: mutating `defaultHistoryLimit` 4096 -> 40 left
+      // the whole suite green, because every other arm only needs the bound to
+      // be "bigger than this test's corpses".
+      //
+      // Fixing the instance a reviewer points at and leaving its twin standing
+      // is a class this repo has paid for before. Both constants are pinned
+      // here, together, against the reference's own numbers:
+      //   `_HISTORY_RING_BUFFER_SIZE = 4096` (`registrar.py:135`)
+      //   `_HISTORY_LIMIT_DEFAULT    = 16`   (`registrar.py:134`)
+      expect(ServiceRoster.defaultHistoryLimit, 4096);
+      // The default count has no public symbol — it is asserted through the
+      // wire in "the fallback is SIXTEEN", which fills the buffer past 16 so
+      // the number is observable rather than coincidental.
+    });
+
     test('the buffer is BOUNDED — it does not grow without limit', () async {
       // Smaller than the 4096 default would be untestable at speed, so the
       // bound itself is exercised on the roster directly. The wire path above
