@@ -42,6 +42,10 @@ import 'service_topic_path.dart';
 /// and — measured, not assumed — never compares it to anything.
 const registrarVersion = 2;
 
+/// `_HISTORY_LIMIT_DEFAULT` (`registrar.py:134`) — the count used when a
+/// request's own count cannot be read as a number.
+const _historyLimitDefault = 16;
+
 /// A process that runs the registrar's primary election against a live bus.
 class RegistrarProcess {
   /// Resolve this process's identity, then build the parts around it.
@@ -59,6 +63,7 @@ class RegistrarProcess {
     MessageBus? bus,
     Duration searchTimeout = RegistrarElection.defaultSearchTimeout,
     CreateTimer createTimer = Timer.new,
+    WallClock now = wallClockSeconds,
   }) {
     // Service `0` is the PROCESS; the registrar is a service that process
     // hosts, and upstream's own announcement names a service path — the live
@@ -83,6 +88,7 @@ class RegistrarProcess {
           ),
       election: RegistrarElection(searchTimeout: searchTimeout),
       createTimer: createTimer,
+      roster: ServiceRoster(now: now),
     );
   }
 
@@ -93,6 +99,7 @@ class RegistrarProcess {
     required this.bus,
     required this._election,
     required this._createTimer,
+    required this.roster,
   });
 
   /// How the search timer is made. See [CreateTimer] for why this is a seam.
@@ -129,8 +136,8 @@ class RegistrarProcess {
   /// speaks for it.
   String get serviceStateFilter => '$namespace/+/+/+/state';
 
-  /// Who is on this island.
-  final ServiceRoster roster = ServiceRoster();
+  /// Who is on this island — and, in its history, who used to be.
+  final ServiceRoster roster;
 
   /// The roster size after every change.
   ///
@@ -495,6 +502,8 @@ class RegistrarProcess {
         _serviceRemove(path);
       case ('share', _) when parameters.length == 6:
         _servicesShare(parameters);
+      case ('history', [final String replyTopic, final Object? count]):
+        _servicesHistory(replyTopic, count);
       default:
         return;
     }
@@ -592,6 +601,59 @@ class RegistrarProcess {
     // consumer distinguishes its own snapshot's end from a peer's, and how
     // every consumer learns that somebody else asked.
     bus.send(topicOut, 'sync', [replyTopic]);
+  }
+
+  /// `(history <reply topic> <count>)` — what has LEFT this island.
+  ///
+  /// `registrar.py:307-328`. Three things distinguish it from `(share …)`, and
+  /// all three are easy to get wrong by copying the share path:
+  ///
+  ///   * it answers from the departure ring buffer, not the live roster;
+  ///   * its `(add …)` carries EIGHT parameters, the six plus `time_add` and
+  ///     `time_remove`;
+  ///   * it sends **no** `(sync …)`. The share's sync exists so a consumer can
+  ///     tell its own snapshot's end from a peer's; history has no such
+  ///     subscription to complete, and inventing one would put a verb on the
+  ///     wire that no Python consumer is listening for.
+  void _servicesHistory(String replyTopic, Object? count) {
+    if (!_isPublishable(replyTopic)) return;
+
+    // `parse_int` failing substitutes the default rather than refusing
+    // (`registrar.py:298-303`). The wire carries atoms as strings, so an int
+    // literal arrives as one; both are accepted, and anything else falls back.
+    final requested = switch (count) {
+      final int value => value,
+      final String value => int.tryParse(value) ?? _historyLimitDefault,
+      _ => _historyLimitDefault,
+    };
+
+    // Upstream's arithmetic, reproduced rather than improved — including where
+    // it is wrong. `registrar.py:308-309` clamps only DOWNWARD:
+    //
+    //     if len(self.history) < count: count = len(self.history)
+    //
+    // so a NEGATIVE count survives the clamp untouched, `(item_count -5)` goes
+    // out, and the loop's `if count < 1: break` then sends no records at all.
+    // A consumer that completes a frame by counting down to zero — which is
+    // what `(item_count …)` is for, and what `share.py:471-472` does — never
+    // completes it.
+    //
+    // CLAMPING TO ZERO HERE WOULD BE THE OBVIOUS FIX AND IS DELIBERATELY NOT
+    // TAKEN. This port exists so that a difference from Python is a FINDING,
+    // and quietly emitting a different frame than the reference for the same
+    // request is exactly the unilateral divergence claude-tasks#4306 was filed
+    // about. Reproduced, pinned by a test that says it is reproduced rather
+    // than endorsed, and filed for Andy.
+    // `min(requested, length)` — which is what upstream's one-sided `if`
+    // reduces to, negatives included.
+    final length = roster.history.length;
+    final sending = requested < length ? requested : length;
+
+    bus.send(replyTopic, 'item_count', [sending]);
+    if (sending < 1) return;
+    for (final departure in roster.history.take(sending)) {
+      bus.send(replyTopic, 'add', departure.toAddParameters());
+    }
   }
 
   /// A reply topic we are willing to publish to.
