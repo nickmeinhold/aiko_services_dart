@@ -153,11 +153,24 @@ void main() {
       await ask(16);
 
       expect(replies().first.params, [2]);
-      final paths = replies()
-          .skip(1)
+      final records = replies().skip(1).toList();
+      final paths = records
           .map((m) => (m.params! as List<Object?>).first)
           .toList();
       expect(paths, containsAll(<Object?>['aiko/h/1/1', 'aiko/h/1/2']));
+
+      // ONE time_remove for the whole batch, not one per service. A process
+      // death is a SINGLE event — the broker published one Last Will — so
+      // staggered removal times would invent a sequence the wire never carried.
+      //
+      // Tesla, cage-match round 2: `_recordDepartures` reads the clock once by
+      // design and nothing asserted it. `containsAll` above passes either way,
+      // and `_TickingClock` ticks per reading, so a per-service `_now()` would
+      // have produced two distinct stamps in silence.
+      final removals = records
+          .map((m) => (m.params! as List<Object?>)[7])
+          .toSet();
+      expect(removals, hasLength(1), reason: 'one death, one timestamp');
     });
   });
 
@@ -384,6 +397,12 @@ void main() {
         ('3.0', 16),
         ('_1', 16),
         ('1__0', 16),
+        // TRAILING underscore, which CPython also rejects. Tesla, round 2: the
+        // doc comment names `1_` as illegal and the table did not cover it, so
+        // a "simplification" to `^\d[\d_]*$` would read it as 1 where upstream
+        // falls back to 16 — and this table, which exists to prevent exactly
+        // that, would still have glowed green.
+        ('1_', 16),
       ]) {
         bus.clear();
         await ask(atom);

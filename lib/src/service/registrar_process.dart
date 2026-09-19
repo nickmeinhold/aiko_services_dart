@@ -228,9 +228,17 @@ class RegistrarProcess {
 
   /// Fires when the election says to forget every service we know.
   ///
-  /// `registrar.py:281`. There is no roster in this port yet, so there is
-  /// nothing to drop; the signal is surfaced so that the roster, when it
-  /// arrives, has an obvious place to listen rather than a re-derivation.
+  /// `registrar.py:281`. The roster HAS arrived — [DropRoster] now calls
+  /// `roster.clear()` and republishes the count — so this stream is an
+  /// observation of a wipe that happened, not a placeholder for one that
+  /// cannot.
+  ///
+  /// Worth knowing what a wipe costs: `clear()` forgets every LIVING service
+  /// without recording a departure, while the already-departed stay in history.
+  /// So a history consumer cannot read "absent from the roster and absent from
+  /// history" as meaning anything. That is upstream's behaviour too, and on
+  /// ADR-023's unauthenticated bus any peer can trigger it by publishing
+  /// `(primary absent)`.
   Stream<void> get rosterDrops => _rosterDrops.stream;
 
   /// Fires once the retained announcement is ON THE WIRE, carrying the address
