@@ -16,13 +16,18 @@
 /// All three landed alongside this file. The gap was never laziness; the
 /// composition was blocked on affordances an observer had never needed.
 ///
-/// **What this does NOT do yet.** It elects, announces, and retracts. It does
-/// not accept registrations on `/in`, hold a roster, serve `(share ...)`, or
-/// consume the island's `{ns}/+/+/+/state` wills. Those are verbs 2, 3 and 4 of
-/// the scope note's capability invariant and they are the next increment. The
-/// two effects with nowhere to go — [PublishLifecycle] and [DropRoster] — are
-/// surfaced on streams rather than performed or dropped, so that the unfinished
-/// half is VISIBLE instead of looking like a decision.
+/// **What this does NOT do yet.** It elects, announces and retracts; it accepts
+/// registrations on `/in`, holds a roster, serves `(share ...)` and
+/// `(history ...)`, and consumes the island's `{ns}/+/+/+/state` wills — verbs
+/// 1 through 4 of the scope note's capability invariant.
+///
+/// What is still missing is the EC PRODUCER half: this process never subscribes
+/// its own `/control`, so an ECConsumer sending `(share ...)` there gets
+/// silence where upstream answers (`share.py:223`), and no lease is ever
+/// served. That is claude-tasks#4584, blocked on `Actor`. [PublishLifecycle]
+/// still has nowhere to go for the same reason and is surfaced on a stream
+/// rather than performed or dropped, so the unfinished half stays VISIBLE
+/// instead of looking like a decision.
 library;
 
 import 'dart:async';
@@ -42,6 +47,82 @@ import 'service_topic_path.dart';
 /// and — measured, not assumed — never compares it to anything.
 const registrarVersion = 2;
 
+/// `_HISTORY_LIMIT_DEFAULT` (`registrar.py:134`) — the count used when a
+/// request's own count cannot be read as a number.
+const _historyLimitDefault = 16;
+
+/// `int(str)` as CPython does it, because `int.tryParse` is NOT the same
+/// function and the difference is a silent wire divergence.
+///
+/// Measured, both interpreters, on the shapes a peer can actually put on the
+/// bus:
+///
+/// | atom      | CPython `int()`    | Dart `int.tryParse` |
+/// |-----------|--------------------|---------------------|
+/// | `"3"`     | 3                  | 3                   |
+/// | `"  3  "` | 3 (strips)         | 3 (strips)          |
+/// | `"+3"`    | 3                  | 3                   |
+/// | `"-5"`    | -5                 | -5                  |
+/// | `"3.0"`   | ValueError         | null                |
+/// | `"0x20"`  | **ValueError**     | **32**              |
+/// | `"1_000"` | **1000** (PEP 515) | **null**            |
+///
+/// The last two rows are the defect. `int.tryParse` accepts a `0x` radix prefix
+/// that CPython's base-10 `int()` rejects, and rejects the digit underscores
+/// CPython has accepted since 3.6. So a history request whose count atom is
+/// `0x20` asks a Python registrar for 16 records and a Dart one for 32, and one
+/// whose count is `1_000` asks Python for 1000 and Dart for 16 — the same
+/// request, two answers, with nothing anywhere to notice.
+///
+/// Worth stating plainly: this PR argued for reproducing upstream's negative-
+/// count defect on the grounds that a silent divergence is worse than a visible
+/// bug, while carrying two silent divergences of its own, ten lines away. The
+/// principle was right and the audit was incomplete.
+/// Returns a `BigInt`, because **CPython's `int` is arbitrary precision and
+/// Dart's is 64-bit**, and that difference is visible on the wire.
+///
+/// Found by Carnot in cage-match round 4, inside the function written in round
+/// 1 to eliminate exactly this class. Measured against both interpreters with a
+/// 40-entry buffer:
+///
+/// | count atom (30 digits) | CPython publishes | Dart with `int.tryParse` |
+/// |---|---|---|
+/// | `999…999` | `(item_count 40)` — clamped to the buffer | `(item_count 16)` |
+/// | `-999…999` | `(item_count -999…999)` verbatim | `(item_count 16)` |
+///
+/// `int.tryParse` returns null on overflow, so an oversized count fell back to
+/// the default instead of being clamped (positive) or passed through
+/// (negative). Carnot named the positive row; the negative one is worse,
+/// because upstream publishes the enormous value verbatim and a `BigInt` is the
+/// only Dart type that can say it.
+BigInt? _parseCountLikePython(String value) {
+  final trimmed = value.trim();
+  // Optional sign, then digit groups separated by SINGLE underscores — PEP 515
+  // permits `1_000` and `1_0_0` but not `_1`, `1_`, or `1__0`. Anchored, so a
+  // radix prefix or a decimal point fails the match rather than being partially
+  // consumed.
+  if (!RegExp(r'^[+-]?\d+(_\d+)*$').hasMatch(trimmed)) return null;
+  return BigInt.tryParse(trimmed.replaceAll('_', ''));
+}
+
+/// The `item_count` value as an atom the codec renders exactly like CPython's
+/// f-string does.
+///
+/// An `int` and its decimal `String` encode identically — measured on the path
+/// that actually fires, a SIGNED thirty-digit atom:
+/// `generate('item_count', ['-999…999'])` is `(item_count -999…999)`, bare and
+/// unprefixed, the same shape `generate('item_count', [40])` produces. So the
+/// common path keeps its `int` and only an out-of-range value degrades to
+/// digits, with the wire byte-identical in both regimes.
+///
+/// `isValidInt` is a PLATFORM property — 64-bit on the VM, 53-bit under
+/// dart2js — not a wire property. That is harmless here because every positive
+/// `sending` has already been clamped to `roster.history.length`, an ordinary
+/// list length. It would stop being harmless the moment this helper were reused
+/// for a count that had not been clamped first. (Tesla, targeted round.)
+Object _countAtom(BigInt count) =>
+    count.isValidInt ? count.toInt() : count.toString();
+
 /// A process that runs the registrar's primary election against a live bus.
 class RegistrarProcess {
   /// Resolve this process's identity, then build the parts around it.
@@ -59,6 +140,7 @@ class RegistrarProcess {
     MessageBus? bus,
     Duration searchTimeout = RegistrarElection.defaultSearchTimeout,
     CreateTimer createTimer = Timer.new,
+    WallClock now = wallClockSeconds,
   }) {
     // Service `0` is the PROCESS; the registrar is a service that process
     // hosts, and upstream's own announcement names a service path — the live
@@ -83,6 +165,7 @@ class RegistrarProcess {
           ),
       election: RegistrarElection(searchTimeout: searchTimeout),
       createTimer: createTimer,
+      roster: ServiceRoster(now: now),
     );
   }
 
@@ -93,6 +176,7 @@ class RegistrarProcess {
     required this.bus,
     required this._election,
     required this._createTimer,
+    required this.roster,
   });
 
   /// How the search timer is made. See [CreateTimer] for why this is a seam.
@@ -129,8 +213,8 @@ class RegistrarProcess {
   /// speaks for it.
   String get serviceStateFilter => '$namespace/+/+/+/state';
 
-  /// Who is on this island.
-  final ServiceRoster roster = ServiceRoster();
+  /// Who is on this island — and, in its history, who used to be.
+  final ServiceRoster roster;
 
   /// The roster size after every change.
   ///
@@ -179,9 +263,17 @@ class RegistrarProcess {
 
   /// Fires when the election says to forget every service we know.
   ///
-  /// `registrar.py:281`. There is no roster in this port yet, so there is
-  /// nothing to drop; the signal is surfaced so that the roster, when it
-  /// arrives, has an obvious place to listen rather than a re-derivation.
+  /// `registrar.py:281`. The roster HAS arrived — [DropRoster] now calls
+  /// `roster.clear()` and republishes the count — so this stream is an
+  /// observation of a wipe that happened, not a placeholder for one that
+  /// cannot.
+  ///
+  /// Worth knowing what a wipe costs: `clear()` forgets every LIVING service
+  /// without recording a departure, while the already-departed stay in history.
+  /// So a history consumer cannot read "absent from the roster and absent from
+  /// history" as meaning anything. That is upstream's behaviour too, and on
+  /// ADR-023's unauthenticated bus any peer can trigger it by publishing
+  /// `(primary absent)`.
   Stream<void> get rosterDrops => _rosterDrops.stream;
 
   /// Fires once the retained announcement is ON THE WIRE, carrying the address
@@ -475,10 +567,17 @@ class RegistrarProcess {
     }
   }
 
-  /// `add`, `remove` and `share`, the three commands a registrar serves.
+  /// `add`, `remove`, `share` and `history` — the FOUR commands a registrar
+  /// serves, as `registrar.py:31` enumerates them.
+  ///
+  /// The count is load-bearing, not decoration. `history` went unimplemented
+  /// here for the life of the port because the surface was under-counted in
+  /// exactly this kind of comment, while `services_cache.dart` quietly parsed
+  /// history's longer reply. If you add a verb, change this number.
   ///
   /// Arity is the gate, and it is upstream's (`registrar.py:294-305`): six
-  /// parameters for `add`, one for `remove`, six for `share`. Anything else
+  /// parameters for `add`, one for `remove`, six for `share`, two for
+  /// `history`. Anything else
   /// falls through silently — this topic is world-writable on ADR-023's
   /// unauthenticated bus, so malformed input is an expected arrival to drop,
   /// not an error to raise.
@@ -495,6 +594,8 @@ class RegistrarProcess {
         _serviceRemove(path);
       case ('share', _) when parameters.length == 6:
         _servicesShare(parameters);
+      case ('history', [final String replyTopic, final Object? count]):
+        _servicesHistory(replyTopic, count);
       default:
         return;
     }
@@ -592,6 +693,81 @@ class RegistrarProcess {
     // consumer distinguishes its own snapshot's end from a peer's, and how
     // every consumer learns that somebody else asked.
     bus.send(topicOut, 'sync', [replyTopic]);
+  }
+
+  /// `(history <reply topic> <count>)` — what has LEFT this island.
+  ///
+  /// `registrar.py:307-328`. Three things distinguish it from `(share …)`, and
+  /// all three are easy to get wrong by copying the share path:
+  ///
+  ///   * it answers from the departure ring buffer, not the live roster;
+  ///   * its `(add …)` carries EIGHT parameters, the six plus `time_add` and
+  ///     `time_remove`;
+  ///   * it sends **no** `(sync …)`. The share's sync exists so a consumer can
+  ///     tell its own snapshot's end from a peer's; history has no such
+  ///     subscription to complete, and inventing one would put a verb on the
+  ///     wire that no Python consumer is listening for.
+  void _servicesHistory(String replyTopic, Object? count) {
+    if (!_isPublishable(replyTopic)) return;
+
+    // `parse_int` failing substitutes the default rather than refusing
+    // (`registrar.py:298-303`). The wire carries atoms as strings, so an int
+    // literal arrives as one; both are accepted, and anything else falls back.
+    final requested = switch (count) {
+      final int value => BigInt.from(value),
+      final String value =>
+        _parseCountLikePython(value) ?? BigInt.from(_historyLimitDefault),
+      _ => BigInt.from(_historyLimitDefault),
+    };
+
+    // Upstream's arithmetic, reproduced rather than improved — including where
+    // it is wrong. `registrar.py:308-309` clamps only DOWNWARD:
+    //
+    //     if len(self.history) < count: count = len(self.history)
+    //
+    // so a NEGATIVE count survives the clamp untouched, `(item_count -5)` goes
+    // out, and the loop's `if count < 1: break` then sends no records at all.
+    // A consumer that completes a frame by counting down to zero — which is
+    // what `(item_count …)` is for, and what `share.py:471-472` does — never
+    // completes it.
+    //
+    // CLAMPING TO ZERO HERE WOULD BE THE OBVIOUS FIX AND IS DELIBERATELY NOT
+    // TAKEN. This port exists so that a difference from Python is a FINDING,
+    // and quietly emitting a different frame than the reference for the same
+    // request is exactly the unilateral divergence claude-tasks#4306 was filed
+    // about. Reproduced, pinned by a test that says it is reproduced rather
+    // than endorsed, and filed for Andy.
+    // `min(requested, length)` — which is what upstream's one-sided `if`
+    // reduces to, negatives included. Compared as BigInt so an oversized count
+    // clamps to the buffer (positive) or passes through (negative) the way
+    // CPython's arbitrary-precision `int` does, rather than overflowing to the
+    // default.
+    final length = BigInt.from(roster.history.length);
+    final sending = requested < length ? requested : length;
+
+    bus.send(replyTopic, 'item_count', [_countAtom(sending)]);
+    if (sending < BigInt.one) return;
+    // MATERIALISED BEFORE THE FIRST PUBLISH, for the reason `_servicesShare`
+    // already gives one method above: a count published from one walk followed
+    // by a second walk that yields something different is a frame a consumer
+    // can never complete. `roster.history.take(n)` is LAZY over a `ListQueue`
+    // whose iterator is fail-fast, so publishing straight out of it also means
+    // a departure recorded mid-loop throws `ConcurrentModificationError`.
+    //
+    // No such re-entrancy is reachable today — `send` only enqueues, on both
+    // the real transport and `FakeBus` — so this is not a bug being fixed. It
+    // is the neighbouring verb's invariant being applied to its twin instead of
+    // left for a future transport change to discover. (Tesla, cage-match round
+    // 1: the share path snapshots and says why; history did neither.)
+    // `toInt()` is safe HERE and only here: the guard above returned on
+    // `sending < 1`, and the clamp bounded it by `length`, so at this line
+    // 1 <= sending <= roster.history.length — an ordinary int by construction.
+    final departures = roster.history
+        .take(sending.toInt())
+        .toList(growable: false);
+    for (final departure in departures) {
+      bus.send(replyTopic, 'add', departure.toAddParameters());
+    }
   }
 
   /// A reply topic we are willing to publish to.
