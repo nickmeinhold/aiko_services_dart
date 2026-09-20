@@ -108,11 +108,18 @@ BigInt? _parseCountLikePython(String value) {
 /// The `item_count` value as an atom the codec renders exactly like CPython's
 /// f-string does.
 ///
-/// An `int` and its decimal `String` encode identically — `generate('x', [40])`
-/// and `generate('x', ['40'])` are both `(x 40)`, measured — so the common path
-/// keeps its `int` and only an out-of-range value degrades to digits. That
-/// keeps the wire byte-identical in both regimes without widening the type
-/// every caller sees.
+/// An `int` and its decimal `String` encode identically — measured on the path
+/// that actually fires, a SIGNED thirty-digit atom:
+/// `generate('item_count', ['-999…999'])` is `(item_count -999…999)`, bare and
+/// unprefixed, the same shape `generate('item_count', [40])` produces. So the
+/// common path keeps its `int` and only an out-of-range value degrades to
+/// digits, with the wire byte-identical in both regimes.
+///
+/// `isValidInt` is a PLATFORM property — 64-bit on the VM, 53-bit under
+/// dart2js — not a wire property. That is harmless here because every positive
+/// `sending` has already been clamped to `roster.history.length`, an ordinary
+/// list length. It would stop being harmless the moment this helper were reused
+/// for a count that had not been clamped first. (Tesla, targeted round.)
 Object _countAtom(BigInt count) =>
     count.isValidInt ? count.toInt() : count.toString();
 

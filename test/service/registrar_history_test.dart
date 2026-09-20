@@ -461,6 +461,21 @@ void main() {
       await ask('-$huge');
       expect(replies().single.command, 'item_count');
       expect(replies().single.params, ['-$huge']);
+
+      // AND ASSERT THE BYTES, not just the parameter. Tesla, targeted round:
+      // the line above pins the in-memory FakeBus parameter type, so it would
+      // stay green even if the codec quoted or length-prefixed a signed
+      // thirty-digit atom while rendering a small int bare — which is exactly
+      // the "the two regimes are wire-identical" claim `_countAtom` rests on.
+      // The claim was measured on `'40'`, a bare digit string, and this is the
+      // path that actually fires.
+      expect(
+        generate('item_count', replies().single.params! as List<Object?>),
+        '(item_count -$huge)',
+      );
+      // The control: a small int renders the same shape, so the degrade to
+      // digits changes nothing a Python consumer can observe.
+      expect(generate('item_count', <Object?>[40]), '(item_count 40)');
     });
 
     test('a reply topic we will not publish to gets nothing', () async {
